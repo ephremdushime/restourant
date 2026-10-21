@@ -1,0 +1,6 @@
+{
+  "name": "RestoPass Operating System",
+  "description": "RestoPass prepaid plate balance and meal management platform for restaurants, featuring local server authority, high-speed scanner PWA, dynamic offline HMAC QR codes, card printing, customer portal, and super admin licensing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
