@@ -26,7 +26,12 @@ import {
   UserX,
   MapPin,
   RefreshCw,
+  Coins,
+  Printer,
+  TrendingUp,
+  TrendingDown,
 } from 'lucide-react';
+import { ShiftHandoverModal } from '../scanner/ShiftHandoverModal';
 
 interface BranchesAndStationsManagerProps {
   restaurantCode: string;
@@ -46,8 +51,10 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
   const stationUsers = restoStore.getRestaurantStationUsers(restaurantCode);
   const scanPoints = state.scanPoints.filter((sp) => sp.restaurantCode === restaurantCode);
 
-  // Tab: 'branches' | 'station_users' | 'activity'
-  const [activeTab, setActiveTab] = useState<'station_users' | 'branches' | 'activity'>('station_users');
+  // Tab: 'branches' | 'station_users' | 'activity' | 'shifts'
+  const [activeTab, setActiveTab] = useState<'station_users' | 'branches' | 'activity' | 'shifts'>('station_users');
+  const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
+  const [selectedShiftStationId, setSelectedShiftStationId] = useState<string | undefined>(undefined);
 
   // Search & Filter
   const [searchQuery, setSearchQuery] = useState('');
@@ -303,6 +310,22 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
           >
             <Activity className="w-3.5 h-3.5" />
             <span>Live Activity</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('shifts')}
+            className={`px-3.5 py-1.5 rounded-lg font-bold transition-colors cursor-pointer flex items-center gap-1.5 ${
+              activeTab === 'shifts'
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Coins className="w-3.5 h-3.5" />
+            <span>{t.shifts?.shiftAuditTab || 'Cashier Shifts & Audits'}</span>
+            <span className="px-1.5 py-0.2 rounded-full font-mono text-[10px] bg-black/40 text-emerald-200">
+              {restoStore.getShiftHistory(restaurantCode).length}
+            </span>
           </button>
         </div>
       </div>
@@ -642,6 +665,203 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
           </div>
         </div>
       )}
+
+      {/* TAB 4: CASHIER SHIFTS & DAILY RECONCILIATION AUDITS */}
+      {activeTab === 'shifts' && (() => {
+        const shifts = restoStore.getShiftHistory(restaurantCode);
+        const openShifts = shifts.filter((s) => s.status === 'open');
+        const closedShifts = shifts.filter((s) => s.status === 'closed');
+        const totalCashHandled = shifts.reduce((sum, s) => sum + (s.closingCashRwf || (s.openingCashRwf + s.cashCollectedRwf)), 0);
+        const totalPlatesServedInShifts = shifts.reduce((sum, s) => sum + s.platesServedCount, 0);
+        const totalVariance = shifts.reduce((sum, s) => sum + (s.cashVarianceRwf || 0), 0);
+
+        return (
+          <div className="space-y-5">
+            {/* Action Bar & Summary KPI Cards */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800">
+                <div className="text-slate-400 font-semibold text-[11px] uppercase tracking-wider">
+                  Active Shifts
+                </div>
+                <div className="text-2xl font-black text-emerald-400 font-mono mt-1">
+                  {openShifts.length} <span className="text-xs font-normal text-slate-400">operating</span>
+                </div>
+                <div className="text-[11px] text-slate-400 mt-0.5">
+                  Currently running drawers
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800">
+                <div className="text-slate-400 font-semibold text-[11px] uppercase tracking-wider">
+                  Total Cash Reconciled
+                </div>
+                <div className="text-2xl font-black text-white font-mono mt-1">
+                  {totalCashHandled.toLocaleString()} <span className="text-xs font-normal text-slate-400">RWF</span>
+                </div>
+                <div className="text-[11px] text-slate-400 mt-0.5">
+                  Drawer floats + cash top-ups
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800">
+                <div className="text-slate-400 font-semibold text-[11px] uppercase tracking-wider">
+                  Plates Served in Shifts
+                </div>
+                <div className="text-2xl font-black text-white font-mono mt-1">
+                  {totalPlatesServedInShifts.toLocaleString()} <span className="text-xs font-normal text-slate-400">meals</span>
+                </div>
+                <div className="text-[11px] text-emerald-400 mt-0.5">
+                  Across all verified cashier shifts
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800">
+                <div className="text-slate-400 font-semibold text-[11px] uppercase tracking-wider">
+                  Net Drawer Variance
+                </div>
+                <div className={`text-2xl font-black font-mono mt-1 ${
+                  totalVariance === 0 ? 'text-emerald-400' : totalVariance > 0 ? 'text-amber-400' : 'text-rose-400'
+                }`}>
+                  {totalVariance >= 0 ? `+${totalVariance.toLocaleString()}` : totalVariance.toLocaleString()} <span className="text-xs font-normal text-slate-400">RWF</span>
+                </div>
+                <div className="text-[11px] text-slate-400 mt-0.5">
+                  {totalVariance === 0 ? 'Exact drawer match' : totalVariance > 0 ? 'Net drawer overage' : 'Net drawer shortage'}
+                </div>
+              </div>
+            </div>
+
+            {/* Shift Reconciliations Table */}
+            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                <div>
+                  <h3 className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
+                    <Coins className="w-4 h-4 text-emerald-400" />
+                    <span>{t.shifts?.title || 'Cashier Shift Handover & Daily Reconciliation'}</span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Physical cash counts, float seeds, expected intakes, plate counts, and operator sign-offs.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedShiftStationId(scanPoints[0]?.id || 'sp_1');
+                      setIsShiftModalOpen(true);
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Open / Reconcile Shift</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-xl bg-slate-950 border border-slate-800 overflow-hidden text-xs">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-900 text-slate-400 text-[10px] uppercase font-semibold border-b border-slate-800">
+                    <tr>
+                      <th className="py-3 px-3.5">Shift ID & Status</th>
+                      <th className="py-3 px-3.5">Station & Branch</th>
+                      <th className="py-3 px-3.5">Operator</th>
+                      <th className="py-3 px-3.5 text-right">Opening Float</th>
+                      <th className="py-3 px-3.5 text-right">Cash Intake</th>
+                      <th className="py-3 px-3.5 text-right">Expected Drawer</th>
+                      <th className="py-3 px-3.5 text-right">Counted Cash</th>
+                      <th className="py-3 px-3.5 text-right">Variance</th>
+                      <th className="py-3 px-3.5 text-center">Plates</th>
+                      <th className="py-3 px-3.5 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/70 font-mono text-[11px]">
+                    {shifts.length === 0 ? (
+                      <tr>
+                        <td colSpan={10} className="py-8 text-center text-slate-500 font-sans">
+                          No shifts recorded yet for this restaurant.
+                        </td>
+                      </tr>
+                    ) : (
+                      shifts.map((s) => {
+                        const expected = s.expectedCashRwf ?? (s.openingCashRwf + s.cashCollectedRwf);
+                        const counted = s.closingCashRwf ?? expected;
+                        const variance = s.cashVarianceRwf || 0;
+
+                        return (
+                          <tr key={s.id} className="hover:bg-slate-900/40">
+                            <td className="py-3 px-3.5">
+                              <div className="font-bold text-white">#{s.id.slice(-6)}</div>
+                              <span
+                                className={`inline-block px-1.5 py-0.2 rounded text-[9px] font-sans font-bold uppercase mt-0.5 ${
+                                  s.status === 'open'
+                                    ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                                    : 'bg-slate-800 text-slate-400'
+                                }`}
+                              >
+                                {s.status === 'open' ? 'Active' : 'Closed'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3.5 font-sans">
+                              <div className="font-medium text-white">{s.stationName}</div>
+                              <div className="text-[10px] text-slate-400">{s.branchName}</div>
+                            </td>
+                            <td className="py-3 px-3.5 font-sans">
+                              <div className="font-semibold text-slate-200">{s.operatorName}</div>
+                              <div className="text-[10px] text-slate-500 font-mono">
+                                Started: {new Date(s.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </div>
+                            </td>
+                            <td className="py-3 px-3.5 text-right text-slate-300">
+                              {s.openingCashRwf.toLocaleString()}
+                            </td>
+                            <td className="py-3 px-3.5 text-right text-emerald-400 font-bold">
+                              +{s.cashCollectedRwf.toLocaleString()}
+                            </td>
+                            <td className="py-3 px-3.5 text-right text-amber-300 font-bold">
+                              {expected.toLocaleString()}
+                            </td>
+                            <td className="py-3 px-3.5 text-right text-white font-bold">
+                              {counted.toLocaleString()}
+                            </td>
+                            <td className="py-3 px-3.5 text-right">
+                              <span
+                                className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                                  variance === 0
+                                    ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-800'
+                                    : variance > 0
+                                    ? 'bg-amber-950/80 text-amber-400 border border-amber-800'
+                                    : 'bg-rose-950/80 text-rose-400 border border-rose-800'
+                                }`}
+                              >
+                                {variance >= 0 ? `+${variance.toLocaleString()}` : variance.toLocaleString()}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3.5 text-center font-bold text-white">
+                              {s.platesServedCount}
+                            </td>
+                            <td className="py-3 px-3.5 text-right">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedShiftStationId(s.stationId);
+                                  setIsShiftModalOpen(true);
+                                }}
+                                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-[11px] font-sans font-semibold transition-colors cursor-pointer"
+                              >
+                                {s.status === 'open' ? 'Reconcile' : 'Audit'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* MODAL: ADD BRANCH */}
       {isAddBranchModalOpen && (
@@ -1005,6 +1225,14 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
           </div>
         </div>
       )}
+
+      {/* SHIFT HANDOVER & AUDIT MODAL */}
+      <ShiftHandoverModal
+        isOpen={isShiftModalOpen}
+        onClose={() => setIsShiftModalOpen(false)}
+        language={language || 'en'}
+        stationId={selectedShiftStationId}
+      />
     </div>
   );
 };

@@ -30,6 +30,7 @@ import {
   IdType,
   StudentProfile,
   PaymentMethod,
+  ShiftRecord,
 } from '../types';
 import {
   deriveRestaurantKey,
@@ -41,6 +42,14 @@ import {
   generatePhoneToken,
   verifyQrToken,
   markTokenStepUsed,
+  hashPinWithSalt,
+  verifyPinSecure,
+  hashPasswordWithSalt,
+  verifyPasswordSecure,
+  getCustomerPinSalt,
+  getStationUserSalt,
+  getBossPasswordSalt,
+  getSuperAdminSalt,
 } from '../services/cryptoService';
 import { sound } from '../services/audioService';
 
@@ -117,6 +126,7 @@ export interface AppState {
   branches: Branch[];
   stationUsers: StationUser[];
   pendingApprovals: PendingApproval[];
+  shifts: ShiftRecord[];
 
   syncOutbox: SyncOutboxItem[];
   syncCommands: SyncCommand[];
@@ -1168,6 +1178,25 @@ function getInitialState(): AppState {
       branches: initialBranches,
       stationUsers: initialStationUsers,
       pendingApprovals: initialPendingApprovals,
+      shifts: [
+        {
+          id: 'shift_rw01_morning_1',
+          restaurantCode: 'RW01',
+          branchId: 'br_rw01_main',
+          branchName: 'Main Campus Dining Hall (Hall A)',
+          stationId: 'sp_1',
+          stationName: 'Stand 1 - Main Buffet Line',
+          operatorId: 'usr_rw01_1',
+          operatorName: 'Eric Nshimiyimana',
+          startedAt: new Date(Date.now() - 4 * 3600 * 1000).toISOString(),
+          openingCashRwf: 20000,
+          cashCollectedRwf: 34000,
+          platesServedCount: 14,
+          provisionalCustomersRegistered: 1,
+          topUpsProcessedCount: 2,
+          status: 'open',
+        },
+      ],
 
       syncOutbox: [],
       syncCommands: [],
@@ -1353,6 +1382,11 @@ export class RestoStore {
           loadedPendingApprovals = parsed.pendingApprovals;
         }
 
+        let loadedShifts = initial.shifts;
+        if (Array.isArray(parsed.shifts) && parsed.shifts.length > 0) {
+          loadedShifts = parsed.shifts;
+        }
+
         // Ensure cust_pending_1 is present if not already in parsed customers
         let loadedCustomers = initial.customers;
         if (Array.isArray(parsed.customers) && parsed.customers.length > 0) {
@@ -1371,6 +1405,7 @@ export class RestoStore {
           branches: loadedBranches,
           stationUsers: loadedStationUsers,
           pendingApprovals: loadedPendingApprovals,
+          shifts: loadedShifts,
           customers: loadedCustomers,
           notifications: Array.isArray(parsed.notifications) && parsed.notifications.length > 0
             ? parsed.notifications
@@ -1946,6 +1981,12 @@ export class RestoStore {
       reference: `SCAN-${customer.memberNo}`,
     };
     this.state.ledgerEntries.push(newLedgerEntry);
+
+    // Update active shift stats
+    const activeShift = this.getActiveShift(station.id);
+    if (activeShift) {
+      activeShift.platesServedCount += 1;
+    }
 
     // Mark step as used if phone token
     if (!verifyResult.isCard && verifyResult.step !== undefined) {
@@ -4325,6 +4366,157 @@ export class RestoStore {
     this.scheduleSaveState();
     this.notify();
     return true;
+  }
+
+  // =========================================================================
+  // CASHIER SHIFT HANDOVER & DAILY RECONCILIATION AUDIT
+  // =========================================================================
+
+  public getActiveShift(stationId?: string): ShiftRecord | undefined {
+    if (!this.state.shifts) this.state.shifts = [];
+    return this.state.shifts.find(
+      (s) => s.status === 'open' && (!stationId || s.stationId === stationId)
+    );
+  }
+
+  public getShiftHistory(restaurantCode?: string): ShiftRecord[] {
+    if (!this.state.shifts) this.state.shifts = [];
+    const code = restaurantCode || this.state.currentRestaurantCode;
+    return this.state.shifts.filter((s) => s.restaurantCode === code);
+  }
+
+  public openShift(params: {
+    restaurantCode: string;
+    branchId: string;
+    branchName: string;
+    stationId: string;
+    stationName: string;
+    operatorId: string;
+    operatorName: string;
+    openingCashRwf: number;
+  }): ShiftRecord {
+    if (!this.state.shifts) this.state.shifts = [];
+    // Auto-close any existing open shift on the same station
+    const existing = this.getActiveShift(params.stationId);
+    if (existing) {
+      existing.status = 'closed';
+      existing.closedAt = new Date().toISOString();
+      existing.expectedCashRwf = existing.openingCashRwf + existing.cashCollectedRwf;
+      existing.closingCashRwf = existing.expectedCashRwf;
+      existing.cashVarianceRwf = 0;
+    }
+
+    const shiftId = `shift_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
+    const newShift: ShiftRecord = {
+      id: shiftId,
+      restaurantCode: params.restaurantCode,
+      branchId: params.branchId,
+      branchName: params.branchName,
+      stationId: params.stationId,
+      stationName: params.stationName,
+      operatorId: params.operatorId,
+      operatorName: params.operatorName,
+      startedAt: new Date().toISOString(),
+      openingCashRwf: Math.max(0, params.openingCashRwf),
+      cashCollectedRwf: 0,
+      platesServedCount: 0,
+      provisionalCustomersRegistered: 0,
+      topUpsProcessedCount: 0,
+      status: 'open',
+    };
+
+    this.state.shifts.unshift(newShift);
+    this.logAudit({
+      restaurantCode: params.restaurantCode,
+      branchId: params.branchId,
+      branchName: params.branchName,
+      actorRole: 'stand_staff',
+      actorName: params.operatorName,
+      action: 'SHIFT_OPENED',
+      details: `Operator opened new cashier shift on ${params.stationName} with opening cash float ${params.openingCashRwf.toLocaleString()} RWF.`,
+    });
+
+    this.scheduleSaveState();
+    this.notify();
+    return newShift;
+  }
+
+  public closeShift(params: {
+    shiftId: string;
+    closingCashRwf: number;
+    closingNotes?: string;
+    signedOffByPin?: string;
+  }): { success: boolean; shift?: ShiftRecord; varianceRwf?: number; error?: string } {
+    if (!this.state.shifts) return { success: false, error: 'No shifts recorded' };
+    const shift = this.state.shifts.find((s) => s.id === params.shiftId);
+    if (!shift) return { success: false, error: 'Shift not found' };
+    if (shift.status === 'closed') return { success: false, error: 'Shift is already closed' };
+
+    const expectedCash = shift.openingCashRwf + shift.cashCollectedRwf;
+    const variance = params.closingCashRwf - expectedCash;
+    const now = new Date().toISOString();
+    const auditId = `aud_shift_close_${Date.now()}`;
+
+    shift.status = 'closed';
+    shift.closedAt = now;
+    shift.closingCashRwf = params.closingCashRwf;
+    shift.expectedCashRwf = expectedCash;
+    shift.cashVarianceRwf = variance;
+    shift.closingNotes = params.closingNotes;
+    shift.reconciliationAuditId = auditId;
+
+    const varianceDesc =
+      variance === 0
+        ? 'Balanced (0 RWF variance)'
+        : variance > 0
+        ? `Overage: +${variance.toLocaleString()} RWF`
+        : `Shortage: ${variance.toLocaleString()} RWF`;
+
+    this.logAudit({
+      restaurantCode: shift.restaurantCode,
+      branchId: shift.branchId,
+      branchName: shift.branchName,
+      actorRole: 'stand_staff',
+      actorName: shift.operatorName,
+      action: 'SHIFT_RECONCILED_AND_CLOSED',
+      details: `Closed shift #${shift.id} on ${shift.stationName}. Expected cash: ${expectedCash.toLocaleString()} RWF (Float: ${shift.openingCashRwf.toLocaleString()} + Sales: ${shift.cashCollectedRwf.toLocaleString()}). Counted cash: ${params.closingCashRwf.toLocaleString()} RWF. Variance: ${varianceDesc}. Plates served: ${shift.platesServedCount}. Notes: "${params.closingNotes || 'None'}"`,
+    });
+
+    this.sendNotification({
+      restaurantCode: shift.restaurantCode,
+      target: 'all',
+      senderRole: 'system',
+      senderName: `${shift.operatorName} (${shift.stationName})`,
+      type: 'system_broadcast',
+      title: `Shift Closed: ${shift.stationName}`,
+      message: `Cashier shift handover completed. Total plates: ${shift.platesServedCount}. Counted cash: ${params.closingCashRwf.toLocaleString()} RWF (${varianceDesc}).`,
+      priority: variance !== 0 ? 'important' : 'normal',
+      actionTab: 'reports',
+    });
+
+    this.scheduleSaveState();
+    this.notify();
+    return { success: true, shift, varianceRwf: variance };
+  }
+
+  public updateRestaurantProfile(
+    restaurantCode: string,
+    updates: Partial<Restaurant>,
+    actorName = 'Restaurant Boss'
+  ): Restaurant | undefined {
+    const resto = this.state.restaurants.find((r) => r.code === restaurantCode);
+    if (!resto) return undefined;
+    Object.assign(resto, updates);
+    this.logAudit({
+      restaurantCode,
+      actorRole: 'restaurant_admin',
+      actorName,
+      action: 'RESTAURANT_PROFILE_UPDATED',
+      details: `Updated restaurant details and appearance for ${resto.name} (${restaurantCode})`,
+    });
+    this.scheduleSaveState();
+    this.notify();
+    return resto;
   }
 }
 

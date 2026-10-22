@@ -5,6 +5,7 @@ import { translations } from '../../services/i18n';
 import { sound } from '../../services/audioService';
 import { BatteryIndicator } from '../common/BatteryIndicator';
 import { ScannerProvisionalModal } from './ScannerProvisionalModal';
+import { ShiftHandoverModal } from './ShiftHandoverModal';
 import {
   Camera,
   Barcode,
@@ -23,6 +24,7 @@ import {
   Zap,
   ArrowRight,
   ShieldCheck,
+  Coins,
 } from 'lucide-react';
 
 interface ScannerViewProps {
@@ -52,6 +54,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isProvisionalModalOpen, setIsProvisionalModalOpen] = useState(false);
+  const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const keyboardInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -377,6 +380,25 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
             <UserPlus className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Provisional Reg / Top-Up</span>
             <span className="sm:hidden">Provisional</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsShiftModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-700 border border-slate-700 text-emerald-400 hover:text-white transition-colors cursor-pointer shadow-sm"
+            title={t.shifts?.title || 'Cashier Shift Handover & Daily Reconciliation'}
+          >
+            <Coins className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="hidden sm:inline">{t.shifts?.shiftHandoverButton || 'Shift Handover'}</span>
+            <span className="sm:hidden">Shift</span>
+            {(() => {
+              const activeShift = restoStore.getActiveShift(state.currentStationId);
+              return activeShift ? (
+                <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-950 text-emerald-300 font-mono">
+                  {activeShift.platesServedCount}p
+                </span>
+              ) : null;
+            })()}
           </button>
 
           <button
@@ -780,6 +802,14 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
         isOpen={isProvisionalModalOpen}
         onClose={() => setIsProvisionalModalOpen(false)}
         onSuccessScan={(tok) => handleExecuteScan(tok)}
+      />
+
+      {/* CASHIER SHIFT HANDOVER & RECONCILIATION MODAL */}
+      <ShiftHandoverModal
+        isOpen={isShiftModalOpen}
+        onClose={() => setIsShiftModalOpen(false)}
+        language={language}
+        stationId={state.currentStationId}
       />
     </div>
   );

@@ -46,6 +46,8 @@ export interface Restaurant {
   status: RestaurantStatus;
   planId: string;
   defaultPlatePriceRwf?: number;
+  welcomeMessage?: string;
+  badgeStyle?: 'gold' | 'emerald' | 'blue' | 'dark';
   termsOverride?: RestaurantTermsOverride;
   currentLicenseId?: string;
   highestTimeSeen: number; // clock guard against rollbacks
@@ -410,3 +412,31 @@ export interface AppNotification {
   readByCustomerIds: string[];
   actionTab?: string;
 }
+
+export type ShiftStatus = 'open' | 'closed';
+
+export interface ShiftRecord {
+  id: string;
+  restaurantCode: string;
+  branchId: string;
+  branchName: string;
+  stationId: string;
+  stationName: string;
+  operatorId: string;
+  operatorName: string;
+  startedAt: string;
+  closedAt?: string;
+  openingCashRwf: number;
+  closingCashRwf?: number;
+  cashCollectedRwf: number;
+  expectedCashRwf?: number;
+  cashVarianceRwf?: number; // closing - expected (0 = balanced, negative = shortage, positive = overage)
+  platesServedCount: number;
+  provisionalCustomersRegistered: number;
+  topUpsProcessedCount: number;
+  status: ShiftStatus;
+  closingNotes?: string;
+  reconciliationAuditId?: string;
+  signedOffByPinHash?: string;
+}
+

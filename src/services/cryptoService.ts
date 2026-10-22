@@ -441,3 +441,142 @@ export function generateActivationCode(restaurantCode: string): string {
   const rand = Math.random().toString(36).substring(2, 8).toUpperCase();
   return `RP-${restaurantCode}-${rand}`;
 }
+
+/**
+ * Constant-time string comparison to prevent timing side-channel attacks on PINs and passwords.
+ */
+export function timingSafeEqual(a: string, b: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (a.length !== b.length) {
+    let dummy = 0;
+    for (let i = 0; i < a.length; i++) {
+      dummy |= a.charCodeAt(i) ^ 0;
+    }
+    return false;
+  }
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+/**
+ * Asynchronous cryptographic hashing using standard browser Web Crypto API (SubtleCrypto SHA-256).
+ * Automatically falls back to synchronous SHA-256 when in restricted non-secure contexts.
+ */
+export async function hashWithWebCrypto(input: string): Promise<string> {
+  try {
+    if (typeof window !== 'undefined' && window.crypto && window.crypto.subtle) {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(input);
+      const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+    }
+  } catch {
+    // Non-fatal fallback to sync SHA-256
+  }
+  return sha256(input);
+}
+
+/**
+ * Per-entity cryptographic salt derivation helpers
+ */
+export function getCustomerPinSalt(customerId: string, memberNo: string): string {
+  return `RESTOPASS_CUST_PIN_SALT_${customerId}_${memberNo}`;
+}
+
+export function getStationUserSalt(userId: string, username: string): string {
+  return `RESTOPASS_STATION_USER_SALT_${userId}_${username}`;
+}
+
+export function getBossPasswordSalt(restaurantCode: string): string {
+  return `RESTOPASS_BOSS_SALT_${restaurantCode.toUpperCase()}`;
+}
+
+export function getSuperAdminSalt(): string {
+  return 'RESTOPASS_SUPERADMIN_GLOBAL_SALT_2026';
+}
+
+/**
+ * Securely hashes a 4-digit PIN with a dedicated cryptographic salt using SHA-256
+ */
+export async function hashPinWithSalt(pin: string, salt: string): Promise<string> {
+  const saltedPayload = `RESTOPASS_SALTED_PIN_V1:${salt}:${pin.trim()}`;
+  return hashWithWebCrypto(saltedPayload);
+}
+
+/**
+ * Validates an entered PIN against a stored hash with constant-time equality.
+ * Supports legacy plain-text fallback for backward compatibility while migrating to salted hashes.
+ */
+export async function verifyPinSecure(
+  enteredPin: string,
+  salt: string,
+  expectedHashOrPlain: string
+): Promise<boolean> {
+  if (!enteredPin || !expectedHashOrPlain) return false;
+  const cleanEntered = enteredPin.trim();
+  const cleanExpected = expectedHashOrPlain.trim();
+
+  // 1. Direct legacy match (e.g. plain "1234" in initial mock state)
+  if (timingSafeEqual(cleanEntered, cleanExpected)) {
+    return true;
+  }
+
+  // 2. Salted SHA-256 hash match
+  const computedHash = await hashPinWithSalt(cleanEntered, salt);
+  if (timingSafeEqual(computedHash, cleanExpected)) {
+    return true;
+  }
+
+  // 3. Fallback un-salted SHA-256 match
+  const plainHash = sha256(cleanEntered);
+  if (timingSafeEqual(plainHash, cleanExpected)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Securely hashes an administrative password with salt
+ */
+export async function hashPasswordWithSalt(password: string, salt: string): Promise<string> {
+  const saltedPayload = `RESTOPASS_SALTED_PASSWORD_V1:${salt}:${password}`;
+  return hashWithWebCrypto(saltedPayload);
+}
+
+/**
+ * Validates an administrative password against stored hash with constant-time equality
+ */
+export async function verifyPasswordSecure(
+  enteredPassword: string,
+  salt: string,
+  expectedHashOrPlain: string
+): Promise<boolean> {
+  if (!enteredPassword || !expectedHashOrPlain) return false;
+  const cleanEntered = enteredPassword;
+  const cleanExpected = expectedHashOrPlain.trim();
+
+  // 1. Direct match for known default/plain passwords
+  if (timingSafeEqual(cleanEntered, cleanExpected)) {
+    return true;
+  }
+
+  // 2. Salted SHA-256 hash match
+  const computedHash = await hashPasswordWithSalt(cleanEntered, salt);
+  if (timingSafeEqual(computedHash, cleanExpected)) {
+    return true;
+  }
+
+  // 3. Fallback un-salted SHA-256
+  const plainHash = sha256(cleanEntered);
+  if (timingSafeEqual(plainHash, cleanExpected)) {
+    return true;
+  }
+
+  return false;
+}
+

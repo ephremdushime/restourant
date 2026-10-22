@@ -21,6 +21,8 @@ import { PricingAnalyticsDashboard } from './PricingAnalyticsDashboard';
 import { BossApprovalsManager } from './BossApprovalsManager';
 import { BranchesAndStationsManager } from './BranchesAndStationsManager';
 import { SecurityAndAuditLogsView } from './SecurityAndAuditLogsView';
+import { RestaurantAppearanceManager } from './RestaurantAppearanceManager';
+import { ShiftHandoverModal } from '../scanner/ShiftHandoverModal';
 import {
   exportTransactionsToCsv,
   exportTransactionsToJson,
@@ -74,6 +76,8 @@ import {
   X,
   Eye,
   EyeOff,
+  Palette,
+  ArrowLeft,
 } from 'lucide-react';
 
 interface RestaurantAdminViewProps {
@@ -121,6 +125,8 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMode, setFilterMode] = useState<'all' | 'active' | 'locked' | 'low_balance' | 'students'>('all');
   const [selectedCustomerForDetail, setSelectedCustomerForDetail] = useState<Customer | null>(null);
+  const [userSection, setUserSection] = useState<'members' | 'staff' | 'notifs'>('members');
+  const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
 
   // Full Member Management Modal State
   const [manageModalOpen, setManageModalOpen] = useState(false);
