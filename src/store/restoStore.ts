@@ -206,6 +206,9 @@ function getInitialState(): AppState {
       status: 'active',
       planId: 'plan_high_volume',
       defaultPlatePriceRwf: 1150,
+      badgeStyle: 'emerald',
+      welcomeMessage: 'Grand Resto Universitaire — Eat Fresh, Study Hard!',
+      primaryColor: '#059669',
       currentLicenseId: 'LIC-RW01-2026-X8F',
       highestTimeSeen: Date.now(),
       lastSyncAt: now,
@@ -223,7 +226,29 @@ function getInitialState(): AppState {
       status: 'active',
       planId: 'plan_starter',
       defaultPlatePriceRwf: 1350,
+      badgeStyle: 'gold',
+      welcomeMessage: 'Fresh Gourmet Buffet & Express Dining in Nyarugenge',
+      primaryColor: '#d97706',
       currentLicenseId: 'LIC-RW02-2026-N9B',
+      highestTimeSeen: Date.now(),
+      lastSyncAt: now,
+      softwareVersion: '1.1.0-authority',
+      createdAt: now,
+    },
+    {
+      code: 'RW03',
+      name: 'Huye University Canteen',
+      legalEntity: 'Southern Province Campus Catering Ltd',
+      phone: '+250 788 555 777',
+      email: 'canteen@huyeuniversity.rw',
+      address: 'University Main Road, Huye Campus',
+      currency: 'RWF',
+      status: 'active',
+      planId: 'plan_starter',
+      defaultPlatePriceRwf: 1100,
+      badgeStyle: 'blue',
+      welcomeMessage: 'Wholesome student nutrition for campus scholars',
+      primaryColor: '#2563eb',
       highestTimeSeen: Date.now(),
       lastSyncAt: now,
       softwareVersion: '1.1.0-authority',
@@ -2251,7 +2276,93 @@ export class RestoStore {
   // --- RESTAURANT ADMIN OPERATIONS ---
 
   /**
-   * Register customer with live photo, student details, and duplicate check
+   * Normalizes a phone number to standard digits for robust duplicate detection
+   * Handles Rwandan formats: +250 78..., 078..., 25078...
+   */
+  public normalizePhoneNumber(phone: string): string {
+    if (!phone) return '';
+    const digits = phone.replace(/[^0-9]/g, '');
+    if (digits.startsWith('250') && digits.length === 12) {
+      return digits.slice(3);
+    }
+    if (digits.startsWith('0') && digits.length === 10) {
+      return digits.slice(1);
+    }
+    return digits;
+  }
+
+  /**
+   * Strict Identity Uniqueness Validator:
+   * Guarantees that no customer can have two accounts in the same restaurant.
+   * Checks normalized phone numbers, ID document numbers/hashes, and student registration numbers.
+   */
+  public checkDuplicateCustomerIdentity(
+    restaurantCode: string,
+    phone: string,
+    idType: Customer['idType'],
+    idNumber: string,
+    studentRegNumber?: string,
+    excludeCustomerId?: string
+  ): {
+    isDuplicate: boolean;
+    duplicateCustomer?: Customer;
+    field?: 'phone' | 'id_number' | 'student_id';
+    message?: string;
+  } {
+    const cleanPhone = this.normalizePhoneNumber(phone);
+    const cleanIdNumber = idNumber.trim().toLowerCase();
+    const cleanRegNumber = studentRegNumber?.trim().toLowerCase();
+    const hash = hashIdNumber(idType, idNumber.trim());
+
+    const customers = this.state.customers.filter(
+      (c) => c.restaurantCode === restaurantCode && (!excludeCustomerId || c.id !== excludeCustomerId)
+    );
+
+    for (const c of customers) {
+      // 1. Phone number check (normalized)
+      if (cleanPhone && cleanPhone.length >= 7) {
+        const cPhone = this.normalizePhoneNumber(c.phone);
+        if (cPhone === cleanPhone) {
+          return {
+            isDuplicate: true,
+            duplicateCustomer: c,
+            field: 'phone',
+            message: `Phone number is already registered to #${c.memberNo} (${c.name}).`,
+          };
+        }
+      }
+
+      // 2. ID document number / Hash check
+      if (cleanIdNumber && cleanIdNumber.length > 2) {
+        if (c.idHash === hash || (c.idNumberMasked && c.idNumberMasked.toLowerCase().replace(/[\s*-]/g, '').includes(cleanIdNumber.replace(/[\s*-]/g, '')))) {
+          return {
+            isDuplicate: true,
+            duplicateCustomer: c,
+            field: 'id_number',
+            message: `ID document number is already registered to #${c.memberNo} (${c.name}).`,
+          };
+        }
+      }
+
+      // 3. Student Registration Number check (exact campus ID)
+      if (cleanRegNumber && cleanRegNumber.length >= 3 && c.isStudent && c.studentProfile?.registrationNumber) {
+        const cReg = c.studentProfile.registrationNumber.trim().toLowerCase();
+        if (cReg === cleanRegNumber) {
+          return {
+            isDuplicate: true,
+            duplicateCustomer: c,
+            field: 'student_id',
+            message: `Student Registration ID (${studentRegNumber}) is already registered to #${c.memberNo} (${c.name}).`,
+          };
+        }
+      }
+    }
+
+    return { isDuplicate: false };
+  }
+
+  /**
+   * Register customer with live photo, student details, and strict duplicate check
    */
   public registerCustomer(data: {
     restaurantCode: string;
@@ -2268,23 +2379,25 @@ export class RestoStore {
     paymentReference: string;
     adminStaffId: string;
     adminStaffName: string;
-  }): { success: boolean; customer?: Customer; error?: string } {
+  }): { success: boolean; customer?: Customer; error?: string; existingCustomer?: Customer } {
     const phoneClean = data.phone.trim();
     const idHash = hashIdNumber(data.idType, data.idNumber);
 
-    // Duplicate check on phone and ID hash
-    const existingPhone = this.state.customers.find(
-      (c) => c.restaurantCode === data.restaurantCode && c.phone === phoneClean
+    // Strict duplicate check per restaurant
+    const dupCheck = this.checkDuplicateCustomerIdentity(
+      data.restaurantCode,
+      data.phone,
+      data.idType,
+      data.idNumber,
+      data.isStudent ? data.studentProfile?.registrationNumber : undefined
     );
-    if (existingPhone) {
-      return { success: false, error: `Customer with phone ${phoneClean} already exists (#${existingPhone.memberNo} - ${existingPhone.name})` };
-    }
 
-    const existingId = this.state.customers.find(
-      (c) => c.restaurantCode === data.restaurantCode && c.idHash === idHash
-    );
-    if (existingId) {
-      return { success: false, error: `Customer with this ID number already registered (#${existingId.memberNo} - ${existingId.name})` };
+    if (dupCheck.isDuplicate && dupCheck.duplicateCustomer) {
+      return {
+        success: false,
+        error: dupCheck.message || `Customer already enrolled in this restaurant as #${dupCheck.duplicateCustomer.memberNo} (${dupCheck.duplicateCustomer.name}).`,
+        existingCustomer: dupCheck.duplicateCustomer,
+      };
     }
 
     // Member number allocated strictly by local server
@@ -2638,15 +2751,26 @@ export class RestoStore {
     const customer = this.state.customers.find((c) => c.id === customerId);
     if (!customer) return { success: false, error: 'Member not found' };
 
+    const checkPhone = updates.phone || customer.phone;
+    const checkIdType = updates.idType || customer.idType;
+    const checkIdNumber = updates.idNumber || '';
+    const checkStudentReg = updates.studentProfile?.registrationNumber || customer.studentProfile?.registrationNumber;
+
+    const dupCheck = this.checkDuplicateCustomerIdentity(
+      customer.restaurantCode,
+      checkPhone,
+      checkIdType,
+      checkIdNumber,
+      checkStudentReg,
+      customer.id
+    );
+
+    if (dupCheck.isDuplicate && dupCheck.duplicateCustomer) {
+      return { success: false, error: dupCheck.message || 'Duplicate customer identity detected in this restaurant.' };
+    }
+
     if (updates.phone) {
-      const cleanPhone = updates.phone.trim();
-      const existing = this.state.customers.find(
-        (c) => c.restaurantCode === customer.restaurantCode && c.id !== customer.id && c.phone === cleanPhone
-      );
-      if (existing) {
-        return { success: false, error: `Phone number is already registered to #${existing.memberNo} (${existing.name})` };
-      }
-      customer.phone = cleanPhone;
+      customer.phone = updates.phone.trim();
     }
 
     if (updates.name) customer.name = updates.name.trim();

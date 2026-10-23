@@ -14,6 +14,11 @@ import {
   HardDriveDownload,
   Shield,
   Layers,
+  Globe,
+  Laptop,
+  Copy,
+  Check,
+  ExternalLink,
 } from 'lucide-react';
 
 interface SyncSimulationDrawerProps {
@@ -31,6 +36,7 @@ export const SyncSimulationDrawer: React.FC<SyncSimulationDrawerProps> = ({
   const restaurant = restoStore.getCurrentRestaurant();
   const [isSyncing, setIsSyncing] = useState(false);
   const [drillSuccessMessage, setDrillSuccessMessage] = useState<string | null>(null);
+  const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
 
   const pendingOutboxCount = state.syncOutbox.filter((item) => !item.syncedToCloud).length;
 
@@ -39,7 +45,7 @@ export const SyncSimulationDrawer: React.FC<SyncSimulationDrawerProps> = ({
     setTimeout(() => {
       restoStore.syncPendingOutbox();
       setIsSyncing(false);
-      setDrillSuccessMessage('Local authority pushed all pending outbox events to cloud mirror.');
+      setDrillSuccessMessage('Local authority pushed all pending outbox events to central cloud mirror.');
       setTimeout(() => setDrillSuccessMessage(null), 3000);
     }, 800);
   };
@@ -51,20 +57,25 @@ export const SyncSimulationDrawer: React.FC<SyncSimulationDrawerProps> = ({
   };
 
   const handleSimulateReplacementMachineRestore = () => {
-    setDrillSuccessMessage('Replacement Mini PC drill successful: Local SQLite/PostgreSQL schema restored from cloud snapshot.');
+    setDrillSuccessMessage('Replacement Mini PC drill successful: Local SQLite/PostgreSQL schema restored from central cloud snapshot.');
     setTimeout(() => setDrillSuccessMessage(null), 4000);
   };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex justify-end">
-      <div className="w-full max-w-md bg-slate-900 border-l border-slate-800 h-full flex flex-col shadow-2xl animate-in slide-in-from-right duration-200">
+      <div className="w-full max-w-lg bg-slate-900 border-l border-slate-800 h-full flex flex-col shadow-2xl animate-in slide-in-from-right duration-200">
         {/* Header */}
         <div className="p-4 border-b border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Server className="w-5 h-5 text-emerald-400" />
-            <h2 className="text-sm font-bold text-white uppercase tracking-wider">
-              Local Authority &amp; Sync Engine
-            </h2>
+            <div>
+              <h2 className="text-sm font-bold text-white uppercase tracking-wider">
+                Hybrid Cloud &amp; Local Edge Topology
+              </h2>
+              <div className="text-[10px] text-slate-400 font-mono">
+                Multi-Tenant Central Server ↔ Restaurant Office Machines
+              </div>
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -76,20 +87,136 @@ export const SyncSimulationDrawer: React.FC<SyncSimulationDrawerProps> = ({
 
         {/* Content */}
         <div className="p-5 overflow-y-auto space-y-6 flex-1 text-xs">
-          {/* Architecture Summary Banner */}
-          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+          {/* HYBRID MULTI-TENANT ARCHITECTURE VISUALIZER */}
+          <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-950 via-slate-900 to-emerald-950/30 border border-slate-800 space-y-3">
             <div className="flex items-center justify-between">
-              <span className="font-bold text-white flex items-center gap-1.5">
-                <Shield className="w-4 h-4 text-emerald-400" />
-                <span>Single Authority Architecture</span>
+              <span className="font-bold text-white flex items-center gap-2 text-xs">
+                <Globe className="w-4 h-4 text-emerald-400" />
+                <span>Multi-Tenant Architecture</span>
               </span>
-              <span className="font-mono text-emerald-400 text-[11px] font-bold">
-                {restaurant?.code} LOCAL SERVER
+              <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-mono text-[10px] font-bold">
+                Hybrid Deployment
               </span>
             </div>
-            <p className="text-slate-400 leading-relaxed text-[11px]">
-              Local server holds the authority for balances, scans, and transfers. Serving continues 100% offline without internet. Cloud acts as mirror and license issuer.
-            </p>
+
+            {/* Central Cloud Node */}
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Cloud className="w-4 h-4 text-blue-400" />
+                  <span className="font-bold text-white text-xs">Big Hosted Central Server</span>
+                </div>
+                <span className="font-mono text-[10px] text-blue-400 font-bold">restopass.central.cloud</span>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Central cloud serves all registered restaurants ({state.restaurants.length} active), maintains multi-tenant customer directories, license issuance, and customer web portals.
+              </p>
+            </div>
+
+            {/* Local Cafeteria Node */}
+            <div className="p-3 rounded-xl bg-slate-950 border border-emerald-700/50 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Laptop className="w-4 h-4 text-emerald-400" />
+                  <span className="font-bold text-white text-xs">Local Restaurant Office Server</span>
+                </div>
+                <span className="font-mono text-[10px] text-emerald-400 font-bold">
+                  {restaurant?.code} · Local Subnet
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Runs on the restaurant manager&apos;s office PC/laptop. Scanners at the dining hall connect directly over local Wi-Fi with sub-millisecond response. Holds local authority if internet drops!
+              </p>
+            </div>
+
+            <div className="flex items-center justify-center gap-2 py-1 text-slate-500 font-mono text-[11px]">
+              <ArrowRightLeft className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+              <span>Auto-Sync Heartbeat (Every 3s when online)</span>
+            </div>
+          </div>
+
+          {/* DIRECT RESTAURANT SLUG URLs FOR CUSTOMERS */}
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between">
+              <label className="font-bold text-slate-300 block uppercase tracking-wider text-[11px]">
+                Direct Customer Slug Access Links
+              </label>
+              <span className="text-[10px] text-slate-500 font-mono">Auto Cafeteria Branding</span>
+            </div>
+
+            <div className="space-y-2">
+              {state.restaurants.map((r) => {
+                const isCurrent = r.code === state.currentRestaurantCode;
+                const slugPath = `#/portal/${r.code.toLowerCase()}`;
+                const fullUrl = `${window.location.origin}${window.location.pathname}${slugPath}`;
+                return (
+                  <div
+                    key={r.code}
+                    className={`p-3 rounded-xl border flex items-center justify-between gap-2 transition-colors ${
+                      isCurrent
+                        ? 'bg-slate-950 border-emerald-600/70'
+                        : 'bg-slate-950/70 border-slate-800'
+                    }`}
+                  >
+                    <div className="truncate">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-white text-xs">{r.name}</span>
+                        <span className="font-mono text-[10px] text-emerald-400 font-semibold uppercase">
+                          {r.code}
+                        </span>
+                        {isCurrent && (
+                          <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 text-[9px] font-bold">
+                            CURRENT
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] font-mono text-slate-400 truncate mt-0.5">
+                        {slugPath}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(fullUrl);
+                          setCopiedSlug(r.code);
+                          setTimeout(() => setCopiedSlug(null), 2000);
+                        }}
+                        className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white text-[10px] font-mono flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Copy direct portal URL"
+                      >
+                        {copiedSlug === r.code ? (
+                          <>
+                            <Check className="w-3 h-3 text-emerald-400" />
+                            <span className="text-emerald-400 font-bold">Copied</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3 text-slate-400" />
+                            <span>Copy</span>
+                          </>
+                        )}
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          restoStore.setRestaurantCode(r.code);
+                          if (typeof window !== 'undefined') {
+                            window.location.hash = slugPath;
+                          }
+                          onClose();
+                        }}
+                        className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Launch customer portal for this restaurant"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        <span>Visit</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
           {/* Network Simulator Toggle */}

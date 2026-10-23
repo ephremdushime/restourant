@@ -10,6 +10,7 @@ import { AuthPortalView } from './components/common/AuthPortalView';
 import { SyncSimulationDrawer } from './components/sync/SyncSimulationDrawer';
 import { NotificationDrawer } from './components/common/NotificationDrawer';
 import { sound } from './services/audioService';
+import { validateCustomerMagicToken } from './services/magicAuthService';
 
 export default function App() {
   const [state, setState] = useState(() => restoStore.getState());
@@ -127,15 +128,74 @@ export default function App() {
   // Unified app routing: URL Hash sync (#/scanner, #/boss, #/customer, #/superadmin)
   useEffect(() => {
     const handleHashChange = () => {
-      const hash = window.location.hash.toLowerCase();
+      const rawHash = window.location.hash;
+      const hash = rawHash.toLowerCase();
+
+      // Check for direct restaurant slug or code in URL:
+      // Supports #/portal/RW01, #/portal/RW02, #/cafeteria/RW01, or ?resto=RW01
+      const restoParamMatch = rawHash.match(/[?&]resto=([a-zA-Z0-9_-]+)/i);
+      const portalPathMatch = rawHash.match(/#(?:portal|cafeteria|r)\/([a-zA-Z0-9_-]+)/i);
+      const targetSlug = restoParamMatch?.[1] || portalPathMatch?.[1];
+
+      if (targetSlug) {
+        const targetClean = targetSlug.toLowerCase();
+        const availableRestos = restoStore.getState().restaurants;
+        const matched = availableRestos.find(
+          (r) =>
+            r.code.toLowerCase() === targetClean ||
+            r.name.toLowerCase().replace(/[^a-z0-9]/g, '').includes(targetClean.replace(/[^a-z0-9]/g, ''))
+        );
+        if (matched && matched.code !== restoStore.getState().currentRestaurantCode) {
+          restoStore.setRestaurantCode(matched.code);
+        }
+      }
+
+      // Check for WhatsApp 1-tap magic authentication token (?auth=...)
+      if (rawHash.includes('auth=')) {
+        const match = rawHash.match(/auth=([^&]+)/);
+        if (match && match[1]) {
+          const token = match[1];
+          const decoded = validateCustomerMagicToken(token);
+          if (decoded) {
+            const allCustomers = restoStore.getState().customers;
+            const matchedCust = allCustomers.find(
+              (c) => c.id === decoded.customerId || c.memberNo === decoded.memberNo
+            );
+            if (matchedCust) {
+              restoStore.setRestaurantCode(decoded.restaurantCode);
+              restoStore.setCustomer(matchedCust.id);
+              setSessions((prev) => {
+                const next = { ...prev, customer: true };
+                try {
+                  sessionStorage.setItem('restopass_portal_sessions', JSON.stringify(next));
+                } catch {}
+                return next;
+              });
+              setSessionLabels((prev) => ({
+                ...prev,
+                customer: `${matchedCust.name} (#${matchedCust.memberNo})`,
+              }));
+              handleRoleChange('customer', false);
+              return;
+            }
+          }
+        }
+      }
+
       if (hash.includes('scanner') || hash.includes('stand')) {
         handleRoleChange('stand_staff', false);
-      } else if (hash.includes('boss') || hash.includes('admin') || hash.includes('resto')) {
-        handleRoleChange('restaurant_admin', false);
-      } else if (hash.includes('customer') || hash.includes('patron') || hash.includes('card')) {
-        handleRoleChange('customer', false);
       } else if (hash.includes('super')) {
         handleRoleChange('super_admin', false);
+      } else if (hash.includes('boss') || hash.includes('resto-admin') || (hash.includes('admin') && !hash.includes('super'))) {
+        handleRoleChange('restaurant_admin', false);
+      } else if (
+        hash.includes('customer') ||
+        hash.includes('patron') ||
+        hash.includes('card') ||
+        hash.includes('portal') ||
+        hash.includes('cafeteria')
+      ) {
+        handleRoleChange('customer', false);
       }
     };
 

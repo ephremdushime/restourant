@@ -35,6 +35,9 @@ import {
   ExternalLink,
   Tag,
   Copy,
+  Building2,
+  Store,
+  ChevronDown,
 } from 'lucide-react';
 
 interface CustomerViewProps {
@@ -52,7 +55,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   const state = restoStore.getState();
   const currentRestaurant = restoStore.getCurrentRestaurant();
 
-  const customer = restoStore.getCurrentCustomer() || state.customers[0];
+  const customer = restoStore.getCurrentCustomer() || state.customers.find((c) => c.restaurantCode === state.currentRestaurantCode) || state.customers[0];
   const balance = restoStore.getCustomerBalance(customer.id);
 
   // Dynamic 30-second token rotation
@@ -61,7 +64,58 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   );
   const [qrPassType, setQrPassType] = useState<'dynamic' | 'permanent'>('dynamic');
   const [copiedRef, setCopiedRef] = useState(false);
+  const [copiedSlug, setCopiedSlug] = useState(false);
+  const [cafeteriaDropdownOpen, setCafeteriaDropdownOpen] = useState(false);
   const [plansExpanded, setPlansExpanded] = useState(false);
+
+  // Badge Style Dynamic Theming
+  const getBadgeTheme = (style?: 'gold' | 'emerald' | 'blue' | 'dark') => {
+    switch (style) {
+      case 'gold':
+        return {
+          gradient: 'from-slate-900 via-amber-950/40 to-slate-900',
+          border: 'border-amber-500/50',
+          accent: 'text-amber-400',
+          badgeBg: 'bg-amber-500/20 text-amber-300 border-amber-500/30',
+          glow: 'bg-amber-500/10',
+          glowSecondary: 'bg-amber-600/10',
+          statusRing: 'ring-amber-400/40',
+        };
+      case 'blue':
+        return {
+          gradient: 'from-slate-900 via-blue-950/40 to-slate-900',
+          border: 'border-blue-500/50',
+          accent: 'text-sky-400',
+          badgeBg: 'bg-blue-500/20 text-sky-300 border-blue-500/30',
+          glow: 'bg-blue-500/10',
+          glowSecondary: 'bg-sky-500/10',
+          statusRing: 'ring-sky-400/40',
+        };
+      case 'dark':
+        return {
+          gradient: 'from-slate-950 via-zinc-900 to-slate-950',
+          border: 'border-purple-500/40',
+          accent: 'text-purple-300',
+          badgeBg: 'bg-purple-500/20 text-purple-200 border-purple-500/30',
+          glow: 'bg-purple-500/10',
+          glowSecondary: 'bg-indigo-500/10',
+          statusRing: 'ring-purple-400/40',
+        };
+      case 'emerald':
+      default:
+        return {
+          gradient: 'from-slate-900 via-slate-900 to-emerald-950/40',
+          border: 'border-slate-700/80',
+          accent: 'text-emerald-400',
+          badgeBg: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
+          glow: 'bg-emerald-500/10',
+          glowSecondary: 'bg-blue-500/10',
+          statusRing: 'ring-emerald-400/40',
+        };
+    }
+  };
+
+  const badgeTheme = getBadgeTheme(currentRestaurant?.badgeStyle);
 
   const permanentCardToken = generateCardToken(
     customer.restaurantCode,
@@ -170,6 +224,158 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
   return (
     <div className="max-w-md mx-auto px-4 py-6 space-y-5 animate-in fade-in duration-200">
+      {/* CAFETERIA BRANDING HEADER & MULTI-TENANT SWITCHER */}
+      <div className={`p-4 rounded-3xl bg-gradient-to-br ${badgeTheme.gradient} border ${badgeTheme.border} shadow-xl relative overflow-hidden`}>
+        <div className={`absolute top-0 right-0 w-32 h-32 ${badgeTheme.glow} rounded-full blur-2xl pointer-events-none`} />
+
+        <div className="relative z-10 space-y-2.5">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 rounded-2xl bg-slate-900 border border-slate-700/80 flex items-center justify-center text-lg shadow-inner">
+                🍽️
+              </div>
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <h1 className="text-sm font-black text-white tracking-tight">
+                    {currentRestaurant?.name || 'Campus Dining'}
+                  </h1>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider ${badgeTheme.badgeBg}`}>
+                    {currentRestaurant?.code}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 font-medium line-clamp-1 mt-0.5">
+                  {currentRestaurant?.welcomeMessage || 'Eat fresh meals, study with energy!'}
+                </p>
+              </div>
+            </div>
+
+            {/* Switch Cafeteria Dropdown Button */}
+            <div className="relative shrink-0">
+              <button
+                onClick={() => setCafeteriaDropdownOpen((prev) => !prev)}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 text-white text-[11px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                title="Switch between cafeterias on the central cloud server"
+              >
+                <Store className="w-3.5 h-3.5 text-slate-300" />
+                <span>Cafeteria</span>
+                <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${cafeteriaDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {cafeteriaDropdownOpen && (
+                <div className="absolute right-0 top-full mt-2 w-64 p-2 rounded-2xl bg-slate-950 border border-slate-700 shadow-2xl z-50 text-xs space-y-1 animate-in fade-in zoom-in-95 duration-150">
+                  <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800 flex items-center justify-between">
+                    <span>Central Cloud Multi-Tenant</span>
+                    <span className="font-mono text-emerald-400">3 Restos</span>
+                  </div>
+                  {state.restaurants.map((resto) => {
+                    const isCur = resto.code === state.currentRestaurantCode;
+                    return (
+                      <button
+                        key={resto.code}
+                        onClick={() => {
+                          restoStore.setRestaurantCode(resto.code);
+                          if (typeof window !== 'undefined') {
+                            window.location.hash = `#/portal/${resto.code.toLowerCase()}`;
+                          }
+                          setCafeteriaDropdownOpen(false);
+                        }}
+                        className={`w-full text-left p-2 rounded-xl flex items-center justify-between transition-colors cursor-pointer ${
+                          isCur
+                            ? 'bg-emerald-950/80 text-emerald-200 border border-emerald-600/50 font-bold'
+                            : 'hover:bg-slate-900 text-slate-300 hover:text-white'
+                        }`}
+                      >
+                        <div className="truncate mr-2">
+                          <div className="font-semibold truncate">{resto.name}</div>
+                          <div className="text-[10px] text-slate-400 font-mono">Slug: #{resto.code.toLowerCase()}</div>
+                        </div>
+                        {isCur && <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Direct Slug URL Row with 1-click copy */}
+          <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-[11px] gap-2">
+            <div className="flex items-center gap-1.5 text-slate-400 truncate">
+              <span className="font-mono text-[10px] text-slate-500">Direct Link:</span>
+              <span className="font-mono font-bold text-slate-300 truncate">
+                #/portal/{currentRestaurant?.code.toLowerCase()}
+              </span>
+            </div>
+            <button
+              onClick={() => {
+                const directUrl = `${window.location.origin}${window.location.pathname}#/portal/${currentRestaurant?.code.toLowerCase()}`;
+                navigator.clipboard.writeText(directUrl);
+                setCopiedSlug(true);
+                setTimeout(() => setCopiedSlug(false), 2000);
+              }}
+              className="px-2 py-0.5 rounded-lg bg-slate-900/80 hover:bg-slate-800 border border-slate-700/60 text-slate-300 hover:text-white font-mono text-[10px] flex items-center gap-1 transition-colors cursor-pointer shrink-0"
+            >
+              {copiedSlug ? (
+                <>
+                  <Check className="w-3 h-3 text-emerald-400" />
+                  <span className="text-emerald-400 font-bold">Copied URL</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3 h-3 text-slate-400" />
+                  <span>Copy Portal Link</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* KILLER FEATURE: WAITING FOR BOSS APPROVAL ROOM BANNER */}
+      {customer.provisionalStatus === 'pending_approval' && (
+        <div className="p-4 rounded-3xl bg-gradient-to-br from-amber-950/90 via-slate-900 to-amber-950/60 border-2 border-amber-500 shadow-2xl relative overflow-hidden animate-in fade-in duration-300">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
+          <div className="relative z-10 space-y-2.5">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
+                <span className="font-black text-amber-200 text-xs tracking-wider uppercase">
+                  Awaiting Boss Approval Room
+                </span>
+              </div>
+              <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-[10px] font-bold text-amber-300 font-mono">
+                Executive Queue #1
+              </span>
+            </div>
+
+            <p className="text-slate-200 text-xs leading-relaxed">
+              Your registration has been submitted directly to the <strong className="text-amber-300 font-bold">Boss Approval Room</strong>. The Restaurant Boss is verifying your Student ID and Mobile Money payment.
+            </p>
+
+            <div className="p-2.5 rounded-2xl bg-slate-950/80 border border-amber-600/40 flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2">
+                <Utensils className="w-4 h-4 text-amber-400" />
+                <div>
+                  <div className="font-bold text-white text-xs">Provisional Grace Allowance</div>
+                  <div className="text-[10px] text-amber-300">You can already eat at the counter today</div>
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-lg font-black text-amber-400 font-mono">
+                  {customer.gracePlatesRemaining ?? 2}
+                </span>
+                <span className="text-[10px] text-slate-400 block font-mono">Grace Meals</span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 text-[11px] text-emerald-400 font-medium">
+              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+              <span>Boss will send your WhatsApp Magic Pass link immediately upon approval.</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Patron Persona Switcher (For Demo & Multi-account Testing) */}
       <div className="p-2 rounded-2xl bg-slate-900/90 border border-slate-800/80 shadow-inner flex items-center justify-between gap-1 text-xs">
         <span className="text-[11px] font-semibold text-slate-400 pl-2">Account:</span>
@@ -190,7 +396,11 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
               >
                 <img src={c.photoUrl} alt="" className="w-4 h-4 rounded-full object-cover" />
                 <span className="text-[11px]">{c.name.split(' ')[0]}</span>
-                <span className="font-mono text-[10px] opacity-75">#{c.memberNo}</span>
+                {c.provisionalStatus === 'pending_approval' ? (
+                  <span className="px-1 py-0.2 rounded-full bg-amber-500 text-slate-950 font-bold text-[9px]">PENDING</span>
+                ) : (
+                  <span className="font-mono text-[10px] opacity-75">#{c.memberNo}</span>
+                )}
               </button>
             );
           })}
@@ -277,16 +487,16 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
       {/* TAB 1: DIGITAL PASS */}
       {activeTab === 'qr_pass' && (
         <>
-          {/* LUXURY DIGITAL MEAL PASS (Apple Wallet-Style Card) */}
-          <div className="digital-card relative rounded-3xl bg-gradient-to-br from-slate-900 via-slate-900 to-emerald-950/40 border border-slate-700/80 p-6 shadow-2xl overflow-hidden select-none">
+          {/* LUXURY DIGITAL MEAL PASS (Apple Wallet-Style Card with Dynamic Cafeteria Theming) */}
+          <div className={`digital-card relative rounded-3xl bg-gradient-to-br ${badgeTheme.gradient} border ${badgeTheme.border} p-6 shadow-2xl overflow-hidden select-none`}>
             {/* Ambient Glows */}
-            <div className="absolute top-0 right-0 w-44 h-44 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
-            <div className="absolute bottom-0 left-0 w-44 h-44 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
+            <div className={`absolute top-0 right-0 w-44 h-44 ${badgeTheme.glow} rounded-full blur-3xl pointer-events-none`} />
+            <div className={`absolute bottom-0 left-0 w-44 h-44 ${badgeTheme.glowSecondary} rounded-full blur-3xl pointer-events-none`} />
 
             {/* Card Header: Restaurant & Status */}
             <div className="flex items-start justify-between relative z-10">
               <div>
-                <div className="text-[11px] font-mono tracking-widest text-emerald-400 uppercase font-semibold">
+                <div className={`text-[11px] font-mono tracking-widest ${badgeTheme.accent} uppercase font-semibold`}>
                   RestoPass Digital Card
                 </div>
                 <div className="text-base font-black text-white tracking-tight mt-0.5">
@@ -307,7 +517,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
               <div className="text-6xl font-black text-white font-mono tabular-nums tracking-tighter drop-shadow-sm">
                 {balance}
               </div>
-              <div className="text-xs uppercase font-bold tracking-widest text-emerald-400 mt-1 flex items-center justify-center gap-1.5">
+              <div className={`text-xs uppercase font-bold tracking-widest ${badgeTheme.accent} mt-1 flex items-center justify-center gap-1.5`}>
                 <Utensils className="w-3.5 h-3.5" />
                 <span>Prepaid Plates Available</span>
               </div>
@@ -327,7 +537,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
               <div className="text-right">
                 <div className="text-[10px] text-slate-400 uppercase font-mono">Authority</div>
-                <div className="text-xs font-bold text-emerald-400 font-mono">{customer.restaurantCode}</div>
+                <div className={`text-xs font-bold ${badgeTheme.accent} font-mono`}>{customer.restaurantCode}</div>
               </div>
             </div>
           </div>

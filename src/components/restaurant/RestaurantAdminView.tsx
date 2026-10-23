@@ -22,6 +22,11 @@ import { BossApprovalsManager } from './BossApprovalsManager';
 import { BranchesAndStationsManager } from './BranchesAndStationsManager';
 import { SecurityAndAuditLogsView } from './SecurityAndAuditLogsView';
 import { RestaurantAppearanceManager } from './RestaurantAppearanceManager';
+import { SummaryMetricCards } from './SummaryMetricCards';
+import {
+  generateCustomerMagicToken,
+  generateWhatsAppShareUrl,
+} from '../../services/magicAuthService';
 import { ShiftHandoverModal } from '../scanner/ShiftHandoverModal';
 import {
   exportTransactionsToCsv,
@@ -78,6 +83,10 @@ import {
   EyeOff,
   Palette,
   ArrowLeft,
+  Server,
+  Wifi,
+  HardDrive,
+  MessageSquare,
 } from 'lucide-react';
 
 interface RestaurantAdminViewProps {
@@ -125,7 +134,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMode, setFilterMode] = useState<'all' | 'active' | 'locked' | 'low_balance' | 'students'>('all');
   const [selectedCustomerForDetail, setSelectedCustomerForDetail] = useState<Customer | null>(null);
-  const [userSection, setUserSection] = useState<'members' | 'staff' | 'notifs'>('members');
+  const [userSection, setUserSection] = useState<'members' | 'staff' | 'approvals' | 'notifs'>('members');
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
 
   // Full Member Management Modal State
@@ -672,10 +681,33 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
   };
 
   const [copiedOverviewRef, setCopiedOverviewRef] = useState<string | null>(null);
+  const [overviewWhatsAppModal, setOverviewWhatsAppModal] = useState<{
+    customer: Customer;
+    magicToken: string;
+    waUrl: string;
+    passUrl: string;
+    appr: PendingApproval;
+  } | null>(null);
+  const [overviewCopiedLink, setOverviewCopiedLink] = useState(false);
+  const [isDeploymentModalOpen, setIsDeploymentModalOpen] = useState(false);
 
   const handleOverviewApprove = (apprId: string, memberNo: string) => {
     const res = restoStore.approvePendingRequest(apprId, 'Restaurant Boss (Executive)');
     if (res.success) {
+      const appr = (state.pendingApprovals || []).find((a) => a.id === apprId);
+      const cust = res.customer || state.customers.find((c) => c.memberNo === memberNo);
+      if (cust && appr) {
+        const magicToken = generateCustomerMagicToken(cust);
+        const waUrl = generateWhatsAppShareUrl(cust, magicToken, restaurant?.name || 'Kigali Campus Resto');
+        const passUrl = `${window.location.origin}/#/customer?auth=${magicToken}`;
+        setOverviewWhatsAppModal({
+          customer: cust,
+          magicToken,
+          waUrl,
+          passUrl,
+          appr,
+        });
+      }
       setActionToast(`Mobile Money verified! Member #${memberNo} card and portal account activated.`);
       setTimeout(() => setActionToast(null), 4500);
     }
@@ -814,69 +846,128 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-      {/* Executive Navigation for Restaurant Bosses & Managers */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-2 border-b border-slate-800 text-xs font-medium text-slate-400">
-        {[
-          { id: 'dashboard', label: 'Overview', icon: BarChart3 },
-          {
-            id: 'approvals',
-            label: 'Pending Approvals',
-            icon: Clock,
-            badge: pendingCount,
-          },
-          { id: 'customers', label: 'Members', icon: Users },
-          {
-            id: 'notifications',
-            label: 'Notifications',
-            icon: Bell,
-            badge: state.notifications.filter(
-              (n) =>
-                n.restaurantCode === state.currentRestaurantCode &&
-                Date.now() - new Date(n.timestamp).getTime() < 24 * 3600 * 1000
-            ).length,
-          },
-          { id: 'cards', label: 'Card Studio', icon: Printer },
-          { id: 'pricing', label: 'Pricing & Trends', icon: TrendingUp },
-          { id: 'reports', label: 'Reports & Sales', icon: FileCheck },
-          { id: 'stations', label: 'Branches & Stations', icon: Building2 },
-          { id: 'security', label: 'Security & Audit Logs', icon: Shield },
-        ].map((tab) => {
-          const Icon = tab.icon;
-          const isSelected =
-            activeSubTab === tab.id ||
-            (tab.id === 'customers' && activeSubTab === 'registration');
+      {/* 5 Rooms Navigation: Activities, Boss Approvals Room, Users & Staff, Appearance, Pricing & Rules */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+        <div className="flex items-center gap-2 overflow-x-auto text-xs font-medium">
+          {[
+            {
+              id: 'dashboard',
+              label: 'Activities & Live',
+              icon: BarChart3,
+              match: activeSubTab === 'dashboard' || activeSubTab === 'activities',
+            },
+            {
+              id: 'approvals',
+              label: 'Boss Approval Room',
+              icon: Clock,
+              badge: pendingCount > 0 ? pendingCount : undefined,
+              match: activeSubTab === 'approvals',
+              isBossRoom: true,
+            },
+            {
+              id: 'customers',
+              label: 'Users & Staff',
+              icon: Users,
+              badge: activeCustomersCount,
+              match:
+                activeSubTab === 'customers' ||
+                activeSubTab === 'registration' ||
+                activeSubTab === 'stations' ||
+                activeSubTab === 'notifications' ||
+                activeSubTab === 'users',
+            },
+            {
+              id: 'appearance',
+              label: 'Appearance & Branding',
+              icon: Palette,
+              match: activeSubTab === 'appearance' || activeSubTab === 'cards',
+            },
+            {
+              id: 'pricing',
+              label: 'Pricing & Rules',
+              icon: TrendingUp,
+              match: activeSubTab === 'pricing',
+            },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const isSelected = tab.match;
 
-          return (
-            <button
-              key={tab.id}
-              onClick={() => onSubTabChange(tab.id)}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl whitespace-nowrap transition-all font-bold text-xs cursor-pointer ${
-                isSelected
-                  ? 'bg-emerald-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-900'
-              }`}
-            >
-              <Icon className="w-4 h-4" />
-              <span>{tab.label}</span>
-              {Boolean(tab.badge && tab.badge > 0) && (
-                <span
-                  className={`px-1.5 py-0.2 rounded-full font-mono text-[10px] font-bold ${
-                    isSelected
-                      ? 'bg-white text-emerald-900'
-                      : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                  }`}
-                >
-                  {tab.badge}
-                </span>
-              )}
-            </button>
-          );
-        })}
+            return (
+              <button
+                key={tab.id}
+                onClick={() => {
+                  onSubTabChange(tab.id);
+                  if (tab.id === 'customers') setUserSection('members');
+                }}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl whitespace-nowrap transition-all font-bold text-xs cursor-pointer ${
+                  isSelected
+                    ? tab.isBossRoom
+                      ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                      : 'bg-emerald-600 text-white shadow-md'
+                    : tab.isBossRoom && pendingCount > 0
+                    ? 'text-amber-300 hover:text-white bg-amber-950/40 border border-amber-600/50'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-slate-800/80'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                <span>{tab.label}</span>
+                {Boolean(tab.badge && tab.badge > 0) && (
+                  <span
+                    className={`px-1.5 py-0.2 rounded-full font-mono text-[10px] font-bold ${
+                      isSelected
+                        ? tab.isBossRoom
+                          ? 'bg-slate-950 text-amber-300'
+                          : 'bg-white text-emerald-900'
+                        : tab.isBossRoom
+                        ? 'bg-amber-500 text-slate-950 font-black animate-pulse'
+                        : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                    }`}
+                  >
+                    {tab.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Hybrid Deployment & Edge Server Info Trigger */}
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => setIsDeploymentModalOpen(true)}
+            className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/60 text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
+            title="Inspect Hybrid Cafeteria Local Server & Cloud Architecture"
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <Server className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Hybrid Local Server</span>
+            <span className="text-[10px] text-slate-500 font-mono hidden md:inline">LAN Edge</span>
+          </button>
+        </div>
       </div>
 
-      {/* 1. DASHBOARD VIEW */}
-      {activeSubTab === 'dashboard' && (
+      {/* 1. ACTIVITIES & DASHBOARD VIEW */}
+      {(activeSubTab === 'dashboard' || activeSubTab === 'activities') && (
         <div className="space-y-6">
+          {/* Critical 3 Metric Cards with 1-click drilldowns */}
+          <SummaryMetricCards
+            restaurantCode={state.currentRestaurantCode}
+            onDrilldown={(target) => {
+              if (target === 'meals_today') {
+                const feed = document.getElementById('recent-activity-feed');
+                feed?.scrollIntoView({ behavior: 'smooth' });
+              } else if (target === 'low_balance') {
+                onSubTabChange('customers');
+                setUserSection('members');
+                setFilterMode('low_balance');
+              } else if (target === 'pending_actions') {
+                onSubTabChange('customers');
+                setUserSection('approvals');
+              }
+            }}
+            language={language}
+          />
           {/* Executive Monthly Reconciliation (Requirement 2b: Prepaid Plates & Cash, Used Plates & Cash, Remaining) */}
           <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4 shadow-xl">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
@@ -1306,9 +1397,38 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
         </div>
       )}
 
-      {/* PENDING APPROVALS QUEUE (Boss Mobile Money & Grace Plates Verification) */}
+      {/* DEDICATED BOSS APPROVAL ROOM (Killer Selling Point: Separate Executive Room) */}
       {activeSubTab === 'approvals' && (
-        <BossApprovalsManager restaurantCode={state.currentRestaurantCode} language={language} />
+        <div className="space-y-6">
+          <div className="p-5 rounded-2xl bg-amber-950/20 border-2 border-amber-500/60 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xl">
+            <div className="flex items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center shrink-0">
+                <Clock className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-white tracking-tight">
+                    Executive Room: Boss Delegation &amp; Mobile Money Approvals
+                  </h2>
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-amber-500 text-slate-950">
+                    {pendingCount} Awaiting Boss Sign-Off
+                  </span>
+                </div>
+                <p className="text-xs text-amber-200/90 mt-0.5">
+                  Stand cashiers provisionally register patrons while you are away. Verify Mobile Money deposits here to finalize accounts and dispatch 1-tap WhatsApp passes.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono text-slate-400 bg-slate-900 px-3 py-1.5 rounded-xl border border-slate-800">
+                Authority: <strong className="text-white">{restaurant?.name}</strong>
+              </span>
+            </div>
+          </div>
+
+          <BossApprovalsManager restaurantCode={state.currentRestaurantCode} language={language} />
+        </div>
       )}
 
       {/* 2. CUSTOMER REGISTRATION VIEW */}
@@ -1346,6 +1466,68 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
               <span>{regSuccess}</span>
             </div>
           )}
+
+          {/* Real-Time Duplicate Identity Warning Banner */}
+          {(() => {
+            const dupCheck = restoStore.checkDuplicateCustomerIdentity(
+              state.currentRestaurantCode,
+              regPhone,
+              regIdType,
+              regIdNumber,
+              regIsStudent ? regRegNumber : undefined
+            );
+
+            if (dupCheck.isDuplicate && dupCheck.duplicateCustomer) {
+              const existingCust = dupCheck.duplicateCustomer;
+              const existingBalance = restoStore.getCustomerBalance(existingCust.id);
+
+              return (
+                <div className="p-4 rounded-2xl bg-amber-950/40 border-2 border-amber-500/80 space-y-3">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 shrink-0">
+                      <AlertTriangle className="w-5 h-5" />
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                        <span>Customer Already Registered in This Cafeteria!</span>
+                        <span className="px-2 py-0.2 rounded text-[10px] font-mono font-bold bg-amber-500 text-slate-950">
+                          #{existingCust.memberNo}
+                        </span>
+                      </h4>
+                      <p className="text-xs text-amber-200/90 leading-relaxed">
+                        {dupCheck.message}
+                      </p>
+                      <div className="text-xs text-slate-300 font-mono flex items-center gap-2 pt-0.5">
+                        <span>Current Balance: <strong className="text-emerald-400 font-bold">{existingBalance} plates</strong></span>
+                        <span>·</span>
+                        <span>Card: <strong className="text-white capitalize">{existingCust.cardStatus}</strong></span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-2 border-t border-amber-800/40">
+                    <button
+                      type="button"
+                      onClick={() => openTopUpModalForCustomer(existingCust)}
+                      className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
+                    >
+                      <Coins className="w-4 h-4" />
+                      <span>Top Up #{existingCust.memberNo} Instead</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => openManageCustomer(existingCust, 'cards')}
+                      className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white text-xs font-semibold cursor-pointer transition-colors"
+                    >
+                      View Member Pass
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+            return null;
+          })()}
 
           <form onSubmit={handleRegisterSubmit} className="space-y-4 text-xs">
             {/* Row 1: Name & Phone */}
@@ -1522,12 +1704,36 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
               <span>Customer acknowledged: <strong>Unused plates never expire. No refunds.</strong></span>
             </div>
 
-            <button
-              type="submit"
-              className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-sm transition-colors shadow-sm"
-            >
-              Complete Registration &amp; Allocate Member #
-            </button>
+            {(() => {
+              const isDup = restoStore.checkDuplicateCustomerIdentity(
+                state.currentRestaurantCode,
+                regPhone,
+                regIdType,
+                regIdNumber,
+                regIsStudent ? regRegNumber : undefined
+              ).isDuplicate;
+
+              return (
+                <button
+                  type="submit"
+                  disabled={isDup}
+                  className={`w-full py-3 font-bold rounded-xl text-sm transition-colors shadow-sm flex items-center justify-center gap-2 ${
+                    isDup
+                      ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                      : 'bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer'
+                  }`}
+                >
+                  {isDup ? (
+                    <>
+                      <AlertTriangle className="w-4 h-4 text-amber-400" />
+                      <span>Cannot Register Duplicate Identity (See Above)</span>
+                    </>
+                  ) : (
+                    <span>Complete Registration &amp; Allocate Member #</span>
+                  )}
+                </button>
+              );
+            })()}
           </form>
         </div>
       )}
@@ -2217,8 +2423,34 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
         );
       })()}
 
+      {/* 3. RESTAURANT APPEARANCE & BRANDING VIEW */}
+      {activeSubTab === 'appearance' && (
+        <RestaurantAppearanceManager
+          restaurantCode={state.currentRestaurantCode}
+          language={language}
+          onOpenCardStudio={() => onSubTabChange('cards')}
+        />
+      )}
+
       {/* 5. PVC CARD PRINT STUDIO VIEW */}
-      {activeSubTab === 'cards' && <CardPrintStudio />}
+      {activeSubTab === 'cards' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between p-4 rounded-2xl bg-slate-900 border border-slate-800">
+            <button
+              type="button"
+              onClick={() => onSubTabChange('appearance')}
+              className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Back to Appearance &amp; Badge Customizer</span>
+            </button>
+            <span className="text-xs text-slate-400 font-mono">
+              High-DPI PVC Badge Print Engine
+            </span>
+          </div>
+          <CardPrintStudio />
+        </div>
+      )}
 
       {/* 5. PACKAGES & PRICING VIEW */}
       {activeSubTab === 'pricing' && (() => {
@@ -4566,6 +4798,228 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                 className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-md cursor-pointer"
               >
                 Yes, Delete Account
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* OVERVIEW WHATSAPP SHARE MODAL (Upon Boss approval from overview cards) */}
+      {overviewWhatsAppModal && (
+        <div className="fixed inset-0 z-60 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-emerald-500/60 rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl relative">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0">
+                  <MessageSquare className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold text-white">Registration Approved!</h3>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
+                      Boss Verified
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Send the 1-tap digital meal pass directly to the customer on WhatsApp.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setOverviewWhatsAppModal(null)}
+                className="text-slate-500 hover:text-white p-1 rounded-lg transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <img
+                  src={overviewWhatsAppModal.customer.photoUrl}
+                  alt={overviewWhatsAppModal.customer.name}
+                  className="w-10 h-10 rounded-xl object-cover border border-slate-700"
+                />
+                <div>
+                  <div className="font-bold text-white text-sm">{overviewWhatsAppModal.customer.name}</div>
+                  <div className="text-xs font-mono text-slate-400">
+                    #{overviewWhatsAppModal.customer.memberNo} · {overviewWhatsAppModal.customer.phone}
+                  </div>
+                </div>
+              </div>
+
+              <div className="text-right">
+                <div className="text-xs font-bold text-emerald-400 font-mono">
+                  +{overviewWhatsAppModal.appr.platesRequested} Plates
+                </div>
+                <div className="text-[10px] font-mono text-slate-400">
+                  {overviewWhatsAppModal.appr.amountRwf.toLocaleString()} RWF
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2.5">
+              <a
+                href={overviewWhatsAppModal.waUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => {
+                  setActionToast(`Dispatched pass link to ${overviewWhatsAppModal.customer.name} via WhatsApp!`);
+                  setTimeout(() => setActionToast(null), 4000);
+                }}
+                className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-950 transition-colors cursor-pointer"
+              >
+                <MessageSquare className="w-4 h-4 fill-current" />
+                <span>Open WhatsApp &amp; Send Pass Link</span>
+                <ExternalLink className="w-3.5 h-3.5 opacity-80" />
+              </a>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(overviewWhatsAppModal.passUrl);
+                    setOverviewCopiedLink(true);
+                    setTimeout(() => setOverviewCopiedLink(false), 2500);
+                  }}
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
+                  {overviewCopiedLink ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      <span className="text-emerald-400">Pass Link Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copy 1-Tap Invite Link</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setOverviewWhatsAppModal(null)}
+                  className="px-4 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-white text-xs font-semibold cursor-pointer border border-slate-800"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                WhatsApp Message Preview:
+              </span>
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-[11px] text-slate-300 font-mono leading-relaxed whitespace-pre-line max-h-32 overflow-y-auto">
+                {`Muraho ${overviewWhatsAppModal.customer.name}!\nYour meal pass at ${restaurant?.name || 'Kigali Campus Resto'} has been officially approved! 🎉\n• Member ID: #${overviewWhatsAppModal.customer.memberNo}\n\nTap the link below to open your pass:\n${overviewWhatsAppModal.passUrl}`}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* HYBRID CAFETERIA DEPLOYMENT & BUSINESS MODEL MODAL */}
+      {isDeploymentModalOpen && (
+        <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-3xl max-w-2xl w-full p-6 space-y-5 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                  <Server className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <span>Hybrid Local Cafeteria Architecture</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
+                      Edge + Cloud Sync
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    How RestoPass operates seamlessly inside university dining halls with zero downtime.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsDeploymentModalOpen(false)}
+                className="text-slate-500 hover:text-white p-1 rounded-lg transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Architecture Comparison Pillars */}
+            <div className="space-y-3">
+              {/* Pillar 1 */}
+              <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-white text-xs flex items-center gap-2">
+                    <HardDrive className="w-4 h-4 text-emerald-400" />
+                    <span>1. On-Premises Local Edge Appliance (Cafeteria LAN)</span>
+                  </span>
+                  <span className="text-[10px] font-mono text-emerald-400">&lt; 25ms Scan Latency</span>
+                </div>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  A compact, low-power edge server (e.g. Intel N100 mini-PC or Raspberry Pi 5) runs directly inside the cafeteria kitchen connected to a local Wi-Fi router. Cashier scanning phones and tablet stands connect directly to the local IP, ensuring that student lunch rush lines never freeze or stall when national telecom fiber or mobile towers experience outages.
+                </p>
+              </div>
+
+              {/* Pillar 2 */}
+              <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-white text-xs flex items-center gap-2">
+                    <Wifi className="w-4 h-4 text-blue-400" />
+                    <span>2. Automatic 2-Way Cloud Synchronization</span>
+                  </span>
+                  <span className="text-[10px] font-mono text-blue-400">Heartbeat Sync</span>
+                </div>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Whenever an internet uplink (4G/5G backup SIM or campus Wi-Fi) is available, the local server pushes newly audited scans, cashier shift closures, and top-up receipts to the central cloud cluster. Multi-campus cafeterias (e.g. Main Hall and Medical Campus) instantly reflect synchronized patron balances without duplicate meals.
+                </p>
+              </div>
+
+              {/* Pillar 3 */}
+              <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-white text-xs flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-amber-400" />
+                    <span>3. Cryptographic Token Protection &amp; Grace Meals Policy</span>
+                  </span>
+                  <span className="text-[10px] font-mono text-amber-400">HMAC-SHA256</span>
+                </div>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Both physical PVC card barcodes and dynamic WhatsApp mobile passes contain cryptographic signatures that offline stations can verify without internet. To prevent student hunger and line disputes when the boss is away, newly enrolled patrons can eat up to <strong>3 grace plates</strong> immediately upon paying at the counter.
+                </p>
+              </div>
+
+              {/* Pillar 4 */}
+              <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-white text-xs flex items-center gap-2">
+                    <DollarSign className="w-4 h-4 text-purple-400" />
+                    <span>4. Commercial Business Model</span>
+                  </span>
+                  <span className="text-[10px] font-mono text-purple-400">Monthly License / Multi-Stand</span>
+                </div>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  • <strong>SaaS Subscription</strong>: 140,000 RWF / month per dining hall (includes 4 stations + cloud backup).<br />
+                  • <strong>Physical PVC Cards</strong>: 2,000 RWF per issued card (1,000 RWF platform margin, 1,000 RWF cafeteria revenue).<br />
+                  • <strong>Prepaid Cash Flow</strong>: The restaurant collects 100% of meal revenue upfront via Mobile Money, completely eliminating unpaid credit tabs.
+                </p>
+              </div>
+            </div>
+
+            <div className="pt-2 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setIsDeploymentModalOpen(false)}
+                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md cursor-pointer transition-colors"
+              >
+                Close Guide
               </button>
             </div>
           </div>
