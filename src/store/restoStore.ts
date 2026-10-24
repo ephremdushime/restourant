@@ -676,6 +676,8 @@ function getInitialState(): AppState {
       keyVersion: 1,
       cardStatus: 'active',
       pinHash: '1234',
+      hasCustomPin: true,
+      pinSetAt: new Date(Date.now() - 40 * 24 * 3600 * 1000).toISOString(),
       createdAt: new Date(Date.now() - 45 * 24 * 3600 * 1000).toISOString(),
       onboardingToken: 'OB-28491-KIGALI',
       consentSigned: true,
@@ -702,6 +704,7 @@ function getInitialState(): AppState {
       keyVersion: 1,
       cardStatus: 'active',
       pinHash: '5678',
+      hasCustomPin: false,
       createdAt: new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString(),
       onboardingToken: 'OB-28492-KIGALI',
       consentSigned: true,
@@ -2421,7 +2424,8 @@ export class RestoStore {
       cardVersion: 1,
       keyVersion: 1,
       cardStatus: 'active',
-      pinHash: '1234', // default PIN, customer updates in app
+      pinHash: '1234', // default PIN, customer sets personal PIN on magic link arrival
+      hasCustomPin: false,
       createdAt: now,
       onboardingToken: `OB-${memberNo}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
       consentSigned: true,
@@ -2729,6 +2733,53 @@ export class RestoStore {
     });
 
     this.notify();
+  }
+
+  /**
+   * Set or update customer's personal 4-digit security PIN
+   */
+  public setCustomerPin(customerId: string, newPin: string): boolean {
+    const customer = this.state.customers.find((c) => c.id === customerId);
+    if (!customer) return false;
+    if (!/^\d{4}$/.test(newPin)) return false;
+
+    customer.pinHash = newPin;
+    customer.hasCustomPin = true;
+    customer.pinSetAt = new Date().toISOString();
+
+    this.queueOutboxItem('customer', customer.id, customer);
+    this.logAudit({
+      restaurantCode: customer.restaurantCode,
+      actorRole: 'customer',
+      actorName: customer.name,
+      action: 'CUSTOMER_PIN_UPDATED',
+      details: `Customer #${customer.memberNo} set personal 4-digit dashboard security PIN`,
+    });
+
+    this.sendNotification({
+      restaurantCode: customer.restaurantCode,
+      target: customer.id,
+      targetName: `${customer.name} (#${customer.memberNo})`,
+      senderRole: 'system',
+      senderName: 'Security Guard',
+      type: 'card_security',
+      title: 'Security PIN Activated',
+      message: 'Your 4-digit security PIN is active. The dashboard will lock automatically whenever your screen goes off.',
+      priority: 'normal',
+      actionTab: 'my_card',
+    });
+
+    this.notify();
+    return true;
+  }
+
+  /**
+   * Verify customer's 4-digit PIN for dashboard unlock or sensitive actions
+   */
+  public verifyCustomerPin(customerId: string, pin: string): boolean {
+    const customer = this.state.customers.find((c) => c.id === customerId);
+    if (!customer) return false;
+    return customer.pinHash === pin;
   }
 
   /**

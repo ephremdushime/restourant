@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="restoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#059669" />
+      <stop offset="50%" stop-color="#047857" />
+      <stop offset="100%" stop-color="#064e3b" />
+    </linearGradient>
+    <linearGradient id="cardGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.5" />
+    </filter>
+  </defs>
+
+  <!-- Background rounded squircle with padding for maskable safety -->
+  <rect width="512" height="512" rx="112" fill="url(#restoGrad)" />
+
+  <!-- Inner Meal Pass Card Representation -->
+  <rect x="76" y="96" width="360" height="320" rx="36" fill="url(#cardGrad)" stroke="#34d399" stroke-width="4" stroke-opacity="0.4" filter="url(#shadow)" />
+
+  <!-- Digital Chip -->
+  <rect x="116" y="140" width="64" height="48" rx="10" fill="#fbbf24" stroke="#d97706" stroke-width="3" />
+  <line x1="148" y1="140" x2="148" y2="188" stroke="#b45309" stroke-width="2" />
+  <line x1="116" y1="164" x2="180" y2="164" stroke="#b45309" stroke-width="2" />
+
+  <!-- Plate / Utensil Motif -->
+  <g transform="translate(256, 256)">
+    <!-- Outer Plate Rim -->
+    <circle cx="0" cy="0" r="70" fill="#0f172a" stroke="#34d399" stroke-width="8" />
+    <circle cx="0" cy="0" r="52" fill="#1e293b" stroke="#10b981" stroke-width="3" stroke-dasharray="6,4" />
+    <circle cx="0" cy="0" r="32" fill="#047857" />
+    <!-- Fork & Knife Silhouettes -->
+    <path d="M-12,-16 L-12,16 M-16,-16 L-16,-6 M-8,-16 L-8,-6" stroke="#ffffff" stroke-width="3" stroke-linecap="round" />
+    <path d="M12,-16 C16,-16 16,-8 16,0 L16,16" stroke="#ffffff" stroke-width="3" stroke-linecap="round" fill="none" />
+  </g>
+
+  <!-- Bottom Accent & Brand Text -->
+  <text x="116" y="376" font-family="system-ui, sans-serif" font-weight="800" font-size="28" fill="#ffffff" letter-spacing="1">RESTOPASS</text>
+  <circle cx="396" cy="368" r="12" fill="#10b981" />
+</svg>

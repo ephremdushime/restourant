@@ -110,6 +110,8 @@ export interface Customer {
   keyVersion: number; // raised when phone key reissued
   cardStatus: 'active' | 'locked' | 'reissued';
   pinHash: string; // 4-digit PIN hash
+  hasCustomPin?: boolean; // false until customer sets 4-digit PIN on magic link arrival
+  pinSetAt?: string;
   provisionalStatus?: 'pending_approval' | 'approved' | 'rejected';
   gracePlatesConsumed?: number; // max 3 consumed while awaiting boss approval
   gracePlatesRemaining?: number;

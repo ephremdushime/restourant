@@ -38,7 +38,12 @@ import {
   Building2,
   Store,
   ChevronDown,
+  KeyRound,
+  Shield,
 } from 'lucide-react';
+import { PWAInstallBanner } from './PWAInstallBanner';
+import { PinSetupModal } from './PinSetupModal';
+import { DashboardLockScreen } from './DashboardLockScreen';
 
 interface CustomerViewProps {
   language: Language;
@@ -67,6 +72,43 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   const [copiedSlug, setCopiedSlug] = useState(false);
   const [cafeteriaDropdownOpen, setCafeteriaDropdownOpen] = useState(false);
   const [plansExpanded, setPlansExpanded] = useState(false);
+
+  // 4-Digit Security PIN & Instant Off-Screen Auto-Lock
+  const [isDashboardLocked, setIsDashboardLocked] = useState(false);
+  const [showPinSetupModal, setShowPinSetupModal] = useState(!customer.hasCustomPin);
+
+  // Show PIN Setup Modal if customer hasn't set their personal 4-digit PIN yet
+  useEffect(() => {
+    if (!customer.hasCustomPin) {
+      setShowPinSetupModal(true);
+    }
+  }, [customer.id, customer.hasCustomPin]);
+
+  // Instant Off-Screen Auto-Lock Protection:
+  // Triggers immediately when phone screen locks, tabs switch, or app backgrounds
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        if (customer.hasCustomPin) {
+          setIsDashboardLocked(true);
+        }
+      }
+    };
+
+    const handleWindowBlur = () => {
+      if (customer.hasCustomPin && document.hidden) {
+        setIsDashboardLocked(true);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleWindowBlur);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
+  }, [customer.hasCustomPin]);
 
   // Badge Style Dynamic Theming
   const getBadgeTheme = (style?: 'gold' | 'emerald' | 'blue' | 'dark') => {
@@ -224,6 +266,9 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
   return (
     <div className="max-w-md mx-auto px-4 py-6 space-y-5 animate-in fade-in duration-200">
+      {/* PWA ADD TO HOME SCREEN PROMPT BANNER */}
+      <PWAInstallBanner />
+
       {/* CAFETERIA BRANDING HEADER & MULTI-TENANT SWITCHER */}
       <div className={`p-4 rounded-3xl bg-gradient-to-br ${badgeTheme.gradient} border ${badgeTheme.border} shadow-xl relative overflow-hidden`}>
         <div className={`absolute top-0 right-0 w-32 h-32 ${badgeTheme.glow} rounded-full blur-2xl pointer-events-none`} />
@@ -576,6 +621,38 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                 </div>
                 <div className="text-[10px] text-slate-400 font-normal mt-0.5">
                   {customer.cardStatus === 'locked' ? 'Restore access' : 'Freeze lost card'}
+                </div>
+              </div>
+            </button>
+
+            {/* Instant Off-Screen Auto-Lock Shield Test / Trigger */}
+            <button
+              onClick={() => setIsDashboardLocked(true)}
+              className="p-3.5 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-slate-700 text-white text-xs font-bold flex items-center justify-center gap-2.5 transition-all shadow-md cursor-pointer group"
+            >
+              <div className="p-2 rounded-xl bg-purple-500/10 text-purple-400 group-hover:bg-purple-500/20 transition-colors">
+                <Shield className="w-4 h-4" />
+              </div>
+              <div className="text-left">
+                <div className="leading-tight">Lock Screen</div>
+                <div className="text-[10px] text-slate-400 font-normal mt-0.5">Off-screen PIN shield</div>
+              </div>
+            </button>
+
+            {/* 4-Digit Security PIN Customization */}
+            <button
+              onClick={() => setShowPinSetupModal(true)}
+              className="p-3.5 rounded-2xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 hover:border-slate-700 text-white text-xs font-bold flex items-center justify-center gap-2.5 transition-all shadow-md cursor-pointer group"
+            >
+              <div className="p-2 rounded-xl bg-sky-500/10 text-sky-400 group-hover:bg-sky-500/20 transition-colors">
+                <KeyRound className="w-4 h-4" />
+              </div>
+              <div className="text-left">
+                <div className="leading-tight">
+                  {customer.hasCustomPin ? 'Security PIN' : 'Set 4-Digit PIN'}
+                </div>
+                <div className="text-[10px] text-slate-400 font-normal mt-0.5">
+                  {customer.hasCustomPin ? '•••• (Tap to edit)' : 'Required for safety'}
                 </div>
               </div>
             </button>
@@ -1151,6 +1228,24 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             </button>
           </div>
         </div>
+      )}
+
+      {/* 4-DIGIT SECURITY PIN SETUP MODAL */}
+      <PinSetupModal
+        customer={customer}
+        isOpen={showPinSetupModal}
+        onComplete={() => setShowPinSetupModal(false)}
+        onCancel={() => setShowPinSetupModal(false)}
+        isMandatory={!customer.hasCustomPin}
+      />
+
+      {/* INSTANT OFF-SCREEN AUTO-LOCK SCREEN */}
+      {isDashboardLocked && (
+        <DashboardLockScreen
+          customer={customer}
+          restaurant={currentRestaurant}
+          onUnlock={() => setIsDashboardLocked(false)}
+        />
       )}
     </div>
   );

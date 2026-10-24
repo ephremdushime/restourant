@@ -1,0 +1,27 @@
+{
+  "id": "/",
+  "name": "RestoPass - Digital Meal Card",
+  "short_name": "RestoPass",
+  "description": "Prepaid cafeteria meal card and instant digital dining pass for university restaurants.",
+  "start_url": "/#/customer",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#020617",
+  "theme_color": "#0f172a",
+  "categories": ["food", "lifestyle", "utilities"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
