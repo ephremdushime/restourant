@@ -1,138 +1,143 @@
-# Customer 4-Digit PIN Security, Instant Off-Screen Auto-Lock, & PWA Home Screen Installation
+# Restaurant Admin Security Center & Cashier Session Management
 
-A customer-first security and progressive web app upgrade for RestoPass. When students and patrons access their personal meal pass via the one-time WhatsApp magic invite link (no password needed), they are immediately prompted to establish their personal 4-digit security PIN. The dashboard automatically locks whenever the user turns off their phone screen, switches apps, or moves away from the tab, requiring instant PIN entry to re-open. In addition, the web portal is fully installable as an app pinned directly to the home screen with an in-app banner for Android and iOS Safari.
+A comprehensive implementation plan to add a dedicated **Security & Sessions** sub-tab to the Restaurant Admin portal. This feature provides real-time monitoring of all active cashier and scanner terminals on the local cafeteria network, an instant **"Revoke & Logout"** remote kill switch to terminate unauthorized or lost device sessions, and an administrative manager to create cashier/scanner accounts protected by an **8-digit numeric PIN** or password while upholding the 1:1 scan point subscription quota.
 
 ---
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> The following decisions were confirmed based on your responses in Phase 1:
+> The following specifications were confirmed based on your preferences:
 
-- **First-Arrival PIN Onboarding**: Immediately upon tapping the one-time WhatsApp magic invite link, customers are greeted with a dedicated modal to set their personal 4-digit security PIN before viewing their meal card balance and digital QR pass.
-- **Strict Off-Screen Auto-Lock**: The portal locks immediately whenever the screen is turned off, the phone is locked, the tab loses visibility (`visibilitychange`), or the browser is minimized. When returning, a PIN unlock keypad is presented.
-- **PWA Add to Home Screen**: A mobile-optimized top banner is mounted on the Customer Dashboard with a 1-tap "Install App" button for Android/Chromium and step-by-step guidance for iOS Safari ("Tap Share → Add to Home Screen").
+- **Cashier Authentication Credentials**:
+  - Cashier and scanner accounts can be protected by **either an 8-digit numeric PIN (e.g. `83920194`) or an alphanumeric password** (or both).
+  - The creation modal allows the boss to toggle between "8-Digit Security PIN" and "Password" mode with real-time numeric validation (strictly 8 digits when PIN mode is selected).
+- **Remote Revoke & Instant Terminal Lockout**:
+  - When the boss clicks **"Revoke & Logout"** for an active session, the cashier device on the cafeteria floor is **immediately locked out**.
+  - Local pairing tokens and session certificates in the terminal's browser storage are purged, rendering the `UnauthorizedTerminalShield` with an alert: *"Session Terminated by Restaurant Admin"*.
+- **Active Session Visibility**:
+  - Each active session row displays **Device Type** (Phone, Tablet, Laptop with USB Scanner), **Station Name**, **Assigned Cashier**, **Local Network IP Address** (e.g. `192.168.1.142`), and **Last Heartbeat** with a live pulsing indicator.
 
 ---
 
 ## 1. Overview & Core Concept
 
-1. **Passwordless Onboarding with Instant PIN Protection**:
-   - Patrons join frictionlessly via a 1-tap WhatsApp magic link without remembering passwords or emails.
-   - On first arrival (`!customer.hasCustomPin`), a setup modal prompts them to choose a 4-digit PIN with confirmation.
-   - This PIN protects plate transfers, card lock/unlock, and balance inspection from peers borrowing their phone.
+In a fast-paced campus cafeteria or dining hall, cashiers operate on tablets, phones, or counter laptops with handheld USB barcode scanners. If a cashier misplaces a tablet, leaves their shift without signing off, or an unauthorized terminal accesses the local Wi-Fi, the restaurant manager needs an immediate security overview and remote kill switch.
 
-2. **Instant Off-Screen Auto-Lock Shield**:
-   - When a student finishes ordering, locks their phone, or puts it in their pocket, the browser dashboard automatically enters a locked state.
-   - When opened again, the dashboard displays a secure, tactile biometric-style PIN pad with masked dot indicators.
-   - Entering the correct 4 digits immediately restores dashboard access without requiring a full re-login.
-
-3. **Installable Web App (PWA) Pinned to Home**:
-   - Web App Manifest configured with `display: 'standalone'`, brand theme colors, and home screen icons.
-   - Dismissible top banner with an "Install App" action that triggers the browser's native installation prompt or iOS Safari guide.
-   - Once pinned, RestoPass opens full-screen without browser address bars, looking and feeling like a native Android/iOS meal card app.
+The **Security Center** equips the Restaurant Boss with:
+1. **Live Cashier Session Registry**: Instant visibility into every active device connected to the restaurant's local server.
+2. **One-Tap Remote Revocation ("Revoke & Logout")**: Remotely invalidates device tokens and forcibly logs out the terminal in real-time.
+3. **Cashier Account Provisioning with 8-Digit PIN**: Seamless creation of staff accounts with 8-digit PINs, integrated with the 1:1 subscription quota check.
 
 ---
 
 ## 2. User Experience & Visual Design
 
-### A. First-Time PIN Setup Modal
-```
-┌───────────────────────────────────────────────┐
-│              [Shield Icon]                    │
-│        Set Your 4-Digit Security PIN          │
-│  Protect your meal card and plates on this    │
-│  device. No password required.                │
-│                                               │
-│             [ • ] [ • ] [ • ] [ • ]           │
-│                                               │
-│             [ 1 ]   [ 2 ]   [ 3 ]             │
-│             [ 4 ]   [ 5 ]   [ 6 ]             │
-│             [ 7 ]   [ 8 ]   [ 9 ]             │
-│                     [ 0 ]   [ ⌫ ]             │
-│                                               │
-│       [ Confirm PIN: • • • • ]                │
-│       [ Save & Activate My Card ]             │
-└───────────────────────────────────────────────┘
-```
-- Large, tactile 48px touch targets for digits.
-- Visual feedback with animated pin dot indicators.
-- Automatic focus, digit validation, and confirm-PIN matching.
+### A. Navigation & Top-Level Tab
+- A new top-level tab in **Restaurant Admin**: **"Security & Sessions"** (`activeSubTab === 'security'`), featuring a `ShieldAlert` icon and a live count badge showing currently active terminals (e.g. `2 Live`).
 
-### B. Instant Off-Screen Shield & Lock Screen
-- Mounted as an overlay when `isLocked = true` on the Customer View.
-- Triggers on:
-  - `document.visibilitychange` (`document.visibilityState === 'hidden'`)
-  - `window.blur` (user switches app, locks phone, or opens notification tray)
-  - Manual "Lock Dashboard" button.
-- Displays:
-  - Cafeteria logo & name (e.g. *Kigali Campus Resto*).
-  - Member name and masked number (`Jean-Paul Habimana · #28491`).
-  - Tactile 4-digit numeric keypad with error shake animation on wrong PIN.
-  - "Forgot PIN? Ask Cafeteria Boss or Stand Cashier" reassurance link.
-
-### C. Add to Home Screen (PWA) Top Banner
-- Located at the very top of the Customer View:
-  - Clean card with mobile app icon, "Add RestoPass to Home Screen for 1-tap offline meal access".
-  - Android / Chromium: Direct "Install App" button triggering `beforeinstallprompt`.
-  - iOS Safari: "Install on iPhone" button opening a bottom modal with visual steps (Tap Share icon $\rightarrow$ "Add to Home Screen").
-  - Hides automatically when running inside standalone mode (`display-mode: standalone`).
+### B. Security Center Layout & Components
+1. **Executive Security KPI Strip**:
+   - **Active Cashier Terminals**: Number of devices actively connected (e.g., `2 Active`).
+   - **Licensed Seats Used**: Quota meter showing used vs allowed scan points (e.g., `2 / 2 Licensed · Standard Plan`).
+   - **Emergency Lockdown Button**: *"Revoke All Terminal Sessions"* (requires 2-step confirmation) in case of cafeteria network compromise.
+2. **Active Cashier Sessions Table**:
+   - **Device & Terminal**: Icon depicting device type (Smartphone, Tablet, Laptop with USB/BT scanner) + Station name (`Stand 1 - Main Buffet`).
+   - **Cashier Operator**: Staff avatar, full name, username (`@keza_cashier`), and credential type (8-Digit PIN or Password).
+   - **Network & IP**: Cafeteria local IP (`192.168.1.108`) + device user-agent summary.
+   - **Session Uptime & Heartbeat**: Login timestamp + live relative heartbeat (`Active just now`, pulsing emerald indicator).
+   - **Actions Column**: High-contrast, red-accented **"Revoke & Logout"** button.
+3. **Create Cashier / Scanner Account Modal**:
+   - Fields: Full Name, Staff Username, Branch Assignment, Assigned Scanning Station.
+   - **Credential Protection Selector**:
+     - Mode A: **8-Digit Security PIN** (numeric keypad input with 8 digit slots, auto-formatting, and mask/reveal toggle).
+     - Mode B: **Alphanumeric Password** (traditional secure password with strength indicator).
+   - Real-time Quota Validator: Warns if all licensed scan points are currently allocated.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Client Session Lock vs Server Session Invalidation**:
-  - *Chosen Approach*: Instant local UI lock with 4-digit PIN verification against `customer.pinHash`.
-  - *Why*: Allows instantaneous off-screen protection even when the phone has no internet connection in the cafeteria line.
-- **Web App Manifest & Browser PWA Hook**:
-  - *Chosen Approach*: Standard Web App Manifest (`manifest.json` / `manifest.webmanifest`) paired with a custom React install hook (`usePWAInstall`) and responsive banner.
-  - *Why*: Works natively across all mobile browsers without external native app store friction.
-- **PIN Recovery Mechanism**:
-  - *Chosen Approach*: PIN reset delegation to the Restaurant Admin / Boss Approval Room or Stand Cashier.
-  - *Why*: Prevents unauthenticated resets if someone finds a lost phone, ensuring student meal plate balances remain strictly secure.
+- **Decision 1: Dual 8-Digit PIN & Password Support**:
+  - *Approach*: Allow the restaurant boss to configure either an 8-digit PIN or a password when setting up cashier accounts.
+  - *Why*: In busy cafeteria buffet lines, 8-digit numeric PINs are drastically faster to type on touchscreens and numeric keypads than complex alphanumeric passwords, while providing $10^8$ combination security (far superior to standard 4-digit PINs).
+- **Decision 2: Immediate Local Storage Eviction on Revocation**:
+  - *Approach*: Store the active `sessionToken` in memory/state and browser `localStorage`. When the boss revokes a session, `restoStore` flags the station session as `revoked`. On the scanner terminal, the next heartbeat check or scan event detects revocation, purges local certificates, and triggers the `UnauthorizedTerminalShield`.
+  - *Why*: Eliminates stale zombie sessions without requiring a complete server restart.
 
 ---
 
 ## 4. Technical Architecture & Data Strategy
 
+### System Architecture Diagram
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                        Customer Portal Runtime                         │
-└────────────────────────────────────────────────────────────────────────┘
+│                   RESTAURANT ADMIN SECURITY CONSOLE                    │
+│   • Active Sessions Grid  • Remote Revoke Button  • 8-Digit PIN Setup  │
+└───────────────────────────────────┬────────────────────────────────────┘
                                     │
-           ┌────────────────────────┴────────────────────────┐
-           ▼                                                 ▼
-┌─────────────────────────────┐           ┌──────────────────────────────┐
-│     PWA Installation        │           │    Customer PIN Security     │
-│  - Web App Manifest         │           │  - Onboarding Setup Modal    │
-│  - beforeinstallprompt hook │           │  - Off-screen auto-lock      │
-│  - iOS Safari Action Guide  │           │  - 4-Digit Numeric Keypad    │
-└─────────────────────────────┘           └──────────────────────────────┘
-           │                                                 │
-           ▼                                                 ▼
+                         State / Event Dispatch
+                                    │
+                                    ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│                    restoStore State & Customer Model                   │
-│  - customer.pinHash (4-digit hash)                                     │
-│  - customer.hasCustomPin (boolean)                                     │
-│  - customer.pinSetAt (timestamp)                                       │
-│  - setCustomerPin(customerId, pin)                                     │
-│  - verifyCustomerPin(customerId, pin)                                  │
+│                   CENTRAL RESTOSTORE STATE LAYER                       │
+│                                                                        │
+│  • cashierSessions: CashierSession[]                                   │
+│  • stationUsers: StationUser[] (pin: 8 digits, passwordHash)          │
+│  • getActiveCashierSessions(restaurantCode)                           │
+│  • revokeCashierSession(sessionId, reason, actor)                     │
+│  • addCashierAccount(data) [Enforces 1:1 Plan Quota]                  │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                     Live Heartbeat & Lockout Check
+                                    │
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                   CASHIER TERMINAL FLOOR INTERFACE                     │
+│                                                                        │
+│  [ Active Session ]                    [ Revoked Session ]             │
+│  • Normal high-speed scanner           • Tokens wiped from storage     │
+│  • Authenticated via 8-Digit PIN       • Renders Unauthorized Shield   │
+│  • Sub-50ms offline plate deductions   • "Session Revoked by Boss"     │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Component & State Changes:
-1. **`src/types/index.ts`**:
-   - Add `hasCustomPin?: boolean` and `pinSetAt?: string` to `Customer`.
-2. **`src/store/restoStore.ts`**:
-   - Add `setCustomerPin(customerId: string, pin: string): void`.
-   - Add `verifyCustomerPin(customerId: string, pin: string): boolean`.
-   - Update `registerCustomer` to initialize `hasCustomPin: false`.
-3. **`src/components/customer/PinSetupModal.tsx`**:
-   - Modal for setting 4-digit PIN on first visit, with keypad, confirmation step, and error handling.
-4. **`src/components/customer/DashboardLockScreen.tsx`**:
-   - Lock screen triggered when app goes off-screen, with 4-dot display, numeric keypad, and instant unlock.
-5. **`src/components/customer/PWAInstallBanner.tsx` & `src/hooks/usePWAInstall.ts`**:
-   - In-app install banner with iOS Safari sheet and Android prompt integration.
-6. **`public/manifest.json` & `index.html`**:
-   - Configure manifest icons, standalone display mode, theme colors, and Apple mobile web app tags.
+### Data Model Additions (`src/types/index.ts`)
+```typescript
+export interface CashierSession {
+  id: string; // sess_xxx
+  restaurantCode: string;
+  stationId: string;
+  stationName: string;
+  branchId?: string;
+  branchName?: string;
+  staffUserId: string;
+  staffName: string;
+  staffUsername: string;
+  deviceType: 'phone' | 'tablet' | 'laptop_scanner' | 'pos_terminal';
+  deviceModel: string;
+  deviceFingerprint: string;
+  ipAddress: string;
+  sessionToken: string;
+  startedAt: string;
+  lastHeartbeat: string;
+  status: 'active' | 'revoked' | 'closed';
+  revokedAt?: string;
+  revokedReason?: string;
+}
+```
+
+### Store Method Implementations (`src/store/restoStore.ts`)
+- `getActiveCashierSessions(restaurantCode?: string): CashierSession[]`
+- `revokeCashierSession(sessionId: string, reason?: string, actorName?: string): boolean`
+- `revokeAllCashierSessions(restaurantCode: string, reason?: string, actorName?: string): number`
+- `createCashierAccount(data: { name: string; username: string; phone: string; stationId: string; branchId: string; authType: 'pin8' | 'password'; pin?: string; password?: string }): StationUser`
+
+### UI Components to Build
+1. **`src/components/restaurant/RestaurantSecurityCenter.tsx`**:
+   - Executive session overview, live terminal table with device types, IPs, and "Revoke & Logout" buttons.
+   - Quick "Create Cashier Account" modal with 8-digit PIN or password setup.
+2. **`RestaurantAdminView.tsx` Navigation Integration**:
+   - Mount new `Security & Sessions` sub-tab in primary navigation.
+3. **`ScannerView.tsx` Live Revocation Listener**:
+   - Detects remote revocation and instantly transitions to `UnauthorizedTerminalShield`.

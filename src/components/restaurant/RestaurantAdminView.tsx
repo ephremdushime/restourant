@@ -21,6 +21,7 @@ import { PricingAnalyticsDashboard } from './PricingAnalyticsDashboard';
 import { BossApprovalsManager } from './BossApprovalsManager';
 import { BranchesAndStationsManager } from './BranchesAndStationsManager';
 import { SecurityAndAuditLogsView } from './SecurityAndAuditLogsView';
+import { RestaurantSecurityCenter } from './RestaurantSecurityCenter';
 import { RestaurantAppearanceManager } from './RestaurantAppearanceManager';
 import { SummaryMetricCards } from './SummaryMetricCards';
 import {
@@ -881,6 +882,13 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
               label: 'Appearance & Branding',
               icon: Palette,
               match: activeSubTab === 'appearance' || activeSubTab === 'cards',
+            },
+            {
+              id: 'security',
+              label: 'Security & Terminals',
+              icon: ShieldAlert,
+              badge: restoStore.getActiveCashierSessions(state.currentRestaurantCode).length || undefined,
+              match: activeSubTab === 'security',
             },
             {
               id: 'pricing',
@@ -2847,9 +2855,9 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
         <BranchesAndStationsManager restaurantCode={state.currentRestaurantCode} language={language} />
       )}
 
-      {/* 5B. SECURITY & FORENSIC AUDIT TRAIL VIEW */}
+      {/* 5B. SECURITY, SESSIONS & FORENSIC AUDIT TRAIL VIEW */}
       {activeSubTab === 'security' && (
-        <SecurityAndAuditLogsView restaurantCode={state.currentRestaurantCode} language={language} />
+        <RestaurantSecurityCenter restaurantCode={state.currentRestaurantCode} language={language} />
       )}
 
       {/* 6. OVERRIDES & SPOT-CHECKS VIEW */}

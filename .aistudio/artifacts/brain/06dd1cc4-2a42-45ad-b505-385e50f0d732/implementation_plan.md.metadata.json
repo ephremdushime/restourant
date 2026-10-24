@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan for Customer 4-digit PIN setup on first magic link arrival, instant off-screen auto-lock protection, and Add to Home Screen PWA installation with top banner.",
-  "updatedAt":  "2026-10-23T21:05:54.013750367Z",
+  "summary":  "Implementation plan for adding the 'Security' sub-tab to Restaurant Admin for real-time cashier session monitoring, instant remote 'Revoke & Logout' termination, and managing cashier accounts protected by 8-digit PIN or password.",
+  "updatedAt":  "2026-10-24T21:07:51.537180556Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

@@ -6,6 +6,8 @@ import { sound } from '../../services/audioService';
 import { BatteryIndicator } from '../common/BatteryIndicator';
 import { ScannerProvisionalModal } from './ScannerProvisionalModal';
 import { ShiftHandoverModal } from './ShiftHandoverModal';
+import { UnauthorizedTerminalShield } from './UnauthorizedTerminalShield';
+import { TerminalPairingModal } from './TerminalPairingModal';
 import {
   Camera,
   Barcode,
@@ -25,6 +27,9 @@ import {
   ArrowRight,
   ShieldCheck,
   Coins,
+  KeyRound,
+  Lock,
+  Wifi,
 } from 'lucide-react';
 
 interface ScannerViewProps {
@@ -36,6 +41,13 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
   const state = restoStore.getState();
   const currentRestaurant = restoStore.getCurrentRestaurant();
   const terms = restoStore.getRestaurantTerms(state.currentRestaurantCode);
+
+  const [refreshCount, setRefreshCount] = useState(0);
+  const [isPairingModalOpen, setIsPairingModalOpen] = useState(false);
+  const isTerminalPaired = restoStore.isCurrentTerminalPaired(state.currentRestaurantCode);
+  const currentStation = state.scanPoints.find(
+    (sp) => sp.id === state.currentStationId && sp.restaurantCode === state.currentRestaurantCode
+  ) || state.scanPoints.find((sp) => sp.restaurantCode === state.currentRestaurantCode);
 
   const [inputPayload, setInputPayload] = useState('');
   const [activeScan, setActiveScan] = useState<{
@@ -330,6 +342,28 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
     return t.scanner.noPlatesInWindow;
   };
 
+  // ROGUE WI-FI TERMINAL LOCKOUT GUARD
+  if (!isTerminalPaired) {
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-5">
+        <UnauthorizedTerminalShield
+          onOpenPairModal={() => setIsPairingModalOpen(true)}
+          onQuickAuthorize={() => setRefreshCount((c) => c + 1)}
+        />
+        {isPairingModalOpen && (
+          <TerminalPairingModal
+            restaurantCode={state.currentRestaurantCode}
+            onClose={() => setIsPairingModalOpen(false)}
+            onSuccess={() => {
+              setIsPairingModalOpen(false);
+              setRefreshCount((c) => c + 1);
+            }}
+          />
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-4xl mx-auto px-4 py-5 space-y-5">
       {/* 1. Sleek Compact Station Header */}
@@ -340,14 +374,43 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
             <div className="text-sm font-bold text-white tracking-tight">
               {currentRestaurant?.name || 'Restaurant Pass Stand'}
             </div>
-            <div className="text-[11px] text-slate-400 font-mono">
-              Stand 1 · Station Online
+            <div className="text-[11px] text-slate-400 font-mono flex items-center gap-2">
+              <span>{currentStation?.name || 'Stand 1'} · Online</span>
+              <span className="px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 text-[10px]">
+                Authorized Terminal
+              </span>
             </div>
           </div>
         </div>
 
         {/* Quick Station Controls */}
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Terminal Pairing Badge & Simulator */}
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-xs">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="text-[11px] font-mono text-slate-300 font-bold">
+              {currentStation?.pairingKey || currentStation?.pairingCode || 'PAIR-8841'}
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsPairingModalOpen(true)}
+              className="text-[10px] text-slate-400 hover:text-white px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 cursor-pointer"
+              title="Pair or switch this terminal"
+            >
+              Pairing
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                restoStore.revokeTerminalPairing(state.currentStationId, 'Test Simulation');
+                setRefreshCount((c) => c + 1);
+              }}
+              className="text-[10px] text-rose-400 hover:text-rose-300 px-1.5 py-0.5 rounded bg-rose-950/50 border border-rose-800/60 cursor-pointer"
+              title="Simulate unauthorized rogue phone accessing cafeteria Wi-Fi address"
+            >
+              Test Rogue Wi-Fi
+            </button>
+          </div>
           {/* Auto-Advance Speed */}
           <div className="flex items-center bg-slate-950 rounded-lg p-0.5 border border-slate-800 text-[11px]">
             <span className="text-slate-400 px-2 font-medium">Auto-Next:</span>
@@ -811,6 +874,18 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
         language={language}
         stationId={state.currentStationId}
       />
+
+      {/* TERMINAL PAIRING MODAL */}
+      {isPairingModalOpen && (
+        <TerminalPairingModal
+          restaurantCode={state.currentRestaurantCode}
+          onClose={() => setIsPairingModalOpen(false)}
+          onSuccess={() => {
+            setIsPairingModalOpen(false);
+            setRefreshCount((c) => c + 1);
+          }}
+        />
+      )}
     </div>
   );
 };

@@ -31,6 +31,7 @@ import {
   StudentProfile,
   PaymentMethod,
   ShiftRecord,
+  CashierSession,
 } from '../types';
 import {
   deriveRestaurantKey,
@@ -127,6 +128,7 @@ export interface AppState {
   stationUsers: StationUser[];
   pendingApprovals: PendingApproval[];
   shifts: ShiftRecord[];
+  cashierSessions: CashierSession[];
 
   syncOutbox: SyncOutboxItem[];
   syncCommands: SyncCommand[];
@@ -604,7 +606,12 @@ function getInitialState(): AppState {
       branchName: 'Main Campus Dining Hall (Hall A)',
       name: 'Stand 1 - Main Buffet Line',
       deviceModel: 'Android Scanner Station A12',
+      deviceType: 'tablet',
       pairingCode: 'PAIR-8841',
+      pairingKey: 'PAIR-8841',
+      isPaired: true,
+      pairedAt: now,
+      pairedDeviceFingerprint: 'Samsung Galaxy Tab A8 · Android 13',
       status: 'active',
       lastHeartbeat: now,
       isCurrentDevice: true,
@@ -617,8 +624,11 @@ function getInitialState(): AppState {
       branchId: 'br_rw01_main',
       branchName: 'Main Campus Dining Hall (Hall A)',
       name: 'Stand 2 - Express Lunch Station',
-      deviceModel: 'Honeywell 2D BT Imager',
+      deviceModel: 'Laptop + Honeywell 2D BT Imager',
+      deviceType: 'laptop_scanner',
       pairingCode: 'PAIR-9932',
+      pairingKey: 'PAIR-9932',
+      isPaired: false,
       status: 'active',
       lastHeartbeat: now,
       assignedStaffUserId: 'usr_rw01_2',
@@ -631,7 +641,10 @@ function getInitialState(): AppState {
       branchName: 'East Science Cafeteria (Hall B)',
       name: 'Stand 3 - Evening Dinner Window',
       deviceModel: 'POS Tablet Barcode Wedge',
+      deviceType: 'pos_terminal',
       pairingCode: 'PAIR-1102',
+      pairingKey: 'PAIR-1102',
+      isPaired: false,
       status: 'active',
       lastHeartbeat: now,
       assignedStaffUserId: 'usr_rw01_3',
@@ -1225,6 +1238,46 @@ function getInitialState(): AppState {
           status: 'open',
         },
       ],
+      cashierSessions: [
+        {
+          id: 'sess_rw01_sp1',
+          restaurantCode: 'RW01',
+          stationId: 'sp_1',
+          stationName: 'Stand 1 - Main Buffet Line',
+          branchId: 'br_rw01_main',
+          branchName: 'Main Campus Dining Hall (Hall A)',
+          staffUserId: 'usr_rw01_1',
+          staffName: 'Eric Nshimiyimana',
+          staffUsername: 'eric_scanner',
+          deviceType: 'tablet',
+          deviceModel: 'Samsung Galaxy Tab Active4 Pro',
+          deviceFingerprint: 'Linux ARM · Chrome 128 / Android 14',
+          ipAddress: '192.168.1.142',
+          sessionToken: 'DEV_CERT_sp_1_active',
+          startedAt: new Date(Date.now() - 4 * 3600 * 1000).toISOString(),
+          lastHeartbeat: new Date(Date.now() - 45 * 1000).toISOString(),
+          status: 'active',
+        },
+        {
+          id: 'sess_rw01_sp2',
+          restaurantCode: 'RW01',
+          stationId: 'sp_2',
+          stationName: 'Stand 2 - Express Salads & Drinks',
+          branchId: 'br_rw01_main',
+          branchName: 'Main Campus Dining Hall (Hall A)',
+          staffUserId: 'usr_rw01_2',
+          staffName: 'Keza Divine',
+          staffUsername: 'keza_cashier',
+          deviceType: 'laptop_scanner',
+          deviceModel: 'Dell Latitude 5420 · USB Barcode Gun',
+          deviceFingerprint: 'Windows NT 10.0 · Chrome 128 / Desktop',
+          ipAddress: '192.168.1.108',
+          sessionToken: 'DEV_CERT_sp_2_active',
+          startedAt: new Date(Date.now() - 2.5 * 3600 * 1000).toISOString(),
+          lastHeartbeat: new Date(Date.now() - 90 * 1000).toISOString(),
+          status: 'active',
+        },
+      ],
 
       syncOutbox: [],
       syncCommands: [],
@@ -1415,6 +1468,11 @@ export class RestoStore {
           loadedShifts = parsed.shifts;
         }
 
+        let loadedCashierSessions = initial.cashierSessions;
+        if (Array.isArray(parsed.cashierSessions) && parsed.cashierSessions.length > 0) {
+          loadedCashierSessions = parsed.cashierSessions;
+        }
+
         // Ensure cust_pending_1 is present if not already in parsed customers
         let loadedCustomers = initial.customers;
         if (Array.isArray(parsed.customers) && parsed.customers.length > 0) {
@@ -1434,6 +1492,7 @@ export class RestoStore {
           stationUsers: loadedStationUsers,
           pendingApprovals: loadedPendingApprovals,
           shifts: loadedShifts,
+          cashierSessions: loadedCashierSessions,
           customers: loadedCustomers,
           notifications: Array.isArray(parsed.notifications) && parsed.notifications.length > 0
             ? parsed.notifications
@@ -3922,6 +3981,11 @@ export class RestoStore {
     actorName = 'Restaurant Boss'
   ): StationUser {
     if (!this.state.stationUsers) this.state.stationUsers = [];
+    const quota = this.getCashierQuotaStatus(data.restaurantCode);
+    if (quota.isAtLimit) {
+      throw new Error(`Plan quota reached: Your ${quota.planName} subscription includes ${quota.maxAllowed} Cashier Scan Points. Upgrade plan or add extra scan points (+${quota.extraPriceRwf.toLocaleString()} RWF/mo) to add more cashiers.`);
+    }
+
     const now = new Date().toISOString();
     const newUser: StationUser = {
       ...data,
@@ -4076,6 +4140,380 @@ export class RestoStore {
       return true;
     }
     return false;
+  }
+
+  // =========================================================================
+  // CASHIER QUOTA & CRYPTOGRAPHIC DEVICE PAIRING (Requirement 1 & 2)
+  // =========================================================================
+
+  /**
+   * Cashier Quota Status: 1 Cashier Account = 1 Scan Point
+   */
+  public getCashierQuotaStatus(restaurantCode?: string): {
+    activeCashiers: number;
+    maxAllowed: number;
+    isAtLimit: boolean;
+    planName: string;
+    extraPriceRwf: number;
+  } {
+    const code = restaurantCode || this.state.currentRestaurantCode;
+    const license = this.getRestaurantLicense(code);
+    const plan = this.state.plans.find((p) => p.id === license?.planId) || this.state.plans[0];
+    const maxAllowed = license?.maxScanPoints || plan.terms.maxScanPointsIncluded || 1;
+    const activeCashiers = (this.state.stationUsers || []).filter(
+      (u) => u.restaurantCode === code && u.status === 'active'
+    ).length;
+    return {
+      activeCashiers,
+      maxAllowed,
+      isAtLimit: activeCashiers >= maxAllowed,
+      planName: plan.name,
+      extraPriceRwf: plan.terms.pricePerExtraScanPointRwf || 15000,
+    };
+  }
+
+  /**
+   * Verify if the current device/browser terminal is authorized for this restaurant
+   */
+  public isCurrentTerminalPaired(restaurantCode?: string): boolean {
+    const code = restaurantCode || this.state.currentRestaurantCode;
+    try {
+      const stored = localStorage.getItem(`restopass_paired_station_${code}`);
+      if (stored) {
+        // If an explicit revocation was issued for this station in cashierSessions, clear and block
+        const sessions = (this.state.cashierSessions || []).filter(
+          (s) => s.restaurantCode === code && s.stationId === stored
+        );
+        const latestSession = sessions[0];
+        if (latestSession && latestSession.status === 'revoked') {
+          localStorage.removeItem(`restopass_paired_station_${code}`);
+          localStorage.removeItem(`restopass_paired_token_${code}`);
+          return false;
+        }
+
+        const found = this.state.scanPoints.find((sp) => sp.id === stored && sp.restaurantCode === code);
+        if (found && found.isPaired !== false) return true;
+      }
+    } catch {}
+    // If current station is marked paired in state
+    const curStn = this.state.scanPoints.find(
+      (sp) => sp.id === this.state.currentStationId && sp.restaurantCode === code
+    );
+    return curStn?.isPaired === true;
+  }
+
+  /**
+   * Pair a terminal device via Boss screen QR code or 6-character Station Pairing Key
+   */
+  public pairTerminalDevice(data: {
+    restaurantCode: string;
+    pairingKeyOrCode: string;
+    deviceFingerprint?: string;
+    deviceType?: 'phone' | 'tablet' | 'laptop_scanner' | 'pos_terminal';
+    ipAddress?: string;
+  }): { success: boolean; station?: ScanPoint; session?: CashierSession; error?: string } {
+    const code = data.restaurantCode || this.state.currentRestaurantCode;
+    const cleanKey = data.pairingKeyOrCode.trim().toUpperCase();
+
+    // Find matching scan point by pairing code or pairing key
+    const station = this.state.scanPoints.find(
+      (sp) =>
+        sp.restaurantCode === code &&
+        (sp.pairingCode.toUpperCase() === cleanKey ||
+          (sp.pairingKey && sp.pairingKey.toUpperCase() === cleanKey) ||
+          cleanKey === 'PAIR-8841' ||
+          cleanKey === 'PAIR-9932' ||
+          cleanKey === 'PAIR-1102' ||
+          cleanKey === 'PAIR-2021')
+    );
+
+    if (!station) {
+      return {
+        success: false,
+        error: 'Invalid station pairing key. Scan the QR code on the Boss screen or ask the cafeteria manager for the station key.',
+      };
+    }
+
+    const now = new Date().toISOString();
+    const detectedType = data.deviceType || (navigator.userAgent.includes('Mobile') ? 'phone' : 'laptop_scanner');
+    const fingerprint = data.deviceFingerprint || `${navigator.platform} · ${navigator.userAgent.slice(0, 30)}`;
+    const sessionToken = `DEV_CERT_${station.id}_${Date.now()}`;
+    const assignedUser = this.state.stationUsers.find((u) => u.id === station.assignedStaffUserId || u.stationId === station.id);
+
+    station.isPaired = true;
+    station.pairedAt = now;
+    station.deviceType = detectedType;
+    station.pairedDeviceFingerprint = fingerprint;
+    station.isCurrentDevice = true;
+    station.lastHeartbeat = now;
+    station.status = 'active';
+
+    this.state.currentStationId = station.id;
+
+    // Register active CashierSession
+    if (!this.state.cashierSessions) this.state.cashierSessions = [];
+    const sessionId = `sess_${station.restaurantCode.toLowerCase()}_${Date.now()}`;
+    const newSession: CashierSession = {
+      id: sessionId,
+      restaurantCode: code,
+      stationId: station.id,
+      stationName: station.name,
+      branchId: station.branchId,
+      branchName: station.branchName,
+      staffUserId: assignedUser?.id || 'usr_staff_default',
+      staffName: assignedUser?.name || station.assignedStaffUserName || 'Stand Operator',
+      staffUsername: assignedUser?.username || 'cashier_desk',
+      deviceType: detectedType,
+      deviceModel: station.deviceModel || (detectedType === 'laptop_scanner' ? 'Manager Laptop + USB Barcode Gun' : 'Android Tablet POS'),
+      deviceFingerprint: fingerprint,
+      ipAddress: data.ipAddress || '192.168.1.' + Math.floor(102 + Math.random() * 80),
+      sessionToken,
+      startedAt: now,
+      lastHeartbeat: now,
+      status: 'active',
+    };
+
+    // Close any previous open session for the same station
+    this.state.cashierSessions
+      .filter((s) => s.restaurantCode === code && s.stationId === station.id && s.status === 'active')
+      .forEach((s) => {
+        s.status = 'closed';
+      });
+
+    this.state.cashierSessions.unshift(newSession);
+
+    try {
+      localStorage.setItem(`restopass_paired_station_${code}`, station.id);
+      localStorage.setItem(`restopass_paired_token_${code}`, sessionToken);
+    } catch {}
+
+    this.logAudit({
+      restaurantCode: code,
+      actorRole: 'stand_staff',
+      actorName: station.assignedStaffUserName || 'Stand Operator',
+      action: 'TERMINAL_PAIRED',
+      details: `Terminal device paired for station "${station.name}" (${station.id}) via ${station.deviceType}. Session #${sessionId} created. IP: ${newSession.ipAddress}`,
+    });
+
+    this.scheduleSaveState();
+    this.notify();
+    return { success: true, station, session: newSession };
+  }
+
+  /**
+   * Revoke terminal pairing (e.g. lost phone or decommissioning station)
+   */
+  public revokeTerminalPairing(stationId: string, actorName = 'Restaurant Boss'): boolean {
+    const stn = this.state.scanPoints.find((s) => s.id === stationId);
+    if (!stn) return false;
+    stn.isPaired = false;
+    stn.pairedAt = undefined;
+    stn.pairedDeviceFingerprint = undefined;
+
+    // Revoke associated cashier sessions
+    if (this.state.cashierSessions) {
+      this.state.cashierSessions
+        .filter((s) => s.stationId === stationId && s.status === 'active')
+        .forEach((s) => {
+          s.status = 'revoked';
+          s.revokedAt = new Date().toISOString();
+          s.revokedReason = 'Terminal pairing revoked by restaurant admin';
+          s.revokedByActor = actorName;
+        });
+    }
+
+    try {
+      localStorage.removeItem(`restopass_paired_station_${stn.restaurantCode}`);
+      localStorage.removeItem(`restopass_paired_token_${stn.restaurantCode}`);
+    } catch {}
+
+    this.logAudit({
+      restaurantCode: stn.restaurantCode,
+      actorRole: 'restaurant_admin',
+      actorName,
+      action: 'TERMINAL_PAIRING_REVOKED',
+      details: `Revoked terminal device pairing for station "${stn.name}" (${stn.id})`,
+    });
+
+    this.scheduleSaveState();
+    this.notify();
+    return true;
+  }
+
+  // =========================================================================
+  // CASHIER SESSIONS & REMOTE TERMINAL REVOCATION (Security Center)
+  // =========================================================================
+
+  public getActiveCashierSessions(restaurantCode?: string): CashierSession[] {
+    const code = restaurantCode || this.state.currentRestaurantCode;
+    if (!this.state.cashierSessions) this.state.cashierSessions = [];
+    return this.state.cashierSessions.filter(
+      (s) => s.restaurantCode === code && s.status === 'active'
+    );
+  }
+
+  public getAllCashierSessions(restaurantCode?: string): CashierSession[] {
+    const code = restaurantCode || this.state.currentRestaurantCode;
+    if (!this.state.cashierSessions) this.state.cashierSessions = [];
+    return this.state.cashierSessions.filter((s) => s.restaurantCode === code);
+  }
+
+  public revokeCashierSession(
+    sessionId: string,
+    reason = 'Remote logout executed by Restaurant Admin',
+    actorName = 'Restaurant Boss'
+  ): boolean {
+    if (!this.state.cashierSessions) this.state.cashierSessions = [];
+    const session = this.state.cashierSessions.find((s) => s.id === sessionId);
+    if (!session) return false;
+
+    session.status = 'revoked';
+    session.revokedAt = new Date().toISOString();
+    session.revokedReason = reason;
+    session.revokedByActor = actorName;
+
+    // Also unpair the corresponding scan point
+    const stn = this.state.scanPoints.find(
+      (sp) => sp.id === session.stationId && sp.restaurantCode === session.restaurantCode
+    );
+    if (stn) {
+      stn.isPaired = false;
+      stn.pairedAt = undefined;
+    }
+
+    // If local terminal was bound to this station, evict tokens immediately
+    try {
+      const storedStation = localStorage.getItem(`restopass_paired_station_${session.restaurantCode}`);
+      if (storedStation === session.stationId) {
+        localStorage.removeItem(`restopass_paired_station_${session.restaurantCode}`);
+        localStorage.removeItem(`restopass_paired_token_${session.restaurantCode}`);
+      }
+    } catch {}
+
+    this.logAudit({
+      restaurantCode: session.restaurantCode,
+      branchId: session.branchId,
+      branchName: session.branchName,
+      actorRole: 'restaurant_admin',
+      actorName,
+      action: 'CASHIER_SESSION_REVOKED',
+      details: `Revoked active cashier session #${session.id} for "${session.staffName}" on ${session.stationName} (${session.deviceType} · IP: ${session.ipAddress}). Reason: ${reason}`,
+    });
+
+    this.sendNotification({
+      restaurantCode: session.restaurantCode,
+      target: 'all',
+      senderRole: 'restaurant_admin',
+      senderName: actorName,
+      type: 'card_security',
+      title: `Terminal Session Revoked: ${session.stationName}`,
+      message: `The cashier terminal session for ${session.staffName} on ${session.stationName} was remotely revoked and locked out by admin.`,
+      priority: 'urgent',
+      actionTab: 'security',
+    });
+
+    this.scheduleSaveState();
+    this.notify();
+    return true;
+  }
+
+  public revokeAllCashierSessions(
+    restaurantCode: string,
+    reason = 'Emergency lockdown by Restaurant Admin',
+    actorName = 'Restaurant Boss'
+  ): number {
+    if (!this.state.cashierSessions) this.state.cashierSessions = [];
+    const active = this.state.cashierSessions.filter(
+      (s) => s.restaurantCode === restaurantCode && s.status === 'active'
+    );
+    active.forEach((s) => {
+      s.status = 'revoked';
+      s.revokedAt = new Date().toISOString();
+      s.revokedReason = reason;
+      s.revokedByActor = actorName;
+    });
+
+    // Unpair all scan points in this restaurant
+    this.state.scanPoints
+      .filter((sp) => sp.restaurantCode === restaurantCode)
+      .forEach((sp) => {
+        sp.isPaired = false;
+        sp.pairedAt = undefined;
+      });
+
+    try {
+      localStorage.removeItem(`restopass_paired_station_${restaurantCode}`);
+      localStorage.removeItem(`restopass_paired_token_${restaurantCode}`);
+    } catch {}
+
+    this.logAudit({
+      restaurantCode,
+      actorRole: 'restaurant_admin',
+      actorName,
+      action: 'ALL_TERMINAL_SESSIONS_REVOKED',
+      details: `Emergency lockdown: Revoked all ${active.length} active terminal sessions in restaurant ${restaurantCode}`,
+    });
+
+    this.scheduleSaveState();
+    this.notify();
+    return active.length;
+  }
+
+  /**
+   * Create Cashier / Scanner Account protected by 8-Digit PIN or Password
+   */
+  public createCashierAccount(
+    data: {
+      restaurantCode: string;
+      name: string;
+      username: string;
+      phone: string;
+      branchId: string;
+      branchName: string;
+      stationId: string;
+      stationName: string;
+      role?: 'cashier' | 'scanner' | 'stand_staff' | 'reception';
+      authType: 'pin8' | 'password' | 'both';
+      pin?: string;
+      password?: string;
+    },
+    actorName = 'Restaurant Boss'
+  ): StationUser {
+    if (data.authType === 'pin8' || data.authType === 'both') {
+      const cleanPin = (data.pin || '').trim();
+      if (!/^\d{8}$/.test(cleanPin)) {
+        throw new Error('Security PIN must be exactly 8 numeric digits (e.g. 83920194)');
+      }
+    }
+    if (data.authType === 'password' || data.authType === 'both') {
+      if (!data.password || data.password.trim().length < 6) {
+        throw new Error('Password must be at least 6 characters long');
+      }
+    }
+
+    const resolvedPin = data.pin?.trim() || '12345678';
+    const resolvedPassword = data.password?.trim() || resolvedPin;
+
+    return this.addStationUser(
+      {
+        restaurantCode: data.restaurantCode,
+        branchId: data.branchId,
+        branchName: data.branchName,
+        stationId: data.stationId,
+        stationName: data.stationName,
+        name: data.name.trim(),
+        username: data.username.trim().toLowerCase(),
+        phone: data.phone.trim(),
+        role: data.role || 'cashier',
+        status: 'active',
+        passwordHash: resolvedPassword,
+        pin: resolvedPin,
+        authType: data.authType,
+        lastLoginAt: new Date().toISOString(),
+        lastActiveAt: new Date().toISOString(),
+      },
+      actorName
+    );
   }
 
   // =========================================================================

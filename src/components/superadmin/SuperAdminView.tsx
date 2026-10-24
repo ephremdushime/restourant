@@ -17,7 +17,10 @@ import {
   TrendingUp,
   Activity,
   Award,
+  Server,
+  Layers,
 } from 'lucide-react';
+import { DeploymentBlueprintView } from './DeploymentBlueprintView';
 
 interface SuperAdminViewProps {
   language: Language;
@@ -149,9 +152,10 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       <div className="flex gap-2 border-b border-slate-800 pb-2 text-xs font-medium text-slate-400">
         {[
           { id: 'restaurants', label: 'Tenants & Health' },
-          { id: 'plans', label: 'Plans & Price Templates' },
+          { id: 'plans', label: 'B2B Subscriptions & Limits' },
           { id: 'licenses', label: 'Signed Licences (.lic)' },
-          { id: 'revenue', label: 'Subscription Revenue' },
+          { id: 'revenue', label: 'Platform Revenue' },
+          { id: 'deployment', label: 'Hosting & Deployment Blueprint' },
           { id: 'audit', label: 'Platform Audit Log' },
         ].map((tab) => (
           <button
@@ -418,6 +422,11 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
             ))}
           </div>
         </div>
+      )}
+
+      {/* 6. HOSTING & DEPLOYMENT BLUEPRINT */}
+      {activeSubTab === 'deployment' && (
+        <DeploymentBlueprintView />
       )}
 
       {/* ONBOARD RESTAURANT MODAL */}

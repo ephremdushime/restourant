@@ -182,9 +182,34 @@ export default function App() {
         }
       }
 
+      // Auto-pair cashier device if pair_key query param exists in hash or search
+      if (hash.includes('pair_key=') || (typeof window !== 'undefined' && window.location.search.includes('pair_key='))) {
+        const queryStr = hash.includes('?') ? hash.split('?')[1] : window.location.search.replace('?', '');
+        const params = new URLSearchParams(queryStr);
+        const pairKey = params.get('pair_key');
+        const restoCode = params.get('resto') || state.currentRestaurantCode;
+        if (pairKey) {
+          restoStore.pairTerminalDevice({
+            restaurantCode: restoCode,
+            pairingKeyOrCode: pairKey,
+            deviceType: navigator.userAgent.includes('Mobile') ? 'phone' : 'laptop_scanner',
+          });
+        }
+      }
+
       if (hash.includes('scanner') || hash.includes('stand')) {
         handleRoleChange('stand_staff', false);
       } else if (hash.includes('super')) {
+        if (hash.includes('subtab=deployment')) {
+          setSuperAdminSubTab('deployment');
+          setActiveTab('deployment');
+        } else if (hash.includes('subtab=')) {
+          const sub = new URLSearchParams(hash.split('?')[1] || '').get('subtab');
+          if (sub) {
+            setSuperAdminSubTab(sub);
+            setActiveTab(sub);
+          }
+        }
         handleRoleChange('super_admin', false);
       } else if (hash.includes('boss') || hash.includes('resto-admin') || (hash.includes('admin') && !hash.includes('super'))) {
         handleRoleChange('restaurant_admin', false);

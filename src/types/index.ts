@@ -227,6 +227,7 @@ export interface StationUser {
   status: 'active' | 'blocked';
   passwordHash: string;
   pin: string;
+  authType?: 'pin8' | 'password' | 'both';
   createdAt: string;
   lastLoginAt?: string;
   lastActiveAt?: string;
@@ -286,7 +287,13 @@ export interface ScanPoint {
   branchName?: string;
   name: string; // e.g. "Stand 1 - Main Buffet"
   deviceModel: string;
+  deviceType?: 'phone' | 'tablet' | 'laptop_scanner' | 'pos_terminal';
   pairingCode: string;
+  pairingKey?: string; // 6-character code e.g. "PAIR-9932" for laptop USB/BT scanners
+  pairingToken?: string; // Signed cryptographic device token
+  isPaired?: boolean;
+  pairedAt?: string;
+  pairedDeviceFingerprint?: string;
   status: 'active' | 'offline';
   lastHeartbeat: string;
   isCurrentDevice?: boolean;
@@ -442,3 +449,27 @@ export interface ShiftRecord {
   signedOffByPinHash?: string;
 }
 
+export type CashierSessionStatus = 'active' | 'revoked' | 'closed';
+
+export interface CashierSession {
+  id: string; // sess_xxx
+  restaurantCode: string;
+  stationId: string;
+  stationName: string;
+  branchId?: string;
+  branchName?: string;
+  staffUserId: string;
+  staffName: string;
+  staffUsername: string;
+  deviceType: 'phone' | 'tablet' | 'laptop_scanner' | 'pos_terminal';
+  deviceModel: string;
+  deviceFingerprint: string;
+  ipAddress: string;
+  sessionToken: string;
+  startedAt: string;
+  lastHeartbeat: string;
+  status: CashierSessionStatus;
+  revokedAt?: string;
+  revokedReason?: string;
+  revokedByActor?: string;
+}

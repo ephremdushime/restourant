@@ -27,11 +27,13 @@ import {
   MapPin,
   RefreshCw,
   Coins,
-  Printer,
-  TrendingUp,
-  TrendingDown,
+  QrCode,
+  Laptop,
+  Wifi,
+  ShieldCheck,
 } from 'lucide-react';
 import { ShiftHandoverModal } from '../scanner/ShiftHandoverModal';
+import { BossStationPairingModal } from './BossStationPairingModal';
 
 interface BranchesAndStationsManagerProps {
   restaurantCode: string;
@@ -88,6 +90,10 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
 
   // Delete User Confirmation
   const [userToDelete, setUserToDelete] = useState<StationUser | null>(null);
+
+  // Station Pairing Modal (Boss Screen)
+  const [selectedStationForPairing, setSelectedStationForPairing] = useState<ScanPoint | null>(null);
+  const [selectedUserForPairing, setSelectedUserForPairing] = useState<StationUser | null>(null);
 
   // Toast feedback
   const [feedbackToast, setFeedbackToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -149,35 +155,48 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
       return;
     }
 
-    const branch = branches.find((b) => b.id === userBranchId) || branches[0];
-    const stationId = `sp_${restaurantCode.toLowerCase()}_${Date.now()}`;
+    const quota = restoStore.getCashierQuotaStatus(restaurantCode);
+    if (quota.isAtLimit) {
+      showToast(
+        `Plan Quota Limit: Your ${quota.planName} subscription includes max ${quota.maxAllowed} cashiers (1 cashier = 1 scan point). Contact Super Admin to add extra scan points.`,
+        'error'
+      );
+      return;
+    }
 
-    restoStore.addStationUser(
-      {
-        restaurantCode,
-        branchId: branch ? branch.id : 'br_main',
-        branchName: branch ? branch.name : 'Main Campus Dining Hall',
-        stationId,
-        stationName: userStationName.trim(),
-        name: userFullName.trim(),
-        username: userUsername.trim().toLowerCase(),
-        phone: userPhone.trim(),
-        role: userRole,
-        status: 'active',
-        passwordHash: userPassword,
-        pin: userPin.trim() || '1234',
-        lastLoginAt: new Date().toISOString(),
-        lastActiveAt: new Date().toISOString(),
-      },
-      'Restaurant Boss (Executive)'
-    );
+    try {
+      const branch = branches.find((b) => b.id === userBranchId) || branches[0];
+      const stationId = `sp_${restaurantCode.toLowerCase()}_${Date.now()}`;
 
-    setIsAddUserModalOpen(false);
-    setUserFullName('');
-    setUserUsername('');
-    setUserPassword('');
-    setUserPin('1234');
-    showToast(`Station operator account "@${userUsername}" created with active credentials!`);
+      restoStore.addStationUser(
+        {
+          restaurantCode,
+          branchId: branch ? branch.id : 'br_main',
+          branchName: branch ? branch.name : 'Main Campus Dining Hall',
+          stationId,
+          stationName: userStationName.trim(),
+          name: userFullName.trim(),
+          username: userUsername.trim().toLowerCase(),
+          phone: userPhone.trim(),
+          role: userRole,
+          status: 'active',
+          passwordHash: userPassword,
+          pin: userPin.trim() || '1234',
+          lastLoginAt: new Date().toISOString(),
+          lastActiveAt: new Date().toISOString(),
+        },
+        'Restaurant Boss (Executive)'
+      );
+
+      setIsAddUserModalOpen(false);
+      setUserFullName('');
+      setUserUsername('');
+      setUserPassword('');
+      setUserPin('1234');
+      showToast(`Station operator account "@${userUsername}" created with active credentials!`);
+    } catch (err: any) {
+      showToast(err.message || 'Failed to create cashier account', 'error');
+    }
   };
 
   // Handle Reset Credentials
@@ -331,116 +350,203 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
       </div>
 
       {/* TAB 1: STATION USERS & SECURITY CONTROLS */}
-      {activeTab === 'station_users' && (
-        <div className="space-y-4">
-          {/* Action Toolbar */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-slate-900 border border-slate-800">
-            <div className="flex items-center gap-3 flex-1 max-w-md">
-              <div className="relative w-full">
-                <input
-                  type="text"
-                  placeholder="Search operator, username, station, branch..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-8 pr-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white placeholder-slate-500 focus:border-emerald-500 outline-hidden"
-                />
-                <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5" />
+      {activeTab === 'station_users' && (() => {
+        const quota = restoStore.getCashierQuotaStatus(restaurantCode);
+        return (
+          <div className="space-y-4">
+            {/* Cashier & Scan Point Quota Banner (1 Cashier = 1 Scan Point) */}
+            <div className={`p-4 rounded-xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+              quota.isAtLimit
+                ? 'bg-amber-950/30 border-amber-800/60'
+                : 'bg-slate-900 border-slate-800'
+            }`}>
+              <div className="flex items-center gap-3">
+                <div className={`p-2.5 rounded-xl border ${
+                  quota.isAtLimit
+                    ? 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                    : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                }`}>
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold text-white">Cashier Stations &amp; Quota</span>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+                      1 Cashier = 1 Scan Point
+                    </span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800">
+                      {quota.planName}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Active Cashier Stations: <strong className="text-white">{quota.activeCashiers}</strong> / {quota.maxAllowed} Licensed
+                    {quota.isAtLimit ? ' · Plan quota reached. Extra scan points: +15,000 RwF/mo via Super Admin.' : ' · Quota within active subscription.'}
+                  </p>
+                </div>
               </div>
 
-              {/* Branch Filter */}
-              <select
-                value={selectedBranchFilter}
-                onChange={(e) => setSelectedBranchFilter(e.target.value)}
-                className="py-2 px-3 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-300 focus:border-emerald-500 outline-hidden whitespace-nowrap"
-              >
-                <option value="all">All Branches ({stationUsers.length})</option>
-                {branches.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
+              {quota.isAtLimit && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono text-amber-300 bg-amber-900/40 px-2.5 py-1 rounded-lg border border-amber-700/60 font-bold">
+                    Quota Full ({quota.activeCashiers}/{quota.maxAllowed})
+                  </span>
+                </div>
+              )}
             </div>
 
-            <button
-              type="button"
-              onClick={() => setIsAddUserModalOpen(true)}
-              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 transition-colors cursor-pointer shadow-md shrink-0"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Create Station User Account</span>
-            </button>
-          </div>
+            {/* Action Toolbar */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-slate-900 border border-slate-800">
+              <div className="flex items-center gap-3 flex-1 max-w-md">
+                <div className="relative w-full">
+                  <input
+                    type="text"
+                    placeholder="Search operator, username, station, branch..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pl-8 pr-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white placeholder-slate-500 focus:border-emerald-500 outline-hidden"
+                  />
+                  <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5" />
+                </div>
 
-          {/* Station Users Table */}
-          <div className="rounded-xl bg-slate-900 border border-slate-800 overflow-hidden shadow-lg">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-950 text-slate-400 font-semibold border-b border-slate-800">
-                <tr>
-                  <th className="py-3 px-4">Operator / Staff</th>
-                  <th className="py-3 px-4">Role &amp; Credentials</th>
-                  <th className="py-3 px-4">Branch &amp; Station</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">Last Activity</th>
-                  <th className="py-3 px-4 text-right">Security Controls</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/80">
-                {filteredUsers.length === 0 ? (
+                {/* Branch Filter */}
+                <select
+                  value={selectedBranchFilter}
+                  onChange={(e) => setSelectedBranchFilter(e.target.value)}
+                  className="py-2 px-3 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-300 focus:border-emerald-500 outline-hidden whitespace-nowrap"
+                >
+                  <option value="all">All Branches ({stationUsers.length})</option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsAddUserModalOpen(true)}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 transition-colors cursor-pointer shadow-md shrink-0"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Create Station User Account</span>
+              </button>
+            </div>
+
+            {/* Station Users Table */}
+            <div className="rounded-xl bg-slate-900 border border-slate-800 overflow-hidden shadow-lg">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-950 text-slate-400 font-semibold border-b border-slate-800">
                   <tr>
-                    <td colSpan={6} className="py-8 text-center text-slate-500 font-sans">
-                      No station user accounts matching your criteria.
-                    </td>
+                    <th className="py-3 px-4">Operator / Staff</th>
+                    <th className="py-3 px-4">Role &amp; Credentials</th>
+                    <th className="py-3 px-4">Branch &amp; Station</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4">Last Activity</th>
+                    <th className="py-3 px-4 text-right">Security Controls</th>
                   </tr>
-                ) : (
-                  filteredUsers.map((user) => (
-                    <tr key={user.id} className="hover:bg-slate-800/40 transition-colors">
-                      <td className="py-3 px-4">
-                        <div className="font-bold text-white text-sm flex items-center gap-2">
-                          <span>{user.name}</span>
-                        </div>
-                        <div className="text-slate-400 font-mono text-[11px] mt-0.5">
-                          @{user.username} · {user.phone}
-                        </div>
+                </thead>
+                <tbody className="divide-y divide-slate-800/80">
+                  {filteredUsers.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-slate-500 font-sans">
+                        No station user accounts matching your criteria.
                       </td>
+                    </tr>
+                  ) : (
+                    filteredUsers.map((user) => (
+                      <tr key={user.id} className="hover:bg-slate-800/40 transition-colors">
+                        <td className="py-3 px-4">
+                          <div className="font-bold text-white text-sm flex items-center gap-2">
+                            <span>{user.name}</span>
+                          </div>
+                          <div className="text-slate-400 font-mono text-[11px] mt-0.5">
+                            @{user.username} · {user.phone}
+                          </div>
+                        </td>
 
-                      <td className="py-3 px-4">
-                        <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-slate-800 text-slate-200 border border-slate-700">
-                          {user.role.replace('_', ' ')}
-                        </span>
-                        <div className="text-[10px] font-mono text-slate-500 mt-1">
-                          POS PIN: <strong className="text-slate-300">{user.pin}</strong>
-                        </div>
-                      </td>
+                        <td className="py-3 px-4">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-slate-800 text-slate-200 border border-slate-700">
+                            {user.role.replace('_', ' ')}
+                          </span>
+                          <div className="text-[10px] font-mono text-slate-500 mt-1">
+                            POS PIN: <strong className="text-slate-300">{user.pin}</strong>
+                          </div>
+                        </td>
 
-                      <td className="py-3 px-4">
-                        <div className="font-medium text-slate-200">{user.stationName}</div>
-                        <div className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
-                          <MapPin className="w-3 h-3 text-emerald-400 shrink-0" />
-                          <span>{user.branchName}</span>
-                        </div>
-                      </td>
+                        <td className="py-3 px-4">
+                          <div className="font-medium text-slate-200 flex items-center gap-1.5">
+                            <span>{user.stationName}</span>
+                            {(() => {
+                              const stn = scanPoints.find((sp) => sp.id === user.stationId);
+                              const isPaired = stn ? stn.isPaired !== false : false;
+                              return (
+                                <span
+                                  className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold ${
+                                    isPaired
+                                      ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                                      : 'bg-amber-950 text-amber-300 border border-amber-800'
+                                  }`}
+                                >
+                                  {isPaired ? 'Paired' : 'Unpaired'}
+                                </span>
+                              );
+                            })()}
+                          </div>
+                          <div className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
+                            <MapPin className="w-3 h-3 text-emerald-400 shrink-0" />
+                            <span>{user.branchName}</span>
+                          </div>
+                        </td>
 
-                      <td className="py-3 px-4">
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                            user.status === 'active'
-                              ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                              : 'bg-rose-950 text-rose-400 border border-rose-800'
-                          }`}
-                        >
-                          {user.status}
-                        </span>
-                      </td>
+                        <td className="py-3 px-4">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                              user.status === 'active'
+                                ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                                : 'bg-rose-950 text-rose-400 border border-rose-800'
+                            }`}
+                          >
+                            {user.status}
+                          </span>
+                        </td>
 
-                      <td className="py-3 px-4 text-slate-400 font-mono text-[11px]">
-                        <div>{new Date(user.lastActiveAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                        <div className="text-[10px] text-slate-500">
-                          {new Date(user.lastActiveAt || Date.now()).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                        </div>
-                      </td>
+                        <td className="py-3 px-4 text-slate-400 font-mono text-[11px]">
+                          <div>{new Date(user.lastActiveAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                          <div className="text-[10px] text-slate-500">
+                            {new Date(user.lastActiveAt || Date.now()).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                          </div>
+                        </td>
 
-                      <td className="py-3 px-4 text-right space-x-1.5 whitespace-nowrap">
+                        <td className="py-3 px-4 text-right space-x-1.5 whitespace-nowrap">
+                          {/* Pair Terminal (QR & Key) */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const matchingStation = scanPoints.find((sp) => sp.id === user.stationId) || {
+                                id: user.stationId || `sp_${user.id}`,
+                                restaurantCode,
+                                branchId: user.branchId,
+                                branchName: user.branchName,
+                                name: user.stationName,
+                                deviceModel: 'Android Scanner Station POS',
+                                pairingCode: 'PAIR-8841',
+                                pairingKey: 'PAIR-8841',
+                                isPaired: true,
+                                status: 'active',
+                                lastHeartbeat: new Date().toISOString(),
+                                assignedStaffUserId: user.id,
+                                assignedStaffUserName: user.name,
+                              };
+                              setSelectedStationForPairing(matchingStation as ScanPoint);
+                              setSelectedUserForPairing(user);
+                            }}
+                            className="px-2.5 py-1.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900 border border-emerald-700/60 text-emerald-300 hover:text-white font-semibold text-xs transition-colors cursor-pointer inline-flex items-center gap-1"
+                            title="Show Station Pairing QR code & 6-char key for cashier device"
+                          >
+                            <QrCode className="w-3.5 h-3.5" />
+                            <span>Pair Terminal</span>
+                          </button>
                         {/* Reset Password */}
                         <button
                           type="button"
@@ -497,7 +603,7 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
             </table>
           </div>
         </div>
-      )}
+      ); })()}
 
       {/* TAB 2: MULTI-BRANCH HIERARCHY */}
       {activeTab === 'branches' && (
@@ -1233,6 +1339,23 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
         language={language || 'en'}
         stationId={selectedShiftStationId}
       />
+
+      {/* BOSS STATION PAIRING CREDENTIALS MODAL */}
+      {selectedStationForPairing && (
+        <BossStationPairingModal
+          station={selectedStationForPairing}
+          assignedUser={selectedUserForPairing || undefined}
+          onClose={() => {
+            setSelectedStationForPairing(null);
+            setSelectedUserForPairing(null);
+          }}
+          onUpdated={() => {
+            setSelectedStationForPairing(null);
+            setSelectedUserForPairing(null);
+            showToast('Station pairing configuration updated.');
+          }}
+        />
+      )}
     </div>
   );
 };
