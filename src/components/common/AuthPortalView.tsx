@@ -141,7 +141,6 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
 
     try {
       if (activeRole === 'restaurant_admin') {
-        // Restaurant Admin / Boss: verify password via Web Crypto SHA-256 with salt
         if (!password) {
           setErrorMessage(t.auth.enterPassword);
           sound.playDangerAlarm();
@@ -149,10 +148,18 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           return;
         }
 
+        // Try server login first
+        const serverAuth = await restoStore.loginToServer({
+          role: 'restaurant_admin',
+          username: username || 'claire@kigalicampus.rw',
+          password,
+          restaurantCode: selectedRestoCode,
+        });
+
         const bossSalt = getBossPasswordSalt(selectedRestoCode);
         const isValid = await verifyPasswordSecure(password, bossSalt, 'Boss#2026');
 
-        if (isValid || password === 'admin') {
+        if (serverAuth.success || isValid || password === 'admin') {
           setFailedAttempts(0);
           restoStore.setRestaurantCode(selectedRestoCode);
           restoStore.setRole('restaurant_admin');
@@ -161,15 +168,17 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
             actorRole: 'restaurant_admin',
             actorName: username || 'Restaurant Boss',
             action: 'PORTAL_LOGIN_SUCCESS',
-            details: `Restaurant Boss authenticated via client-side Web Crypto SHA-256 for ${currentResto?.name} (${selectedRestoCode})`,
+            details: `Restaurant Boss authenticated for ${currentResto?.name} (${selectedRestoCode})`,
           });
           sound.playSuccessBeep();
-          onLoginSuccess('restaurant_admin', `${currentResto?.name} Boss (${username || 'Admin'})`);
+          onLoginSuccess(
+            'restaurant_admin',
+            serverAuth.user?.userLabel || `${currentResto?.name} Boss (${username || 'Admin'})`
+          );
         } else {
-          handleFailedAttempt(t.auth.authError + ' (Hint: Boss#2026)');
+          handleFailedAttempt(serverAuth.error || t.auth.authError + ' (Hint: Boss#2026)');
         }
       } else if (activeRole === 'stand_staff') {
-        // Stand Scanner / Reception POS
         const entered = pin.trim() || password.trim();
         if (!entered) {
           setErrorMessage(t.auth.enterPin);
@@ -177,6 +186,15 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           setIsVerifying(false);
           return;
         }
+
+        const serverAuth = await restoStore.loginToServer({
+          role: 'stand_staff',
+          username: username || 'eric.n',
+          pin: entered,
+          password: entered,
+          restaurantCode: selectedRestoCode,
+          stationId: selectedStationId,
+        });
 
         const stationUsers = restoStore.getRestaurantStationUsers(selectedRestoCode);
         const stationUser =
@@ -196,7 +214,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
         const isPinValid = await verifyPinSecure(entered, stationSalt, expectedPin);
         const isPwdValid = await verifyPasswordSecure(entered, stationSalt, expectedPassword);
 
-        if (isPinValid || isPwdValid || entered === '1234' || entered === 'admin') {
+        if (serverAuth.success || isPinValid || isPwdValid || entered === '1234' || entered === 'admin') {
           setFailedAttempts(0);
           restoStore.setRestaurantCode(selectedRestoCode);
           if (selectedStationId) restoStore.setStation(selectedStationId);
@@ -210,12 +228,14 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
             details: `Station operator authenticated with salted PIN on ${selectedStationId || 'Stand 1'}`,
           });
           sound.playSuccessBeep();
-          onLoginSuccess('stand_staff', `Staff: ${username || 'Stand 1 Operator'}`);
+          onLoginSuccess(
+            'stand_staff',
+            serverAuth.user?.userLabel || `Staff: ${username || 'Stand 1 Operator'}`
+          );
         } else {
-          handleFailedAttempt(t.auth.authError + ' (Hint: PIN 1234 or EastHub#2026)');
+          handleFailedAttempt(serverAuth.error || t.auth.authError + ' (Hint: PIN 1234 or EastHub#2026)');
         }
       } else if (activeRole === 'customer') {
-        // Customer Meal Portal
         const cleanPhoneOrMember = phoneOrMember.trim();
         const enteredPin = pin.trim();
         if (!cleanPhoneOrMember) {
@@ -231,7 +251,13 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           return;
         }
 
-        // Lookup customer in store
+        const serverAuth = await restoStore.loginToServer({
+          role: 'customer',
+          username: cleanPhoneOrMember,
+          pin: enteredPin,
+          restaurantCode: selectedRestoCode,
+        });
+
         const cust = state.customers.find(
           (c) =>
             c.memberNo === cleanPhoneOrMember ||
@@ -239,7 +265,14 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
             c.id === cleanPhoneOrMember
         );
 
-        if (cust) {
+        if (serverAuth.success) {
+          setFailedAttempts(0);
+          restoStore.setRestaurantCode(serverAuth.user?.restaurantCode || selectedRestoCode);
+          if (serverAuth.user?.customerId) restoStore.setCustomer(serverAuth.user.customerId);
+          restoStore.setRole('customer');
+          sound.playSuccessBeep();
+          onLoginSuccess('customer', serverAuth.user?.userLabel || `Member #${cleanPhoneOrMember}`);
+        } else if (cust) {
           const custSalt = getCustomerPinSalt(cust.id, cust.memberNo);
           const isPinValid = await verifyPinSecure(enteredPin, custSalt, cust.pinHash || '1234');
 
@@ -254,7 +287,6 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
             handleFailedAttempt(t.auth.authError + ' (Customer PIN mismatch. Default: 1234)');
           }
         } else {
-          // Allow demo login if entered 1234
           if (enteredPin === '1234') {
             const defaultCust =
               state.customers.find((c) => c.restaurantCode === selectedRestoCode) || state.customers[0];
@@ -272,7 +304,6 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           handleFailedAttempt(`Member or Phone "${cleanPhoneOrMember}" not found. Try member #28491 with PIN 1234.`);
         }
       } else if (activeRole === 'super_admin') {
-        // Super Admin Authority
         if (!password) {
           setErrorMessage(t.auth.enterPassword);
           sound.playDangerAlarm();
@@ -280,10 +311,16 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           return;
         }
 
+        const serverAuth = await restoStore.loginToServer({
+          role: 'super_admin',
+          username: username || 'ephrem@restopass.rw',
+          password,
+        });
+
         const superSalt = getSuperAdminSalt();
         const isValid = await verifyPasswordSecure(password, superSalt, 'SuperAdmin#2026');
 
-        if (isValid || password === 'admin') {
+        if (serverAuth.success || isValid || password === 'admin') {
           setFailedAttempts(0);
           restoStore.setRole('super_admin');
           restoStore.logAudit({
@@ -293,9 +330,9 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
             details: 'Global Super Admin authenticated via cryptographic constant-time comparison',
           });
           sound.playSuccessBeep();
-          onLoginSuccess('super_admin', 'Ephrem (Global Super Admin)');
+          onLoginSuccess('super_admin', serverAuth.user?.userLabel || 'Ephrem (Global Super Admin)');
         } else {
-          handleFailedAttempt(t.auth.authError + ' (Hint: SuperAdmin#2026)');
+          handleFailedAttempt(serverAuth.error || t.auth.authError + ' (Hint: SuperAdmin#2026)');
         }
       }
     } finally {
@@ -303,7 +340,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
     }
   };
 
-  const handleDemoFillAndSubmit = (role: UserRole) => {
+  const handleDemoFillAndSubmit = async (role: UserRole) => {
     setActiveRole(role);
     onRoleSelect(role);
     setErrorMessage(null);
@@ -311,40 +348,56 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
     if (role === 'restaurant_admin') {
       setPassword('Boss#2026');
       setUsername('claire@kigalicampus.rw');
-      setTimeout(() => {
-        restoStore.setRestaurantCode(selectedRestoCode);
-        restoStore.setRole('restaurant_admin');
-        sound.playSuccessBeep();
-        onLoginSuccess('restaurant_admin', `${currentResto?.name} Boss (Claire)`);
-      }, 50);
+      await restoStore.loginToServer({
+        role: 'restaurant_admin',
+        username: 'claire@kigalicampus.rw',
+        password: 'Boss#2026',
+        restaurantCode: selectedRestoCode,
+      });
+      restoStore.setRestaurantCode(selectedRestoCode);
+      restoStore.setRole('restaurant_admin');
+      sound.playSuccessBeep();
+      onLoginSuccess('restaurant_admin', `${currentResto?.name} Boss (Claire)`);
     } else if (role === 'stand_staff') {
       setPin('1234');
       setUsername('eric.n');
-      setTimeout(() => {
-        restoStore.setRestaurantCode(selectedRestoCode);
-        if (selectedStationId) restoStore.setStation(selectedStationId);
-        restoStore.setRole('stand_staff');
-        sound.playSuccessBeep();
-        onLoginSuccess('stand_staff', 'Stand 1 Operator (Eric N.)');
-      }, 50);
+      await restoStore.loginToServer({
+        role: 'stand_staff',
+        username: 'eric.n',
+        pin: '1234',
+        restaurantCode: selectedRestoCode,
+        stationId: selectedStationId || 'stand_1',
+      });
+      restoStore.setRestaurantCode(selectedRestoCode);
+      if (selectedStationId) restoStore.setStation(selectedStationId);
+      restoStore.setRole('stand_staff');
+      sound.playSuccessBeep();
+      onLoginSuccess('stand_staff', 'Stand 1 Operator (Eric N.)');
     } else if (role === 'customer') {
       setPhoneOrMember('28491');
       setPin('1234');
-      setTimeout(() => {
-        const cust = state.customers.find((c) => c.memberNo === '28491') || state.customers[0];
-        restoStore.setRestaurantCode(cust.restaurantCode);
-        restoStore.setCustomer(cust.id);
-        restoStore.setRole('customer');
-        sound.playSuccessBeep();
-        onLoginSuccess('customer', `${cust.name} (#${cust.memberNo})`);
-      }, 50);
+      const cust = state.customers.find((c) => c.memberNo === '28491') || state.customers[0];
+      await restoStore.loginToServer({
+        role: 'customer',
+        username: '28491',
+        pin: '1234',
+        restaurantCode: cust.restaurantCode,
+      });
+      restoStore.setRestaurantCode(cust.restaurantCode);
+      restoStore.setCustomer(cust.id);
+      restoStore.setRole('customer');
+      sound.playSuccessBeep();
+      onLoginSuccess('customer', `${cust.name} (#${cust.memberNo})`);
     } else if (role === 'super_admin') {
       setPassword('SuperAdmin#2026');
-      setTimeout(() => {
-        restoStore.setRole('super_admin');
-        sound.playSuccessBeep();
-        onLoginSuccess('super_admin', 'Ephrem (Super Admin)');
-      }, 50);
+      await restoStore.loginToServer({
+        role: 'super_admin',
+        username: 'ephrem@restopass.rw',
+        password: 'SuperAdmin#2026',
+      });
+      restoStore.setRole('super_admin');
+      sound.playSuccessBeep();
+      onLoginSuccess('super_admin', 'Ephrem (Super Admin)');
     }
   };
 

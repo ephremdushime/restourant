@@ -4,12 +4,14 @@
  */
 
 // Master system secret used to derive restaurant keys (in production held in secure env)
-const MASTER_KEY = 'RESTOPASS_RWANDA_MASTER_2026_SUPER_ADMIN_EPHREM';
+export const MASTER_KEY =
+  (typeof process !== 'undefined' && process.env?.RESTOPASS_MASTER_SECRET) ||
+  'RESTOPASS_RWANDA_MASTER_2026_SUPER_ADMIN_EPHREM';
 
 /**
  * Fast synchronous SHA-256 and HMAC implementation for instant UI & QR generation
  */
-function sha256(ascii: string): string {
+export function sha256(ascii: string): string {
   function rightRotate(value: number, amount: number) {
     return (value >>> amount) | (value << (32 - amount));
   }
@@ -86,7 +88,7 @@ function sha256(ascii: string): string {
   return result;
 }
 
-function hmacSha256(key: string, message: string): string {
+export function hmacSha256(key: string, message: string): string {
   const blockSize = 64;
   let keyFormatted = key;
   if (keyFormatted.length > blockSize) {

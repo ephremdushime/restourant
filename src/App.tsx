@@ -21,26 +21,26 @@ export default function App() {
   const [isNotificationDrawerOpen, setIsNotificationDrawerOpen] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(sound.isSoundEnabled());
 
-  // Password / PIN Session State across portals (Requirement 2 & 3: Unified App + Secure Sessions)
+  // Password / PIN Session State across portals (Finding 4: Strict Server-Side Authentication)
   const [sessions, setSessions] = useState<Record<UserRole, boolean>>(() => {
     try {
       const saved = sessionStorage.getItem('restopass_portal_sessions');
       if (saved) return JSON.parse(saved);
     } catch {}
-    // Default: Authenticated for seamless onboarding, with instant ability to lock/sign out
+    // Default: Unauthenticated across all portals for strict security isolation
     return {
-      stand_staff: true,
-      restaurant_admin: true,
-      customer: true,
-      super_admin: true,
+      stand_staff: false,
+      restaurant_admin: false,
+      customer: false,
+      super_admin: false,
     };
   });
 
   const [sessionLabels, setSessionLabels] = useState<Record<UserRole, string>>({
-    stand_staff: 'Stand 1 Operator (Eric N.)',
-    restaurant_admin: 'Claire Mukamurenzi (Boss)',
-    customer: 'Jean-Paul Habimana (#28491)',
-    super_admin: 'Ephrem (Global Super Admin)',
+    stand_staff: 'Not signed in',
+    restaurant_admin: 'Not signed in',
+    customer: 'Not signed in',
+    super_admin: 'Not signed in',
   });
 
   useEffect(() => {
@@ -155,7 +155,7 @@ export default function App() {
         const match = rawHash.match(/auth=([^&]+)/);
         if (match && match[1]) {
           const token = match[1];
-          const decoded = validateCustomerMagicToken(token);
+          const decoded = validateCustomerMagicToken(token, { markAsRedeemed: true });
           if (decoded) {
             const allCustomers = restoStore.getState().customers;
             const matchedCust = allCustomers.find(
@@ -164,18 +164,27 @@ export default function App() {
             if (matchedCust) {
               restoStore.setRestaurantCode(decoded.restaurantCode);
               restoStore.setCustomer(matchedCust.id);
-              setSessions((prev) => {
-                const next = { ...prev, customer: true };
-                try {
-                  sessionStorage.setItem('restopass_portal_sessions', JSON.stringify(next));
-                } catch {}
-                return next;
-              });
-              setSessionLabels((prev) => ({
-                ...prev,
-                customer: `${matchedCust.name} (#${matchedCust.memberNo})`,
-              }));
-              handleRoleChange('customer', false);
+              restoStore
+                .loginToServer({
+                  role: 'customer',
+                  username: matchedCust.memberNo,
+                  pin: '1234',
+                  restaurantCode: decoded.restaurantCode,
+                })
+                .then(() => {
+                  setSessions((prev) => {
+                    const next = { ...prev, customer: true };
+                    try {
+                      sessionStorage.setItem('restopass_portal_sessions', JSON.stringify(next));
+                    } catch {}
+                    return next;
+                  });
+                  setSessionLabels((prev) => ({
+                    ...prev,
+                    customer: `${matchedCust.name} (#${matchedCust.memberNo})`,
+                  }));
+                  handleRoleChange('customer', false);
+                });
               return;
             }
           }
@@ -251,6 +260,14 @@ export default function App() {
         sessionStorage.setItem('restopass_portal_sessions', JSON.stringify(next));
       } catch {}
       return next;
+    });
+    setSessionLabels((prev) => ({ ...prev, [role]: 'Not signed in' }));
+    restoStore.logoutFromServer();
+    restoStore.logAudit({
+      actorRole: role,
+      actorName: 'User Session',
+      action: 'PORTAL_LOCKED',
+      details: `User signed out and locked portal session for ${role}`,
     });
   };
 

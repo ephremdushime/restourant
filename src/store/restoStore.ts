@@ -1290,23 +1290,90 @@ export class RestoStore {
   private state: AppState;
   private listeners: Set<() => void> = new Set();
   private isSyncingWithServer = false;
+  private authToken: string | null = null;
 
   constructor() {
     this.state = this.loadState();
     if (typeof window !== 'undefined') {
+      try {
+        this.authToken = sessionStorage.getItem('restopass_active_token') || null;
+      } catch {}
       setTimeout(() => {
-        this.pullStateFromServer();
+        if (this.authToken) {
+          this.pullStateFromServer();
+        }
       }, 100);
     }
   }
 
+  public setAuthToken(token: string | null): void {
+    this.authToken = token;
+    if (typeof window !== 'undefined') {
+      try {
+        if (token) {
+          sessionStorage.setItem('restopass_active_token', token);
+        } else {
+          sessionStorage.removeItem('restopass_active_token');
+        }
+      } catch {}
+    }
+  }
+
+  public getAuthToken(): string | null {
+    return this.authToken;
+  }
+
+  public async loginToServer(params: {
+    role: string;
+    username?: string;
+    password?: string;
+    pin?: string;
+    restaurantCode?: string;
+    stationId?: string;
+  }): Promise<{ success: boolean; token?: string; user?: any; error?: string }> {
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.token) {
+        this.setAuthToken(data.token);
+        this.pullStateFromServer();
+        return { success: true, token: data.token, user: data.user };
+      }
+      return { success: false, error: data.error || 'Authentication failed' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error during login' };
+    }
+  }
+
+  public async logoutFromServer(): Promise<void> {
+    if (this.authToken) {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.authToken}`,
+          },
+        });
+      } catch {}
+    }
+    this.setAuthToken(null);
+  }
+
   public async pushStateToServer(): Promise<void> {
-    if (typeof window === 'undefined' || !navigator.onLine || this.isSyncingWithServer) return;
+    if (typeof window === 'undefined' || !navigator.onLine || this.isSyncingWithServer || !this.authToken) return;
     this.isSyncingWithServer = true;
     try {
       const res = await fetch('/api/sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.authToken}`,
+        },
         body: JSON.stringify({ fullState: this.state }),
       });
       if (res.ok) {
@@ -1314,6 +1381,9 @@ export class RestoStore {
         if (data.serverState) {
           this.mergeServerState(data.serverState);
         }
+      } else if (res.status === 401) {
+        // Token expired or invalid
+        this.setAuthToken(null);
       }
     } catch {
       // offline fallback - ignore network errors
@@ -1323,17 +1393,20 @@ export class RestoStore {
   }
 
   public async pullStateFromServer(): Promise<void> {
-    if (typeof window === 'undefined' || !navigator.onLine || this.isSyncingWithServer) return;
+    if (typeof window === 'undefined' || !navigator.onLine || this.isSyncingWithServer || !this.authToken) return;
     try {
-      const res = await fetch('/api/state');
+      const res = await fetch('/api/state', {
+        headers: {
+          Authorization: `Bearer ${this.authToken}`,
+        },
+      });
       if (res.ok) {
         const data = await res.json();
         if (data.hasServerState && data.state) {
           this.mergeServerState(data.state);
-        } else if (!data.hasServerState) {
-          // Push initial local state so server initializes
-          this.pushStateToServer();
         }
+      } else if (res.status === 401) {
+        this.setAuthToken(null);
       }
     } catch {
       // offline
