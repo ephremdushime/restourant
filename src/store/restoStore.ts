@@ -32,6 +32,11 @@ import {
   PaymentMethod,
   ShiftRecord,
   CashierSession,
+  StudentSubscriptionStatus,
+  StudentSubscriptionSettings,
+  CustomerSubscription,
+  StudentSubscriptionPayment,
+  StudentEntitlementResult,
 } from '../types';
 import {
   deriveRestaurantKey,
@@ -138,6 +143,10 @@ export interface AppState {
   syncCommands: SyncCommand[];
   auditLogs: AuditLogItem[];
   notifications: AppNotification[];
+
+  studentSubscriptionSettings: StudentSubscriptionSettings;
+  customerSubscriptions: CustomerSubscription[];
+  studentSubscriptionPayments: StudentSubscriptionPayment[];
 }
 
 function getInitialState(): AppState {
@@ -1287,6 +1296,19 @@ function getInitialState(): AppState {
       syncCommands: [],
       auditLogs,
       notifications: initialNotifications,
+
+      studentSubscriptionSettings: {
+        enabled: false, // Disabled at launch per specification
+        priceRwf: 500, // Exactly 500 RWF per month
+        currency: 'RWF',
+        period: 'monthly',
+        graceDays: 3, // 3 calendar days (72 hours)
+        requireForTransfers: true,
+        requireForDashboard: true,
+        updatedAt: now,
+      },
+      customerSubscriptions: [],
+      studentSubscriptionPayments: [],
     };
   }
 
@@ -3195,9 +3217,21 @@ export class RestoStore {
     recipientIdentifier: string; // member number or phone
     plates: number;
     pin: string;
-  }): { success: boolean; error?: string } {
+  }): { success: boolean; error?: string; requiresSubscription?: boolean } {
     const sender = this.state.customers.find((c) => c.id === data.senderCustomerId);
     if (!sender) return { success: false, error: 'Sender account not found' };
+
+    // Student Subscription Entitlement Check (when feature is enabled by admin)
+    if (this.state.studentSubscriptionSettings?.enabled && this.state.studentSubscriptionSettings?.requireForTransfers) {
+      const entitlement = this.checkStudentEntitlement(sender.id, 'digital_plate_transfer');
+      if (!entitlement.allowed) {
+        return {
+          success: false,
+          error: entitlement.reason || 'Digital plate transfers require an active student subscription (500 RWF/mo).',
+          requiresSubscription: true,
+        };
+      }
+    }
 
     if (data.pin !== sender.pinHash) {
       return { success: false, error: 'Incorrect 4-digit PIN. Please re-enter.' };
@@ -5270,6 +5304,425 @@ export class RestoStore {
     this.scheduleSaveState();
     this.notify();
     return resto;
+  }
+
+  // ----------------------------------------------------
+  // RESTOPASS STUDENT DIGITAL SUBSCRIPTION & MONETIZATION
+  // ----------------------------------------------------
+
+  public getStudentSubscriptionSettings(): StudentSubscriptionSettings {
+    if (!this.state.studentSubscriptionSettings) {
+      this.state.studentSubscriptionSettings = {
+        enabled: false,
+        priceRwf: 500,
+        currency: 'RWF',
+        period: 'monthly',
+        graceDays: 3,
+        requireForTransfers: true,
+        requireForDashboard: true,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    return this.state.studentSubscriptionSettings;
+  }
+
+  public updateStudentSubscriptionSettings(
+    updates: Partial<StudentSubscriptionSettings>,
+    actorName = 'Platform Admin'
+  ): StudentSubscriptionSettings {
+    const current = this.getStudentSubscriptionSettings();
+    const updated: StudentSubscriptionSettings = {
+      ...current,
+      ...updates,
+      priceRwf: 500, // Price is strictly 500 RWF per specification
+      currency: 'RWF',
+      period: 'monthly',
+      updatedAt: new Date().toISOString(),
+      updatedBy: actorName,
+    };
+    this.state.studentSubscriptionSettings = updated;
+    this.logAudit({
+      actorRole: 'super_admin',
+      actorName,
+      action: 'STUDENT_SUBSCRIPTION_SETTINGS_UPDATED',
+      details: `Updated student subscription policy: enabled=${updated.enabled}, price=${updated.priceRwf} RWF, graceDays=${updated.graceDays}`,
+    });
+    this.scheduleSaveState();
+    this.notify();
+    return updated;
+  }
+
+  public getCustomerSubscription(customerId: string): CustomerSubscription | null {
+    if (!this.state.customerSubscriptions) this.state.customerSubscriptions = [];
+    const sub = this.state.customerSubscriptions.find((s) => s.customerId === customerId);
+    if (!sub) return null;
+
+    // Evaluate expiration & grace period transitions dynamically
+    const now = Date.now();
+    if (sub.status === 'active' && sub.currentPeriodEnd) {
+      const endMs = new Date(sub.currentPeriodEnd).getTime();
+      const graceMs = sub.gracePeriodEnd ? new Date(sub.gracePeriodEnd).getTime() : endMs + 3 * 24 * 3600 * 1000;
+      if (now > graceMs) {
+        sub.status = 'expired';
+        sub.updatedAt = new Date().toISOString();
+      } else if (now > endMs) {
+        sub.status = 'grace_period';
+        sub.updatedAt = new Date().toISOString();
+      }
+    }
+    return sub;
+  }
+
+  public checkStudentEntitlement(
+    customerId: string,
+    feature: 'customer_dashboard' | 'digital_plate_transfer' | 'customer_transaction_history'
+  ): StudentEntitlementResult {
+    const settings = this.getStudentSubscriptionSettings();
+
+    // 1. If feature flag is disabled at launch: All existing rules apply without subscription requirement
+    if (!settings.enabled) {
+      return {
+        allowed: true,
+        feature,
+        status: 'inactive',
+        inGracePeriod: false,
+        enforcementEnabled: false,
+        reason: 'Student subscription monetization is disabled at launch',
+      };
+    }
+
+    // 2. Look up customer's authoritative subscription
+    const sub = this.getCustomerSubscription(customerId);
+    if (!sub) {
+      return {
+        allowed: false,
+        feature,
+        status: 'inactive',
+        inGracePeriod: false,
+        enforcementEnabled: true,
+        reason: 'An active student subscription (500 RWF/mo) is required for this digital feature.',
+      };
+    }
+
+    // 3. Complimentary access
+    if (sub.status === 'complimentary') {
+      return {
+        allowed: true,
+        feature,
+        status: 'complimentary',
+        inGracePeriod: false,
+        enforcementEnabled: true,
+        expiresAt: sub.currentPeriodEnd,
+      };
+    }
+
+    // 4. Active subscription
+    if (sub.status === 'active') {
+      return {
+        allowed: true,
+        feature,
+        status: 'active',
+        inGracePeriod: false,
+        enforcementEnabled: true,
+        expiresAt: sub.currentPeriodEnd,
+        gracePeriodEnd: sub.gracePeriodEnd,
+      };
+    }
+
+    // 5. Grace period (3 calendar days / 72 hours after paid period)
+    if (sub.status === 'grace_period') {
+      return {
+        allowed: true,
+        feature,
+        status: 'grace_period',
+        inGracePeriod: true,
+        enforcementEnabled: true,
+        expiresAt: sub.currentPeriodEnd,
+        gracePeriodEnd: sub.gracePeriodEnd,
+        reason: 'Subscription is in 3-day grace period. Please renew to keep uninterrupted digital access.',
+      };
+    }
+
+    // 6. Expired / cancelled / pending
+    return {
+      allowed: false,
+      feature,
+      status: sub.status,
+      inGracePeriod: false,
+      enforcementEnabled: true,
+      reason:
+        sub.status === 'expired'
+          ? 'Your subscription and 3-day grace period have expired. Please renew for 500 RWF/mo.'
+          : sub.status === 'pending_payment'
+          ? 'Your payment is pending confirmation. Access will activate once verified.'
+          : 'An active student subscription is required.',
+    };
+  }
+
+  public initiateStudentCheckout(params: {
+    customerId: string;
+    phoneNumber: string;
+    provider: 'mtn_momo' | 'airtel_money';
+  }): { success: boolean; payment?: StudentSubscriptionPayment; instructions?: string; error?: string } {
+    const cust = this.state.customers.find((c) => c.id === params.customerId);
+    if (!cust) return { success: false, error: 'Customer not found' };
+
+    const cleanPhone = params.phoneNumber.trim();
+    if (!cleanPhone || cleanPhone.length < 8) {
+      return { success: false, error: 'Please enter a valid Mobile Money phone number' };
+    }
+
+    if (!this.state.studentSubscriptionPayments) this.state.studentSubscriptionPayments = [];
+    if (!this.state.customerSubscriptions) this.state.customerSubscriptions = [];
+
+    const now = new Date().toISOString();
+    const internalReference = `SUB-MOMO-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+    // Get or create subscription record in pending status
+    let sub = this.state.customerSubscriptions.find((s) => s.customerId === cust.id);
+    if (!sub) {
+      sub = {
+        id: `sub_${cust.id}_${Date.now()}`,
+        customerId: cust.id,
+        memberNo: cust.memberNo,
+        restaurantCode: cust.restaurantCode,
+        status: 'pending_payment',
+        planName: 'Student Digital Pass',
+        priceRwf: 500, // Exactly 500 RWF
+        currency: 'RWF',
+        paymentMethod: params.provider,
+        lastPaymentRef: internalReference,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.state.customerSubscriptions.push(sub);
+    } else {
+      sub.status = 'pending_payment';
+      sub.lastPaymentRef = internalReference;
+      sub.paymentMethod = params.provider;
+      sub.updatedAt = now;
+    }
+
+    const payment: StudentSubscriptionPayment = {
+      id: `spay_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      subscriptionId: sub.id,
+      customerId: cust.id,
+      memberNo: cust.memberNo,
+      restaurantCode: cust.restaurantCode,
+      internalReference,
+      provider: params.provider,
+      phoneNumber: cleanPhone,
+      amountRwf: 500, // Strictly 500 RWF
+      currency: 'RWF',
+      status: 'pending',
+      initiatedAt: now,
+    };
+
+    this.state.studentSubscriptionPayments.unshift(payment);
+    this.scheduleSaveState();
+    this.notify();
+
+    const providerName = params.provider === 'mtn_momo' ? 'MTN Mobile Money (*182#)' : 'Airtel Money (*500#)';
+    return {
+      success: true,
+      payment,
+      instructions: `USSD payment push sent via ${providerName} to ${cleanPhone}. Please enter your PIN on your phone to complete the 500 RWF subscription.`,
+    };
+  }
+
+  public verifyStudentPayment(
+    internalReference: string,
+    providerTransactionId?: string
+  ): { success: boolean; subscription?: CustomerSubscription; error?: string } {
+    if (!this.state.studentSubscriptionPayments) return { success: false, error: 'No payments found' };
+    const payment = this.state.studentSubscriptionPayments.find(
+      (p) => p.internalReference === internalReference
+    );
+    if (!payment) return { success: false, error: 'Payment reference not found' };
+
+    // Idempotency check: Already verified payments do not re-extend
+    if (payment.status === 'verified') {
+      const sub = this.getCustomerSubscription(payment.customerId);
+      return { success: true, subscription: sub || undefined };
+    }
+
+    const nowMs = Date.now();
+    const periodEndMs = nowMs + 30 * 24 * 3600 * 1000; // 30 calendar days
+    const graceEndMs = periodEndMs + (this.state.studentSubscriptionSettings?.graceDays || 3) * 24 * 3600 * 1000; // +72h grace
+
+    payment.status = 'verified';
+    payment.verifiedAt = new Date(nowMs).toISOString();
+    payment.providerTransactionId = providerTransactionId || `TRX_${Date.now()}`;
+
+    let sub = this.state.customerSubscriptions.find((s) => s.id === payment.subscriptionId);
+    if (!sub) {
+      sub = {
+        id: payment.subscriptionId,
+        customerId: payment.customerId,
+        memberNo: payment.memberNo,
+        restaurantCode: payment.restaurantCode,
+        status: 'active',
+        planName: 'Student Digital Pass',
+        priceRwf: 500,
+        currency: 'RWF',
+        currentPeriodStart: new Date(nowMs).toISOString(),
+        currentPeriodEnd: new Date(periodEndMs).toISOString(),
+        gracePeriodEnd: new Date(graceEndMs).toISOString(),
+        cancelAtPeriodEnd: false,
+        paymentMethod: payment.provider,
+        lastPaymentRef: payment.internalReference,
+        createdAt: new Date(nowMs).toISOString(),
+        updatedAt: new Date(nowMs).toISOString(),
+      };
+      this.state.customerSubscriptions.push(sub);
+    } else {
+      sub.status = 'active';
+      sub.priceRwf = 500;
+      sub.currency = 'RWF';
+      sub.currentPeriodStart = new Date(nowMs).toISOString();
+      sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
+      sub.gracePeriodEnd = new Date(graceEndMs).toISOString();
+      sub.cancelAtPeriodEnd = false;
+      sub.paymentMethod = payment.provider;
+      sub.lastPaymentRef = payment.internalReference;
+      sub.updatedAt = new Date(nowMs).toISOString();
+    }
+
+    this.logAudit({
+      restaurantCode: payment.restaurantCode,
+      actorRole: 'customer',
+      actorName: payment.memberNo,
+      action: 'STUDENT_SUBSCRIPTION_ACTIVATED',
+      details: `Activated student subscription for #${payment.memberNo} via ${payment.provider.toUpperCase()} (Ref: ${payment.internalReference}, Amount: 500 RWF). Valid until ${new Date(periodEndMs).toLocaleDateString()}`,
+    });
+
+    this.sendNotification({
+      restaurantCode: payment.restaurantCode,
+      target: payment.customerId,
+      senderRole: 'system',
+      senderName: 'RestoPass Subscription Authority',
+      type: 'system_broadcast',
+      title: 'Student Digital Pass Active! 🌟',
+      message: 'Your 500 RWF monthly digital subscription is active! Digital plate transfers and online pass features are unlocked for 30 days.',
+      priority: 'important',
+      actionTab: 'my_card',
+    });
+
+    this.scheduleSaveState();
+    this.notify();
+    return { success: true, subscription: sub };
+  }
+
+  public cancelStudentSubscription(customerId: string): { success: boolean; error?: string } {
+    const sub = this.getCustomerSubscription(customerId);
+    if (!sub) return { success: false, error: 'Subscription not found' };
+
+    sub.cancelAtPeriodEnd = true;
+    sub.updatedAt = new Date().toISOString();
+
+    this.logAudit({
+      restaurantCode: sub.restaurantCode,
+      actorRole: 'customer',
+      actorName: sub.memberNo,
+      action: 'STUDENT_SUBSCRIPTION_CANCEL_SCHEDULED',
+      details: `Scheduled cancellation for #${sub.memberNo}. Digital access remains active until ${sub.currentPeriodEnd ? new Date(sub.currentPeriodEnd).toLocaleDateString() : 'end of period'}.`,
+    });
+
+    this.scheduleSaveState();
+    this.notify();
+    return { success: true };
+  }
+
+  public grantComplimentarySubscription(params: {
+    customerId: string;
+    reason: string;
+    durationDays?: number;
+    grantedBy?: string;
+  }): { success: boolean; subscription?: CustomerSubscription; error?: string } {
+    if (!params.reason || !params.reason.trim()) {
+      return { success: false, error: 'A mandatory reason is required to grant complimentary access.' };
+    }
+
+    const cust = this.state.customers.find((c) => c.id === params.customerId);
+    if (!cust) return { success: false, error: 'Customer not found' };
+
+    if (!this.state.customerSubscriptions) this.state.customerSubscriptions = [];
+
+    const nowMs = Date.now();
+    const days = params.durationDays || 30;
+    const periodEndMs = nowMs + days * 24 * 3600 * 1000;
+    const graceEndMs = periodEndMs + 3 * 24 * 3600 * 1000;
+
+    let sub = this.state.customerSubscriptions.find((s) => s.customerId === cust.id);
+    if (!sub) {
+      sub = {
+        id: `sub_${cust.id}_${Date.now()}`,
+        customerId: cust.id,
+        memberNo: cust.memberNo,
+        restaurantCode: cust.restaurantCode,
+        status: 'complimentary',
+        planName: 'Complimentary Student Pass',
+        priceRwf: 0,
+        currency: 'RWF',
+        currentPeriodStart: new Date(nowMs).toISOString(),
+        currentPeriodEnd: new Date(periodEndMs).toISOString(),
+        gracePeriodEnd: new Date(graceEndMs).toISOString(),
+        cancelAtPeriodEnd: false,
+        paymentMethod: 'complimentary',
+        complimentaryReason: params.reason.trim(),
+        complimentaryGrantedBy: params.grantedBy || 'Platform Administrator',
+        createdAt: new Date(nowMs).toISOString(),
+        updatedAt: new Date(nowMs).toISOString(),
+      };
+      this.state.customerSubscriptions.push(sub);
+    } else {
+      sub.status = 'complimentary';
+      sub.planName = 'Complimentary Student Pass';
+      sub.currentPeriodStart = new Date(nowMs).toISOString();
+      sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
+      sub.gracePeriodEnd = new Date(graceEndMs).toISOString();
+      sub.complimentaryReason = params.reason.trim();
+      sub.complimentaryGrantedBy = params.grantedBy || 'Platform Administrator';
+      sub.updatedAt = new Date(nowMs).toISOString();
+    }
+
+    this.logAudit({
+      restaurantCode: cust.restaurantCode,
+      actorRole: 'super_admin',
+      actorName: params.grantedBy || 'Platform Administrator',
+      action: 'COMPLIMENTARY_STUDENT_SUBSCRIPTION_GRANTED',
+      details: `Granted ${days}-day complimentary student pass to #${cust.memberNo} (${cust.name}). Reason: "${params.reason.trim()}"`,
+    });
+
+    this.scheduleSaveState();
+    this.notify();
+    return { success: true, subscription: sub };
+  }
+
+  public revokeComplimentarySubscription(
+    customerId: string,
+    reason: string,
+    revokedBy = 'Platform Administrator'
+  ): { success: boolean; error?: string } {
+    const sub = this.getCustomerSubscription(customerId);
+    if (!sub) return { success: false, error: 'Subscription not found' };
+
+    sub.status = 'expired';
+    sub.currentPeriodEnd = new Date().toISOString();
+    sub.gracePeriodEnd = new Date().toISOString();
+    sub.updatedAt = new Date().toISOString();
+
+    this.logAudit({
+      restaurantCode: sub.restaurantCode,
+      actorRole: 'super_admin',
+      actorName: revokedBy,
+      action: 'COMPLIMENTARY_STUDENT_SUBSCRIPTION_REVOKED',
+      details: `Revoked complimentary pass for #${sub.memberNo}. Reason: "${reason}"`,
+    });
+
+    this.scheduleSaveState();
+    this.notify();
+    return { success: true };
   }
 }
 

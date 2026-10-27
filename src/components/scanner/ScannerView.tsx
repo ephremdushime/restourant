@@ -389,7 +389,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-xs">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
             <span className="text-[11px] font-mono text-slate-300 font-bold">
-              {currentStation?.pairingKey || currentStation?.pairingCode || 'PAIR-8841'}
+              {currentStation?.pairingKey || currentStation?.pairingCode || 'UNPAIRED'}
             </span>
             <button
               type="button"

@@ -31,8 +31,7 @@ export const BossStationPairingModal: React.FC<BossStationPairingModalProps> = (
   onClose,
   onUpdated,
 }) => {
-  const currentResto = restoStore.getCurrentRestaurant();
-  const pairingKey = station.pairingKey || station.pairingCode || 'PAIR-8841';
+  const pairingKey = station.pairingKey || station.pairingCode || station.id.replace(/[^A-Za-z0-9]/g, '').slice(0, 8).toUpperCase();
   const isCurrentlyPaired = station.isPaired !== false;
 
   const [copiedKey, setCopiedKey] = useState(false);

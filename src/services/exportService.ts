@@ -93,11 +93,12 @@ export function getEnrichedTransactions(
 
 function escapeCsvField(field: any): string {
   if (field === null || field === undefined) return '""';
-  const str = String(field);
-  if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
-    return `"${str.replace(/"/g, '""')}"`;
+  let str = String(field);
+  // Formula Injection Prevention (Finding V-15): prefix formula characters with single quote
+  if (/^[=+\-@\t\r]/.test(str)) {
+    str = `'${str}`;
   }
-  return `"${str}"`;
+  return `"${str.replace(/"/g, '""')}"`;
 }
 
 /**

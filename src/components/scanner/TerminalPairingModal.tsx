@@ -71,7 +71,13 @@ export const TerminalPairingModal: React.FC<TerminalPairingModalProps> = ({
     setErrorMessage(null);
 
     const targetStation = stationToPick || availableStations[0];
-    const key = targetStation?.pairingKey || targetStation?.pairingCode || 'PAIR-8841';
+    const key = targetStation?.pairingKey || targetStation?.pairingCode;
+
+    if (!key) {
+      setIsSimulatingCamera(false);
+      setErrorMessage('No active pairing key found for this station. Please configure one in Boss Settings.');
+      return;
+    }
 
     let progress = 10;
     const interval = setInterval(() => {
@@ -311,7 +317,7 @@ export const TerminalPairingModal: React.FC<TerminalPairingModalProps> = ({
                         key={stn.id}
                         type="button"
                         onClick={() => {
-                          const k = stn.pairingKey || stn.pairingCode || 'PAIR-8841';
+                          const k = stn.pairingKey || stn.pairingCode || '';
                           setInputKey(k);
                         }}
                         className="p-2 rounded-lg bg-slate-950 border border-slate-800 hover:border-slate-600 text-left cursor-pointer transition-colors"

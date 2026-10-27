@@ -159,7 +159,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
         const bossSalt = getBossPasswordSalt(selectedRestoCode);
         const isValid = await verifyPasswordSecure(password, bossSalt, 'Boss#2026');
 
-        if (serverAuth.success || isValid || password === 'admin') {
+        if (serverAuth.success || isValid) {
           setFailedAttempts(0);
           restoStore.setRestaurantCode(selectedRestoCode);
           restoStore.setRole('restaurant_admin');
@@ -176,7 +176,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
             serverAuth.user?.userLabel || `${currentResto?.name} Boss (${username || 'Admin'})`
           );
         } else {
-          handleFailedAttempt(serverAuth.error || t.auth.authError + ' (Hint: Boss#2026)');
+          handleFailedAttempt(serverAuth.error || t.auth.authError);
         }
       } else if (activeRole === 'stand_staff') {
         const entered = pin.trim() || password.trim();
@@ -214,7 +214,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
         const isPinValid = await verifyPinSecure(entered, stationSalt, expectedPin);
         const isPwdValid = await verifyPasswordSecure(entered, stationSalt, expectedPassword);
 
-        if (serverAuth.success || isPinValid || isPwdValid || entered === '1234' || entered === 'admin') {
+        if (serverAuth.success || isPinValid || isPwdValid) {
           setFailedAttempts(0);
           restoStore.setRestaurantCode(selectedRestoCode);
           if (selectedStationId) restoStore.setStation(selectedStationId);
@@ -233,7 +233,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
             serverAuth.user?.userLabel || `Staff: ${username || 'Stand 1 Operator'}`
           );
         } else {
-          handleFailedAttempt(serverAuth.error || t.auth.authError + ' (Hint: PIN 1234 or EastHub#2026)');
+          handleFailedAttempt(serverAuth.error || t.auth.authError);
         }
       } else if (activeRole === 'customer') {
         const cleanPhoneOrMember = phoneOrMember.trim();
@@ -276,7 +276,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           const custSalt = getCustomerPinSalt(cust.id, cust.memberNo);
           const isPinValid = await verifyPinSecure(enteredPin, custSalt, cust.pinHash || '1234');
 
-          if (isPinValid || enteredPin === '1234') {
+          if (isPinValid) {
             setFailedAttempts(0);
             restoStore.setRestaurantCode(cust.restaurantCode);
             restoStore.setCustomer(cust.id);
@@ -284,24 +284,10 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
             sound.playSuccessBeep();
             onLoginSuccess('customer', `${cust.name} (#${cust.memberNo})`);
           } else {
-            handleFailedAttempt(t.auth.authError + ' (Customer PIN mismatch. Default: 1234)');
+            handleFailedAttempt(t.auth.authError);
           }
         } else {
-          if (enteredPin === '1234') {
-            const defaultCust =
-              state.customers.find((c) => c.restaurantCode === selectedRestoCode) || state.customers[0];
-            if (defaultCust) {
-              setFailedAttempts(0);
-              restoStore.setRestaurantCode(defaultCust.restaurantCode);
-              restoStore.setCustomer(defaultCust.id);
-              restoStore.setRole('customer');
-              sound.playSuccessBeep();
-              onLoginSuccess('customer', `${defaultCust.name} (#${defaultCust.memberNo})`);
-              setIsVerifying(false);
-              return;
-            }
-          }
-          handleFailedAttempt(`Member or Phone "${cleanPhoneOrMember}" not found. Try member #28491 with PIN 1234.`);
+          handleFailedAttempt('Invalid Member Number, Phone, or PIN');
         }
       } else if (activeRole === 'super_admin') {
         if (!password) {
@@ -320,7 +306,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
         const superSalt = getSuperAdminSalt();
         const isValid = await verifyPasswordSecure(password, superSalt, 'SuperAdmin#2026');
 
-        if (serverAuth.success || isValid || password === 'admin') {
+        if (serverAuth.success || isValid) {
           setFailedAttempts(0);
           restoStore.setRole('super_admin');
           restoStore.logAudit({
@@ -332,7 +318,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           sound.playSuccessBeep();
           onLoginSuccess('super_admin', serverAuth.user?.userLabel || 'Ephrem (Global Super Admin)');
         } else {
-          handleFailedAttempt(serverAuth.error || t.auth.authError + ' (Hint: SuperAdmin#2026)');
+          handleFailedAttempt(serverAuth.error || t.auth.authError);
         }
       }
     } finally {
@@ -544,12 +530,9 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
               </div>
 
               <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="font-semibold text-slate-300">
-                    {t.auth.password}
-                  </label>
-                  <span className="text-[10px] text-emerald-400 font-mono">Default: Boss#2026</span>
-                </div>
+                <label className="font-semibold text-slate-300">
+                  {t.auth.password}
+                </label>
                 <div className="relative">
                   <input
                     type={showPassword ? 'text' : 'password'}
@@ -617,10 +600,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
               </div>
 
               <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="font-semibold text-slate-300">{t.auth.pin}</label>
-                  <span className="text-[10px] text-emerald-400 font-mono">Default: 1234</span>
-                </div>
+                <label className="font-semibold text-slate-300">{t.auth.pin}</label>
                 <input
                   type="password"
                   maxLength={6}
@@ -637,12 +617,9 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           {activeRole === 'customer' && (
             <>
               <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="font-semibold text-slate-300">
-                    Phone Number or Member No (#)
-                  </label>
-                  <span className="text-[10px] text-emerald-400 font-mono">Test: #28491</span>
-                </div>
+                <label className="font-semibold text-slate-300">
+                  Phone Number or Member No (#)
+                </label>
                 <input
                   type="text"
                   value={phoneOrMember}
@@ -653,10 +630,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
               </div>
 
               <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="font-semibold text-slate-300">{t.auth.pin}</label>
-                  <span className="text-[10px] text-emerald-400 font-mono">Default PIN: 1234</span>
-                </div>
+                <label className="font-semibold text-slate-300">{t.auth.pin}</label>
                 <input
                   type="password"
                   maxLength={4}
@@ -684,10 +658,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
               </div>
 
               <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="font-semibold text-slate-300">Master Authority Password</label>
-                  <span className="text-[10px] text-amber-400 font-mono">Default: SuperAdmin#2026</span>
-                </div>
+                <label className="font-semibold text-slate-300">Master Authority Password</label>
                 <div className="relative">
                   <input
                     type={showPassword ? 'text' : 'password'}

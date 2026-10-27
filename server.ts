@@ -48,6 +48,28 @@ if (fs.existsSync(DB_FILE)) {
 }
 
 /**
+ * Ensures student monetization defaults exist in state per specification
+ */
+function ensureServerDbDefaults(state: any) {
+  if (!state) return;
+  if (!state.studentSubscriptionSettings) {
+    state.studentSubscriptionSettings = {
+      enabled: false, // strictly disabled at launch per spec
+      priceRwf: 500, // exact 500 RWF per month
+      currency: 'RWF',
+      period: 'monthly',
+      graceDays: 3, // 3 calendar days (72 hours)
+      requireForTransfers: true,
+      requireForDashboard: true,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+  if (!state.customerSubscriptions) state.customerSubscriptions = [];
+  if (!state.studentSubscriptionPayments) state.studentSubscriptionPayments = [];
+}
+ensureServerDbDefaults(serverDbState);
+
+/**
  * Persists application state atomically to prevent data corruption.
  * Writes to a temporary file first, then atomically renames to target file.
  */
@@ -69,8 +91,29 @@ function atomicSaveDb(state: any): boolean {
       } catch {}
     }
 
-    // 3. Atomic rename
-    fs.renameSync(tempFile, DB_FILE);
+    // 3. Atomic rename with Windows fallback and retry
+    let saved = false;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        fs.renameSync(tempFile, DB_FILE);
+        saved = true;
+        break;
+      } catch {
+        try {
+          fs.copyFileSync(tempFile, DB_FILE);
+          try { fs.unlinkSync(tempFile); } catch {}
+          saved = true;
+          break;
+        } catch {
+          const end = Date.now() + 15;
+          while (Date.now() < end) {}
+        }
+      }
+    }
+    if (!saved) {
+      try { fs.writeFileSync(DB_FILE, serialized, 'utf-8'); } catch {}
+      try { fs.unlinkSync(tempFile); } catch {}
+    }
     return true;
   } catch (err) {
     console.error('[Server Authority] Critical Error persisting database:', err);
@@ -350,7 +393,7 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
 
   // 1. Super Admin Authentication
   if (role === 'super_admin') {
-    const validPassword = password === 'SuperAdmin#2026' || password === 'admin';
+    const validPassword = password === 'SuperAdmin#2026';
     if (!validPassword) {
       return res.status(401).json({ success: false, error: 'Invalid Super Admin credentials' });
     }
@@ -377,7 +420,7 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
     if (!restaurantCode) {
       return res.status(400).json({ success: false, error: 'Restaurant code is required' });
     }
-    const validPassword = password === 'Boss#2026' || password === 'admin';
+    const validPassword = password === 'Boss#2026';
     if (!validPassword) {
       return res.status(401).json({ success: false, error: 'Invalid Restaurant Administrator credentials' });
     }
@@ -407,7 +450,7 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
       return res.status(400).json({ success: false, error: 'Restaurant code is required' });
     }
     const entered = pin || password;
-    const validPin = entered === '1234' || entered === 'EastHub#2026' || entered === 'admin';
+    const validPin = entered === '1234' || entered === 'EastHub#2026';
     if (!validPin) {
       return res.status(401).json({ success: false, error: 'Invalid Staff PIN or Password' });
     }
@@ -442,15 +485,16 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
         c.id === username
     );
 
-    const validPin = pin === '1234' || (cust && cust.pinHash === pin);
+    if (!cust) {
+      return res.status(404).json({ success: false, error: 'Customer record not found' });
+    }
+
+    const validPin = (cust.pinHash && cust.pinHash === pin) || pin === '1234';
     if (!validPin) {
       return res.status(401).json({ success: false, error: 'Invalid Member No or PIN' });
     }
 
-    const targetCust = cust || customers[0];
-    if (!targetCust) {
-      return res.status(404).json({ success: false, error: 'Customer record not found' });
-    }
+    const targetCust = cust;
 
     const token = createSessionToken({
       userId: targetCust.id,
@@ -888,6 +932,472 @@ app.post(
 );
 
 // ----------------------------------------------------
+// RestoPass Student Digital Monetization & Entitlements Engine
+// ----------------------------------------------------
+
+/**
+ * Server-authoritative entitlement verification for student digital features
+ */
+function checkServerStudentEntitlement(
+  customerId: string,
+  feature: 'customer_dashboard' | 'digital_plate_transfer' | 'customer_transaction_history' = 'digital_plate_transfer'
+): {
+  allowed: boolean;
+  feature: string;
+  status: string;
+  inGracePeriod: boolean;
+  enforcementEnabled: boolean;
+  reason?: string;
+  expiresAt?: string;
+  gracePeriodEnd?: string;
+} {
+  ensureServerDbDefaults(serverDbState);
+  const settings = serverDbState?.studentSubscriptionSettings;
+
+  if (!settings?.enabled) {
+    return {
+      allowed: true,
+      feature,
+      status: 'inactive',
+      inGracePeriod: false,
+      enforcementEnabled: false,
+      reason: 'Student subscription monetization is disabled at launch',
+    };
+  }
+
+  const subs = serverDbState?.customerSubscriptions || [];
+  const sub = subs.find((s: any) => s.customerId === customerId);
+  if (!sub) {
+    return {
+      allowed: false,
+      feature,
+      status: 'inactive',
+      inGracePeriod: false,
+      enforcementEnabled: true,
+      reason: 'An active student subscription (500 RWF/mo) is required for this digital feature.',
+    };
+  }
+
+  if (sub.status === 'complimentary') {
+    return {
+      allowed: true,
+      feature,
+      status: 'complimentary',
+      inGracePeriod: false,
+      enforcementEnabled: true,
+      expiresAt: sub.currentPeriodEnd,
+    };
+  }
+
+  const now = Date.now();
+  const endMs = sub.currentPeriodEnd ? new Date(sub.currentPeriodEnd).getTime() : 0;
+  const graceMs = sub.gracePeriodEnd
+    ? new Date(sub.gracePeriodEnd).getTime()
+    : endMs + (settings.graceDays || 3) * 24 * 3600 * 1000;
+
+  if (sub.status === 'active') {
+    if (now <= endMs) {
+      return {
+        allowed: true,
+        feature,
+        status: 'active',
+        inGracePeriod: false,
+        enforcementEnabled: true,
+        expiresAt: sub.currentPeriodEnd,
+        gracePeriodEnd: sub.gracePeriodEnd,
+      };
+    }
+    if (now <= graceMs) {
+      return {
+        allowed: true,
+        feature,
+        status: 'grace_period',
+        inGracePeriod: true,
+        enforcementEnabled: true,
+        expiresAt: sub.currentPeriodEnd,
+        gracePeriodEnd: sub.gracePeriodEnd,
+        reason: 'Subscription is in 3-day grace period. Please renew to avoid interruption.',
+      };
+    }
+    sub.status = 'expired';
+    return {
+      allowed: false,
+      feature,
+      status: 'expired',
+      inGracePeriod: false,
+      enforcementEnabled: true,
+      reason: 'Your subscription and 3-day grace period have expired. Please renew for 500 RWF/mo.',
+    };
+  }
+
+  if (sub.status === 'grace_period' && now <= graceMs) {
+    return {
+      allowed: true,
+      feature,
+      status: 'grace_period',
+      inGracePeriod: true,
+      enforcementEnabled: true,
+      expiresAt: sub.currentPeriodEnd,
+      gracePeriodEnd: sub.gracePeriodEnd,
+    };
+  }
+
+  return {
+    allowed: false,
+    feature,
+    status: sub.status || 'expired',
+    inGracePeriod: false,
+    enforcementEnabled: true,
+    reason: 'An active student subscription is required.',
+  };
+}
+
+// GET /api/customer/subscription: Returns current customer subscription & entitlement
+app.get('/api/customer/subscription', apiRateLimiter, requireAuth(), (req, res) => {
+  ensureServerDbDefaults(serverDbState);
+  const user = req.user!;
+  const customerId = req.query.customerId ? String(req.query.customerId) : user.userId;
+
+  if (user.role === 'customer' && user.userId !== customerId) {
+    return res.status(403).json({ success: false, error: 'Forbidden: Cannot access another customer\'s subscription' });
+  }
+
+  const sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === customerId) || null;
+  const entitlement = checkServerStudentEntitlement(customerId, 'digital_plate_transfer');
+
+  return res.json({
+    success: true,
+    settings: serverDbState.studentSubscriptionSettings,
+    subscription: sub,
+    entitlement,
+  });
+});
+
+// POST /api/customer/subscription/checkout: Initiates Mobile Money checkout (strictly 500 RWF)
+app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
+  ensureServerDbDefaults(serverDbState);
+  const { phoneNumber, provider } = req.body;
+  const user = req.user!;
+
+  const cleanPhone = (phoneNumber || '').trim();
+  if (!cleanPhone || cleanPhone.length < 8) {
+    return res.status(400).json({ success: false, error: 'Valid mobile money phone number is required' });
+  }
+
+  const customer = (serverDbState.customers || []).find((c: any) => c.id === user.userId || c.memberNo === user.username);
+  if (!customer) {
+    return res.status(404).json({ success: false, error: 'Customer record not found' });
+  }
+
+  const internalReference = `SUB-MOMO-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+  const now = new Date().toISOString();
+
+  let sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === customer.id);
+  if (!sub) {
+    sub = {
+      id: `sub_${customer.id}_${Date.now()}`,
+      customerId: customer.id,
+      memberNo: customer.memberNo,
+      restaurantCode: customer.restaurantCode,
+      status: 'pending_payment',
+      planName: 'Student Digital Pass',
+      priceRwf: 500, // Strictly 500 RWF integer safe
+      currency: 'RWF',
+      paymentMethod: provider || 'mtn_momo',
+      lastPaymentRef: internalReference,
+      createdAt: now,
+      updatedAt: now,
+    };
+    serverDbState.customerSubscriptions.push(sub);
+  } else {
+    sub.status = 'pending_payment';
+    sub.lastPaymentRef = internalReference;
+    sub.paymentMethod = provider || 'mtn_momo';
+    sub.updatedAt = now;
+  }
+
+  const payment = {
+    id: `spay_${Date.now()}`,
+    subscriptionId: sub.id,
+    customerId: customer.id,
+    memberNo: customer.memberNo,
+    restaurantCode: customer.restaurantCode,
+    internalReference,
+    provider: provider || 'mtn_momo',
+    phoneNumber: cleanPhone,
+    amountRwf: 500, // Strictly 500 RWF integer safe
+    currency: 'RWF',
+    status: 'pending',
+    initiatedAt: now,
+  };
+  serverDbState.studentSubscriptionPayments.unshift(payment);
+
+  await queueDbSave(serverDbState);
+
+  const providerLabel = provider === 'airtel_money' ? 'Airtel Money (*500#)' : 'MTN Mobile Money (*182#)';
+  return res.json({
+    success: true,
+    payment,
+    amountRwf: 500,
+    currency: 'RWF',
+    instructions: `Please approve the 500 RWF prompt sent via ${providerLabel} to ${cleanPhone}. Access will activate instantly upon confirmation.`,
+  });
+});
+
+// POST /api/payments/mobile-money/callback: Webhook callback from Mobile Money provider with Idempotency
+app.post('/api/payments/mobile-money/callback', apiRateLimiter, async (req, res) => {
+  ensureServerDbDefaults(serverDbState);
+  const { internalReference, providerTransactionId, amountRwf, currency, status } = req.body;
+
+  if (!internalReference) {
+    return res.status(400).json({ success: false, error: 'internalReference is required' });
+  }
+
+  const payment = (serverDbState.studentSubscriptionPayments || []).find(
+    (p: any) => p.internalReference === internalReference
+  );
+  if (!payment) {
+    return res.status(404).json({ success: false, error: 'Payment record not found' });
+  }
+
+  // Idempotency: Duplicate callbacks must not re-activate or extend access
+  if (payment.status === 'verified') {
+    const sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.id === payment.subscriptionId);
+    return res.json({ success: true, message: 'Payment already processed (idempotent)', subscription: sub });
+  }
+
+  // Verify amount: Strictly 500 RWF
+  if (typeof amountRwf === 'number' && amountRwf !== 500) {
+    payment.status = 'failed';
+    payment.failureReason = `Amount mismatch: Expected 500 RWF, received ${amountRwf}`;
+    await queueDbSave(serverDbState);
+    return res.status(400).json({ success: false, error: 'Payment amount mismatch. Expected exactly 500 RWF.' });
+  }
+
+  if (currency && currency !== 'RWF') {
+    payment.status = 'failed';
+    payment.failureReason = `Currency mismatch: Expected RWF, received ${currency}`;
+    await queueDbSave(serverDbState);
+    return res.status(400).json({ success: false, error: 'Currency mismatch. Expected RWF.' });
+  }
+
+  if (status === 'failed') {
+    payment.status = 'failed';
+    payment.failureReason = req.body.failureReason || 'Customer declined or insufficient funds';
+    await queueDbSave(serverDbState);
+    return res.json({ success: true, message: 'Marked payment as failed' });
+  }
+
+  const nowMs = Date.now();
+  const periodEndMs = nowMs + 30 * 24 * 3600 * 1000;
+  const graceDays = serverDbState.studentSubscriptionSettings?.graceDays || 3;
+  const graceEndMs = periodEndMs + graceDays * 24 * 3600 * 1000;
+
+  payment.status = 'verified';
+  payment.verifiedAt = new Date(nowMs).toISOString();
+  payment.providerTransactionId = providerTransactionId || `MPAY_${Date.now()}`;
+
+  let sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.id === payment.subscriptionId);
+  if (!sub) {
+    sub = {
+      id: payment.subscriptionId,
+      customerId: payment.customerId,
+      memberNo: payment.memberNo,
+      restaurantCode: payment.restaurantCode,
+      status: 'active',
+      planName: 'Student Digital Pass',
+      priceRwf: 500,
+      currency: 'RWF',
+      currentPeriodStart: new Date(nowMs).toISOString(),
+      currentPeriodEnd: new Date(periodEndMs).toISOString(),
+      gracePeriodEnd: new Date(graceEndMs).toISOString(),
+      cancelAtPeriodEnd: false,
+      paymentMethod: payment.provider,
+      lastPaymentRef: payment.internalReference,
+      createdAt: new Date(nowMs).toISOString(),
+      updatedAt: new Date(nowMs).toISOString(),
+    };
+    serverDbState.customerSubscriptions.push(sub);
+  } else {
+    sub.status = 'active';
+    sub.priceRwf = 500;
+    sub.currency = 'RWF';
+    sub.currentPeriodStart = new Date(nowMs).toISOString();
+    sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
+    sub.gracePeriodEnd = new Date(graceEndMs).toISOString();
+    sub.cancelAtPeriodEnd = false;
+    sub.paymentMethod = payment.provider;
+    sub.lastPaymentRef = payment.internalReference;
+    sub.updatedAt = new Date(nowMs).toISOString();
+  }
+
+  await queueDbSave(serverDbState);
+
+  return res.json({
+    success: true,
+    status: 'active',
+    subscription: sub,
+    message: 'Mobile Money payment verified and student subscription activated successfully.',
+  });
+});
+
+// POST /api/customer/subscription/cancel: Cancels future subscription renewal
+app.post('/api/customer/subscription/cancel', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
+  ensureServerDbDefaults(serverDbState);
+  const user = req.user!;
+  const sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === user.userId);
+  if (!sub) {
+    return res.status(404).json({ success: false, error: 'Subscription not found' });
+  }
+  sub.cancelAtPeriodEnd = true;
+  sub.updatedAt = new Date().toISOString();
+  await queueDbSave(serverDbState);
+  return res.json({ success: true, message: 'Subscription cancellation scheduled at end of paid period', subscription: sub });
+});
+
+// GET /api/customer/subscription/payments: Returns customer payment history
+app.get('/api/customer/subscription/payments', apiRateLimiter, requireAuth(['customer']), (req, res) => {
+  ensureServerDbDefaults(serverDbState);
+  const user = req.user!;
+  const payments = (serverDbState.studentSubscriptionPayments || []).filter((p: any) => p.customerId === user.userId);
+  return res.json({ success: true, payments });
+});
+
+// GET /api/admin/subscriptions/overview: Administrator subscription metrics and revenue
+app.get('/api/admin/subscriptions/overview', apiRateLimiter, requireAuth(['super_admin', 'restaurant_admin']), (req, res) => {
+  ensureServerDbDefaults(serverDbState);
+  const user = req.user!;
+  const rCode = user.role === 'super_admin' ? null : user.restaurantCode;
+
+  const subs = (serverDbState.customerSubscriptions || []).filter((s: any) => !rCode || s.restaurantCode === rCode);
+  const payments = (serverDbState.studentSubscriptionPayments || []).filter((p: any) => !rCode || p.restaurantCode === rCode);
+
+  const activeCount = subs.filter((s: any) => s.status === 'active').length;
+  const graceCount = subs.filter((s: any) => s.status === 'grace_period').length;
+  const expiredCount = subs.filter((s: any) => s.status === 'expired').length;
+  const complimentaryCount = subs.filter((s: any) => s.status === 'complimentary').length;
+  const verifiedPayments = payments.filter((p: any) => p.status === 'verified');
+  const totalRevenueRwf = verifiedPayments.reduce((sum: number, p: any) => sum + (p.amountRwf || 500), 0);
+
+  return res.json({
+    success: true,
+    settings: serverDbState.studentSubscriptionSettings,
+    overview: {
+      totalSubscribers: subs.length,
+      activeCount,
+      graceCount,
+      expiredCount,
+      complimentaryCount,
+      totalRevenueRwf,
+      verifiedPaymentsCount: verifiedPayments.length,
+    },
+  });
+});
+
+// PATCH /api/admin/settings/student-subscriptions: Administrator toggle and configuration
+app.patch('/api/admin/settings/student-subscriptions', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
+  ensureServerDbDefaults(serverDbState);
+  const { enabled, requireForTransfers, graceDays } = req.body;
+
+  const current = serverDbState.studentSubscriptionSettings;
+  serverDbState.studentSubscriptionSettings = {
+    ...current,
+    enabled: typeof enabled === 'boolean' ? enabled : current.enabled,
+    priceRwf: 500, // Price is strictly 500 RWF per specification
+    currency: 'RWF',
+    period: 'monthly',
+    graceDays: typeof graceDays === 'number' ? graceDays : current.graceDays || 3,
+    requireForTransfers: typeof requireForTransfers === 'boolean' ? requireForTransfers : current.requireForTransfers,
+    updatedAt: new Date().toISOString(),
+    updatedBy: req.user!.username,
+  };
+
+  await queueDbSave(serverDbState);
+
+  return res.json({
+    success: true,
+    settings: serverDbState.studentSubscriptionSettings,
+    message: `Student subscription settings updated: enabled=${serverDbState.studentSubscriptionSettings.enabled}`,
+  });
+});
+
+// POST /api/admin/customers/:customerId/entitlements: Grants complimentary access
+app.post('/api/admin/customers/:customerId/entitlements', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
+  ensureServerDbDefaults(serverDbState);
+  const { customerId } = req.params;
+  const { reason, durationDays } = req.body;
+
+  if (!reason || !reason.trim()) {
+    return res.status(400).json({ success: false, error: 'A mandatory reason is required to grant complimentary access' });
+  }
+
+  const customer = (serverDbState.customers || []).find((c: any) => c.id === customerId);
+  if (!customer) {
+    return res.status(404).json({ success: false, error: 'Customer not found' });
+  }
+
+  const nowMs = Date.now();
+  const days = typeof durationDays === 'number' ? durationDays : 30;
+  const periodEndMs = nowMs + days * 24 * 3600 * 1000;
+  const graceEndMs = periodEndMs + 3 * 24 * 3600 * 1000;
+
+  let sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === customerId);
+  if (!sub) {
+    sub = {
+      id: `sub_${customerId}_${Date.now()}`,
+      customerId: customer.id,
+      memberNo: customer.memberNo,
+      restaurantCode: customer.restaurantCode,
+      status: 'complimentary',
+      planName: 'Complimentary Student Pass',
+      priceRwf: 0,
+      currency: 'RWF',
+      currentPeriodStart: new Date(nowMs).toISOString(),
+      currentPeriodEnd: new Date(periodEndMs).toISOString(),
+      gracePeriodEnd: new Date(graceEndMs).toISOString(),
+      cancelAtPeriodEnd: false,
+      paymentMethod: 'complimentary',
+      complimentaryReason: reason.trim(),
+      complimentaryGrantedBy: req.user!.username,
+      createdAt: new Date(nowMs).toISOString(),
+      updatedAt: new Date(nowMs).toISOString(),
+    };
+    serverDbState.customerSubscriptions.push(sub);
+  } else {
+    sub.status = 'complimentary';
+    sub.currentPeriodStart = new Date(nowMs).toISOString();
+    sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
+    sub.gracePeriodEnd = new Date(graceEndMs).toISOString();
+    sub.complimentaryReason = reason.trim();
+    sub.complimentaryGrantedBy = req.user!.username;
+    sub.updatedAt = new Date(nowMs).toISOString();
+  }
+
+  await queueDbSave(serverDbState);
+
+  return res.json({ success: true, subscription: sub });
+});
+
+// DELETE /api/admin/customers/:customerId/entitlements/:entitlementId: Revokes complimentary access
+app.delete('/api/admin/customers/:customerId/entitlements/:entitlementId', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
+  ensureServerDbDefaults(serverDbState);
+  const { customerId } = req.params;
+  const sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === customerId);
+  if (!sub) {
+    return res.status(404).json({ success: false, error: 'Subscription not found' });
+  }
+
+  sub.status = 'expired';
+  sub.currentPeriodEnd = new Date().toISOString();
+  sub.gracePeriodEnd = new Date().toISOString();
+  sub.updatedAt = new Date().toISOString();
+
+  await queueDbSave(serverDbState);
+
+  return res.json({ success: true, message: 'Complimentary entitlement revoked', subscription: sub });
+});
+
+// ----------------------------------------------------
 // Role-Scoped State Retrieval & Updates (Findings 1, 2, 5, 6)
 // ----------------------------------------------------
 
@@ -928,6 +1438,15 @@ function scopeStateForUser(state: any, user: UserSession): any {
       ),
       plans: state.plans || [],
       licenses: (state.licenses || []).filter((lic: any) => lic.restaurantCode === rCode),
+      studentSubscriptionSettings: state.studentSubscriptionSettings || {
+        enabled: false,
+        priceRwf: 500,
+        period: 'monthly',
+        graceDays: 3,
+        plateTransfersRequireSubscription: true,
+      },
+      customerSubscriptions: (state.customerSubscriptions || []).filter((cs: any) => cs.restaurantCode === rCode),
+      studentSubscriptionPayments: (state.studentSubscriptionPayments || []).filter((sp: any) => sp.restaurantCode === rCode),
     };
   }
 
@@ -948,6 +1467,13 @@ function scopeStateForUser(state: any, user: UserSession): any {
       notifications: (state.notifications || []).filter(
         (n: any) => !n.restaurantCode || n.restaurantCode === rCode
       ),
+      studentSubscriptionSettings: state.studentSubscriptionSettings || {
+        enabled: false,
+        priceRwf: 500,
+        period: 'monthly',
+        graceDays: 3,
+        plateTransfersRequireSubscription: true,
+      },
     };
   }
 
@@ -970,6 +1496,15 @@ function scopeStateForUser(state: any, user: UserSession): any {
       notifications: (state.notifications || []).filter(
         (n: any) => !n.targetCustomerId || n.targetCustomerId === custId
       ),
+      studentSubscriptionSettings: state.studentSubscriptionSettings || {
+        enabled: false,
+        priceRwf: 500,
+        period: 'monthly',
+        graceDays: 3,
+        plateTransfersRequireSubscription: true,
+      },
+      customerSubscriptions: (state.customerSubscriptions || []).filter((cs: any) => cs.customerId === custId),
+      studentSubscriptionPayments: (state.studentSubscriptionPayments || []).filter((sp: any) => sp.customerId === custId),
     };
   }
 
@@ -1171,6 +1706,15 @@ if (process.env.NODE_ENV !== 'test' && isDirectRun) {
   startServer();
 }
 
+function getServerDbState() {
+  return serverDbState;
+}
+
+function setServerDbState(newState: any) {
+  serverDbState = newState;
+  ensureServerDbDefaults(serverDbState);
+}
+
 export {
   app,
   atomicSaveDb,
@@ -1179,4 +1723,8 @@ export {
   verifySessionToken,
   scopeStateForUser,
   timingSafeCompare,
+  checkServerStudentEntitlement,
+  ensureServerDbDefaults,
+  getServerDbState,
+  setServerDbState,
 };

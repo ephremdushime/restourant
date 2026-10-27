@@ -474,3 +474,78 @@ export interface CashierSession {
   revokedReason?: string;
   revokedByActor?: string;
 }
+
+// ----------------------------------------------------
+// RestoPass Student Digital Monetization & Subscription Types
+// ----------------------------------------------------
+export type StudentSubscriptionStatus =
+  | 'inactive'
+  | 'pending_payment'
+  | 'active'
+  | 'grace_period'
+  | 'expired'
+  | 'cancelled'
+  | 'complimentary';
+
+export interface StudentSubscriptionSettings {
+  enabled: boolean; // default false (disabled at launch)
+  priceRwf: number; // default 500 RWF
+  currency: string; // 'RWF'
+  period: 'monthly';
+  graceDays: number; // default 3 days (72 hours)
+  requireForTransfers: boolean; // default true
+  requireForDashboard: boolean; // default true
+  updatedAt: string;
+  updatedBy?: string;
+}
+
+export interface CustomerSubscription {
+  id: string;
+  customerId: string;
+  memberNo: string;
+  restaurantCode: string;
+  status: StudentSubscriptionStatus;
+  planName: string;
+  priceRwf: number;
+  currency: string;
+  currentPeriodStart?: string;
+  currentPeriodEnd?: string;
+  gracePeriodEnd?: string;
+  cancelAtPeriodEnd?: boolean;
+  paymentMethod?: 'mtn_momo' | 'airtel_money' | 'complimentary';
+  lastPaymentRef?: string;
+  complimentaryReason?: string;
+  complimentaryGrantedBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StudentSubscriptionPayment {
+  id: string;
+  subscriptionId: string;
+  customerId: string;
+  memberNo: string;
+  restaurantCode: string;
+  internalReference: string;
+  provider: 'mtn_momo' | 'airtel_money';
+  phoneNumber: string;
+  providerTransactionId?: string;
+  amountRwf: number;
+  currency: string;
+  status: 'pending' | 'verified' | 'failed';
+  initiatedAt: string;
+  verifiedAt?: string;
+  failureReason?: string;
+}
+
+export interface StudentEntitlementResult {
+  allowed: boolean;
+  feature: 'customer_dashboard' | 'digital_plate_transfer' | 'customer_transaction_history';
+  status: StudentSubscriptionStatus;
+  inGracePeriod: boolean;
+  enforcementEnabled: boolean;
+  reason?: string;
+  expiresAt?: string;
+  gracePeriodEnd?: string;
+}
+

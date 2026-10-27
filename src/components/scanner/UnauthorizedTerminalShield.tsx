@@ -109,7 +109,8 @@ export const UnauthorizedTerminalShield: React.FC<UnauthorizedTerminalShieldProp
               <button
                 type="button"
                 onClick={() => {
-                  const key = primaryStation?.pairingKey || primaryStation?.pairingCode || 'PAIR-8841';
+                  const key = primaryStation?.pairingKey || primaryStation?.pairingCode;
+                  if (!key) return;
                   restoStore.pairTerminalDevice({
                     restaurantCode: state.currentRestaurantCode,
                     pairingKeyOrCode: key,

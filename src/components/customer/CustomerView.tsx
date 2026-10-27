@@ -40,6 +40,8 @@ import {
   ChevronDown,
   KeyRound,
   Shield,
+  Smartphone,
+  Gift,
 } from 'lucide-react';
 import { PWAInstallBanner } from './PWAInstallBanner';
 import { PinSetupModal } from './PinSetupModal';
@@ -60,12 +62,22 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   const state = restoStore.getState();
   const currentRestaurant = restoStore.getCurrentRestaurant();
 
-  const customer = restoStore.getCurrentCustomer() || state.customers.find((c) => c.restaurantCode === state.currentRestaurantCode) || state.customers[0];
-  const balance = restoStore.getCustomerBalance(customer.id);
+  const customer = restoStore.getCurrentCustomer();
+  const balance = restoStore.getCustomerBalance(customer?.id || '');
+
+  // Student Subscription & MoMo State (Developer Spec: 500 RWF/mo, 72h Grace, MoMo Checkout)
+  const subSettings = restoStore.getStudentSubscriptionSettings();
+  const customerSub = customer ? restoStore.getCustomerSubscription(customer.id) : null;
+  const [subModalOpen, setSubModalOpen] = useState(false);
+  const [momoPhone, setMomoPhone] = useState(customer?.phone || '+250 788 ');
+  const [momoProvider, setMomoProvider] = useState<'mtn_momo' | 'airtel_money'>('mtn_momo');
+  const [subCheckoutLoading, setSubCheckoutLoading] = useState(false);
+  const [subCheckoutMessage, setSubCheckoutMessage] = useState<{ text: string; isError: boolean; ref?: string } | null>(null);
+  const [transferRequiresSub, setTransferRequiresSub] = useState(false);
 
   // Dynamic 30-second token rotation
   const [tokenInfo, setTokenInfo] = useState(() =>
-    restoStore.getCustomerPhoneQr(customer)
+    customer ? restoStore.getCustomerPhoneQr(customer) : { token: '', step: 0, secondsRemaining: 0 }
   );
   const [qrPassType, setQrPassType] = useState<'dynamic' | 'permanent'>('dynamic');
   const [copiedRef, setCopiedRef] = useState(false);
@@ -75,28 +87,28 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
   // 4-Digit Security PIN & Instant Off-Screen Auto-Lock
   const [isDashboardLocked, setIsDashboardLocked] = useState(false);
-  const [showPinSetupModal, setShowPinSetupModal] = useState(!customer.hasCustomPin);
+  const [showPinSetupModal, setShowPinSetupModal] = useState(Boolean(customer && !customer.hasCustomPin));
 
   // Show PIN Setup Modal if customer hasn't set their personal 4-digit PIN yet
   useEffect(() => {
-    if (!customer.hasCustomPin) {
+    if (customer && !customer.hasCustomPin) {
       setShowPinSetupModal(true);
     }
-  }, [customer.id, customer.hasCustomPin]);
+  }, [customer?.id, customer?.hasCustomPin]);
 
   // Instant Off-Screen Auto-Lock Protection:
   // Triggers immediately when phone screen locks, tabs switch, or app backgrounds
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
-        if (customer.hasCustomPin) {
+        if (customer?.hasCustomPin) {
           setIsDashboardLocked(true);
         }
       }
     };
 
     const handleWindowBlur = () => {
-      if (customer.hasCustomPin && document.hidden) {
+      if (customer?.hasCustomPin && document.hidden) {
         setIsDashboardLocked(true);
       }
     };
@@ -108,7 +120,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleWindowBlur);
     };
-  }, [customer.hasCustomPin]);
+  }, [customer?.hasCustomPin]);
 
   // Badge Style Dynamic Theming
   const getBadgeTheme = (style?: 'gold' | 'emerald' | 'blue' | 'dark') => {
@@ -159,17 +171,18 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
   const badgeTheme = getBadgeTheme(currentRestaurant?.badgeStyle);
 
-  const permanentCardToken = generateCardToken(
-    customer.restaurantCode,
-    customer.memberNo,
-    customer.cardVersion
-  );
+  const permanentCardToken = customer
+    ? generateCardToken(customer.restaurantCode, customer.memberNo, customer.cardVersion)
+    : '';
 
   const handleForceRefresh = () => {
-    setTokenInfo(restoStore.getCustomerPhoneQr(customer));
+    if (customer) {
+      setTokenInfo(restoStore.getCustomerPhoneQr(customer));
+    }
   };
 
   useEffect(() => {
+    if (!customer) return;
     const updateToken = () => {
       setTokenInfo(restoStore.getCustomerPhoneQr(customer));
     };
@@ -195,8 +208,10 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
     }
   }, [activeSubTab]);
 
-  const customerNotifications = restoStore.getCustomerNotifications(customer.id, state.currentRestaurantCode);
-  const unreadNotifCount = restoStore.getUnreadNotificationCount(customer.id);
+  const customerNotifications = customer
+    ? restoStore.getCustomerNotifications(customer.id, state.currentRestaurantCode)
+    : [];
+  const unreadNotifCount = customer ? restoStore.getUnreadNotificationCount(customer.id) : 0;
 
   // Transfer Modal State
   const [transferModalOpen, setTransferModalOpen] = useState(false);
@@ -206,13 +221,15 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   const [transferMessage, setTransferMessage] = useState<{ text: string; isError: boolean } | null>(null);
 
   // Recipient Lookup Helper
-  const foundRecipient = state.customers.find(
-    (c) =>
-      c.restaurantCode === customer.restaurantCode &&
-      c.id !== customer.id &&
-      (c.memberNo === recipientQuery.trim() ||
-        c.phone.replace(/[\s-]/g, '') === recipientQuery.trim().replace(/[\s-]/g, ''))
-  );
+  const foundRecipient = customer
+    ? state.customers.find(
+        (c) =>
+          c.restaurantCode === customer.restaurantCode &&
+          c.id !== customer.id &&
+          (c.memberNo === recipientQuery.trim() ||
+            c.phone.replace(/[\s-]/g, '') === recipientQuery.trim().replace(/[\s-]/g, ''))
+      )
+    : null;
 
   const maskName = (name: string) => {
     return name
@@ -222,7 +239,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   };
 
   const handleExecuteTransfer = () => {
-    if (!foundRecipient) {
+    if (!customer || !foundRecipient) {
       setTransferMessage({ text: 'Recipient not found in this restaurant', isError: true });
       return;
     }
@@ -236,6 +253,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
     if (res.success) {
       setTransferMessage({ text: t.customer.transferSuccess, isError: false });
+      setTransferRequiresSub(false);
       setTimeout(() => {
         setTransferModalOpen(false);
         setTransferMessage(null);
@@ -244,18 +262,24 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
       }, 1500);
     } else {
       setTransferMessage({ text: res.error || 'Transfer failed', isError: true });
+      if (res.requiresSubscription) {
+        setTransferRequiresSub(true);
+      }
     }
   };
 
   const handleToggleLockCard = () => {
+    if (!customer) return;
     const nextStatus = customer.cardStatus === 'locked' ? 'active' : 'locked';
     restoStore.setCustomerCardStatus(customer.id, nextStatus, customer.name);
   };
 
   // Last 3 months ledger history for customer
-  const customerHistory = state.ledgerEntries
-    .filter((e) => e.customerId === customer.id)
-    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  const customerHistory = customer
+    ? state.ledgerEntries
+        .filter((e) => e.customerId === customer.id)
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    : [];
 
   const filteredHistory = customerHistory.filter((item) => {
     if (historyFilter === 'meals') return item.type === 'scan' || item.type === 'extra' || item.type === 'undo';
@@ -263,6 +287,26 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
     if (historyFilter === 'transfers') return item.type === 'transfer_out' || item.type === 'transfer_in' || item.type === 'reversal';
     return true;
   });
+
+  if (!customer) {
+    return (
+      <div className="max-w-md mx-auto my-12 p-8 rounded-2xl bg-slate-900 border border-slate-800 text-center space-y-4">
+        <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+          <ShieldAlert className="w-8 h-8" />
+        </div>
+        <h2 className="text-xl font-bold text-white tracking-tight">Customer Sign-In Required</h2>
+        <p className="text-xs text-slate-400 leading-relaxed">
+          Your customer session could not be verified or has expired. Please sign in with your registered phone number or Member ID to view your digital meal card.
+        </p>
+        <button
+          onClick={() => onNavigateTab?.('scanner')}
+          className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-colors"
+        >
+          Go to Sign-In Portal
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-md mx-auto px-4 py-6 space-y-5 animate-in fade-in duration-200">
@@ -586,6 +630,59 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
               </div>
             </div>
           </div>
+
+          {/* STUDENT DIGITAL PASS STATUS BANNER (Developer Spec) */}
+          {subSettings.enabled && (
+            <div className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 shadow-md ${
+              customerSub?.status === 'active' || customerSub?.status === 'complimentary'
+                ? 'bg-emerald-950/60 border-emerald-800 text-emerald-200'
+                : customerSub?.status === 'grace_period'
+                ? 'bg-amber-950/60 border-amber-800 text-amber-200'
+                : 'bg-slate-900 border-slate-800 text-slate-300'
+            }`}>
+              <div className="flex items-center gap-2.5">
+                <div className={`p-2 rounded-xl ${
+                  customerSub?.status === 'active' || customerSub?.status === 'complimentary'
+                    ? 'bg-emerald-500/20 text-emerald-400'
+                    : customerSub?.status === 'grace_period'
+                    ? 'bg-amber-500/20 text-amber-400'
+                    : 'bg-slate-800 text-slate-400'
+                }`}>
+                  <Smartphone className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <span>Student Digital Pass (500 RWF/mo)</span>
+                    <span className={`text-[9px] px-1.5 py-0.2 rounded font-mono font-bold uppercase ${
+                      customerSub?.status === 'active'
+                        ? 'bg-emerald-500/20 text-emerald-300'
+                        : customerSub?.status === 'grace_period'
+                        ? 'bg-amber-500/20 text-amber-300'
+                        : customerSub?.status === 'complimentary'
+                        ? 'bg-purple-500/20 text-purple-300'
+                        : 'bg-slate-800 text-slate-400'
+                    }`}>
+                      {customerSub?.status || 'inactive'}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">
+                    {customerSub?.status === 'active'
+                      ? `Active until ${customerSub.currentPeriodEnd ? new Date(customerSub.currentPeriodEnd).toLocaleDateString() : 'end of month'} · Digital transfers unlocked`
+                      : customerSub?.status === 'grace_period'
+                      ? `In 3-day grace period until ${customerSub.gracePeriodEnd ? new Date(customerSub.gracePeriodEnd).toLocaleDateString() : 'soon'} · Renew to prevent interruption`
+                      : 'Physical card remains 100% active at buffet stands without digital pass'}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setSubModalOpen(true)}
+                className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-[11px] transition-colors cursor-pointer whitespace-nowrap shadow-xs"
+              >
+                {customerSub?.status === 'active' || customerSub?.status === 'complimentary' ? 'Manage' : 'Subscribe (500 RWF)'}
+              </button>
+            </div>
+          )}
 
           {/* QUICK WALLET ACTIONS */}
           <div className="grid grid-cols-2 gap-3">
@@ -1219,6 +1316,19 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
               </div>
             )}
 
+            {transferRequiresSub && (
+              <button
+                onClick={() => {
+                  setTransferModalOpen(false);
+                  setSubModalOpen(true);
+                }}
+                className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-md"
+              >
+                <Smartphone className="w-4 h-4" />
+                <span>Subscribe to Digital Pass (500 RWF / mo)</span>
+              </button>
+            )}
+
             <button
               onClick={handleExecuteTransfer}
               disabled={!foundRecipient || !transferPin}
@@ -1226,6 +1336,189 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             >
               Confirm &amp; Transfer Plates
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* STUDENT DIGITAL SUBSCRIPTION MODAL (DEVELOPER SPEC) */}
+      {subModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-3xl max-w-sm w-full p-6 space-y-4 shadow-2xl text-xs animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2 text-amber-400">
+                <Smartphone className="w-4 h-4" />
+                <h3 className="text-sm font-bold text-white">Student Digital Pass</h3>
+              </div>
+              <button
+                onClick={() => {
+                  setSubModalOpen(false);
+                  setSubCheckoutMessage(null);
+                }}
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+
+            {/* Price & Term Callout */}
+            <div className="p-3.5 rounded-2xl bg-gradient-to-r from-amber-950/40 via-slate-950 to-slate-950 border border-amber-900/50 flex items-center justify-between">
+              <div>
+                <div className="text-[10px] text-slate-400 uppercase font-mono">Monthly Rate</div>
+                <div className="text-xl font-bold text-emerald-400 font-mono">500 RWF</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">Includes 3-day (72h) grace period</div>
+              </div>
+              <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
+                customerSub?.status === 'active'
+                  ? 'bg-emerald-500/20 text-emerald-300'
+                  : customerSub?.status === 'grace_period'
+                  ? 'bg-amber-500/20 text-amber-300'
+                  : customerSub?.status === 'complimentary'
+                  ? 'bg-purple-500/20 text-purple-300'
+                  : 'bg-slate-800 text-slate-400'
+              }`}>
+                {customerSub?.status || 'inactive'}
+              </span>
+            </div>
+
+            {/* Mandatory Physical Card Compatibility Guarantee */}
+            <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 text-[11px] text-slate-300 space-y-1">
+              <div className="font-bold text-emerald-400 flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Physical Card Always Supported</span>
+              </div>
+              <p className="text-slate-400 text-[10.5px] leading-relaxed">
+                A digital subscription is optional and only unlocks online features like plate transfers. You can always use your physical RestoPass student card at cafeteria buffet stands without a subscription.
+              </p>
+            </div>
+
+            {/* Status Information / Active Details */}
+            {customerSub && (customerSub.status === 'active' || customerSub.status === 'complimentary' || customerSub.status === 'grace_period') ? (
+              <div className="space-y-3">
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 font-mono text-[11px]">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Current Period:</span>
+                    <span className="text-white">{customerSub.currentPeriodEnd ? new Date(customerSub.currentPeriodEnd).toLocaleDateString() : 'Active'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Grace End (+72h):</span>
+                    <span className="text-amber-400">{customerSub.gracePeriodEnd ? new Date(customerSub.gracePeriodEnd).toLocaleDateString() : 'N/A'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Auto-Renewal:</span>
+                    <span className={customerSub.cancelAtPeriodEnd ? 'text-rose-400' : 'text-emerald-400'}>
+                      {customerSub.cancelAtPeriodEnd ? 'Cancelled at period end' : 'Active'}
+                    </span>
+                  </div>
+                </div>
+
+                {!customerSub.cancelAtPeriodEnd && customerSub.status !== 'complimentary' && (
+                  <button
+                    onClick={() => {
+                      if (confirm('Cancel future renewal? You will retain access until the end of your paid period.')) {
+                        restoStore.cancelStudentSubscription(customer.id);
+                      }
+                    }}
+                    className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold transition-colors cursor-pointer"
+                  >
+                    Cancel Future Renewal
+                  </button>
+                )}
+              </div>
+            ) : (
+              /* Payment Checkout Flow */
+              <div className="space-y-3">
+                <div>
+                  <label className="font-semibold text-slate-300 block mb-1">Select Mobile Money Provider</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setMomoProvider('mtn_momo')}
+                      className={`p-2.5 rounded-xl border text-center font-bold text-xs transition-all cursor-pointer ${
+                        momoProvider === 'mtn_momo'
+                          ? 'bg-amber-500/20 border-amber-500 text-amber-300'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      MTN MoMo (*182#)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMomoProvider('airtel_money')}
+                      className={`p-2.5 rounded-xl border text-center font-bold text-xs transition-all cursor-pointer ${
+                        momoProvider === 'airtel_money'
+                          ? 'bg-rose-500/20 border-rose-500 text-rose-300'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Airtel Money (*500#)
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="font-semibold text-slate-300 block mb-1">Mobile Money Phone Number</label>
+                  <input
+                    type="text"
+                    value={momoPhone}
+                    onChange={(e) => setMomoPhone(e.target.value)}
+                    placeholder="e.g. +250 788 123 456"
+                    className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono focus:border-amber-500 outline-hidden"
+                  />
+                </div>
+
+                {subCheckoutMessage && (
+                  <div className={`p-2.5 rounded-xl text-xs space-y-2 ${
+                    subCheckoutMessage.isError
+                      ? 'bg-rose-950/80 border border-rose-700 text-rose-300'
+                      : 'bg-emerald-950/80 border border-emerald-700 text-emerald-300'
+                  }`}>
+                    <div>{subCheckoutMessage.text}</div>
+                    {subCheckoutMessage.ref && (
+                      <button
+                        onClick={() => {
+                          const verifyRes = restoStore.verifyStudentPayment(subCheckoutMessage.ref!);
+                          if (verifyRes.success) {
+                            setSubCheckoutMessage({ text: 'Payment verified! Student Digital Pass is now active.', isError: false });
+                          }
+                        }}
+                        className="w-full py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] transition-colors cursor-pointer"
+                      >
+                        Simulate Prompt Approval (Test/Demo)
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                <button
+                  onClick={() => {
+                    setSubCheckoutLoading(true);
+                    setSubCheckoutMessage(null);
+                    const checkoutRes = restoStore.initiateStudentCheckout({
+                      customerId: customer.id,
+                      phoneNumber: momoPhone,
+                      provider: momoProvider,
+                    });
+                    setSubCheckoutLoading(false);
+                    if (checkoutRes.success && checkoutRes.payment) {
+                      setSubCheckoutMessage({
+                        text: checkoutRes.instructions || 'USSD prompt sent. Please approve on your phone.',
+                        isError: false,
+                        ref: checkoutRes.payment.internalReference,
+                      });
+                    } else {
+                      setSubCheckoutMessage({
+                        text: checkoutRes.error || 'Failed to initiate Mobile Money payment',
+                        isError: true,
+                      });
+                    }
+                  }}
+                  disabled={subCheckoutLoading || !momoPhone}
+                  className="w-full py-3 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white font-bold text-xs shadow-md transition-colors cursor-pointer"
+                >
+                  {subCheckoutLoading ? 'Sending USSD Prompt...' : 'Pay 500 RWF via Mobile Money'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
