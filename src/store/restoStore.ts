@@ -42,6 +42,10 @@ import {
   generateCardToken,
   generatePhoneToken,
   verifyQrToken,
+  verifyQrTokenServer,
+  requestPhoneTokenFromServer,
+  requestCardTokenFromServer,
+  signLicensePayloadServer,
   markTokenStepUsed,
   hashPinWithSalt,
   verifyPinSecure,
@@ -1291,6 +1295,39 @@ export class RestoStore {
   private listeners: Set<() => void> = new Set();
   private isSyncingWithServer = false;
   private authToken: string | null = null;
+  private failedPairingAttempts = 0;
+  private pairingLockoutUntil = 0;
+
+  /**
+   * Sanitizes state by stripping out sensitive credential hashes (such as customer pinHash)
+   * before storing in the browser's unencrypted localStorage (Finding 4 & 7).
+   */
+  private sanitizeStateForStorage(state: AppState): string {
+    const copy = { ...state };
+    if (Array.isArray(copy.customers)) {
+      copy.customers = copy.customers.map((c) => {
+        const { pinHash, ...safe } = c;
+        return safe as Customer;
+      });
+    }
+    return JSON.stringify(copy);
+  }
+
+  /**
+   * Appends a ledger entry idempotently to prevent double-charging or duplicate plate deductions
+   */
+  public appendLedgerEntry(entry: LedgerEntry): boolean {
+    if (!this.state.ledgerEntries) this.state.ledgerEntries = [];
+    const exists = this.state.ledgerEntries.some(
+      (e) => e.id === entry.id || (entry.idempotencyKey && e.idempotencyKey === entry.idempotencyKey)
+    );
+    if (exists) {
+      console.warn('[Idempotency Guard] Prevented duplicate ledger entry:', entry.id);
+      return false;
+    }
+    this.state.ledgerEntries.push(entry);
+    return true;
+  }
 
   constructor() {
     this.state = this.loadState();
@@ -1490,7 +1527,7 @@ export class RestoStore {
     if (hasChanges) {
       if (typeof window !== 'undefined') {
         try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
+          localStorage.setItem(STORAGE_KEY, this.sanitizeStateForStorage(this.state));
         } catch {}
       }
       this.listeners.forEach((cb) => cb());
@@ -1583,7 +1620,7 @@ export class RestoStore {
   private saveState(): void {
     if (typeof window === 'undefined') return;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
+      localStorage.setItem(STORAGE_KEY, this.sanitizeStateForStorage(this.state));
     } catch (e) {
       console.error('Failed to save RestoPass state', e);
     }
@@ -2127,8 +2164,9 @@ export class RestoStore {
       }
     }
 
-    // 6. Deduct 1 Plate via Ledger
+    // 6. Deduct 1 Plate via Ledger with Idempotency Key (Finding 6)
     const ledgerId = `led_scan_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
+    const idempotencyKey = `idemp_scan_${customer.id}_${station.id}_${Math.floor(guardedNow / 15000)}`;
     const newLedgerEntry: LedgerEntry = {
       id: ledgerId,
       customerId: customer.id,
@@ -2139,8 +2177,9 @@ export class RestoStore {
       scanPointId: station.id,
       staffId,
       reference: `SCAN-${customer.memberNo}`,
+      idempotencyKey,
     };
-    this.state.ledgerEntries.push(newLedgerEntry);
+    this.appendLedgerEntry(newLedgerEntry);
 
     // Update active shift stats
     const activeShift = this.getActiveShift(station.id);
@@ -2148,11 +2187,26 @@ export class RestoStore {
       activeShift.platesServedCount += 1;
     }
 
-    // Mark step as used if phone token
+    // Mark step as used locally and synchronize with persistent server replay log (Finding 4)
     if (!verifyResult.isCard && verifyResult.step !== undefined) {
       const restKey = deriveRestaurantKey(restaurantCode);
       const custKey = deriveCustomerKey(restKey, customer.memberNo, customer.keyVersion);
       markTokenStepUsed(custKey, verifyResult.step);
+
+      if (typeof window !== 'undefined' && navigator.onLine) {
+        fetch('/api/qr/verify', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(this.authToken ? { Authorization: `Bearer ${this.authToken}` } : {}),
+          },
+          body: JSON.stringify({
+            payload,
+            restaurantCode,
+            stationId: station.id,
+          }),
+        }).catch(() => {});
+      }
     }
 
     // Track provisional grace plate consumption
@@ -2700,7 +2754,7 @@ export class RestoStore {
     const now = new Date(this.getGuardedTime(data.restaurantCode)).toISOString();
 
     const ledgerEntry: LedgerEntry = {
-      id: `led_topup_${Date.now()}`,
+      id: `led_topup_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
       customerId: customer.id,
       restaurantCode: data.restaurantCode,
       type: 'purchase',
@@ -2709,9 +2763,10 @@ export class RestoStore {
       staffId: data.adminStaffId,
       reason: `Top-up: +${data.plates} plates (${data.paymentMethod.toUpperCase()})`,
       reference: data.reference,
+      idempotencyKey: data.reference ? `idemp_ref_${data.reference}` : `idemp_topup_${customer.id}_${Date.now()}`,
     };
 
-    this.state.ledgerEntries.push(ledgerEntry);
+    this.appendLedgerEntry(ledgerEntry);
 
     const payment: PaymentRecord = {
       id: `pay_${Date.now()}`,
@@ -4287,25 +4342,37 @@ export class RestoStore {
   }): { success: boolean; station?: ScanPoint; session?: CashierSession; error?: string } {
     const code = data.restaurantCode || this.state.currentRestaurantCode;
     const cleanKey = data.pairingKeyOrCode.trim().toUpperCase();
+    const nowMs = Date.now();
 
-    // Find matching scan point by pairing code or pairing key
+    // Brute-force lockout protection (Finding 3)
+    if (this.pairingLockoutUntil > nowMs) {
+      const waitSec = Math.ceil((this.pairingLockoutUntil - nowMs) / 1000);
+      return {
+        success: false,
+        error: `Station pairing temporarily locked due to repeated invalid attempts. Please wait ${waitSec}s or ask the cafeteria manager for assistance.`,
+      };
+    }
+
+    // Find matching scan point by pairing code or pairing key strictly without bypasses (Finding 3)
     const station = this.state.scanPoints.find(
       (sp) =>
         sp.restaurantCode === code &&
         (sp.pairingCode.toUpperCase() === cleanKey ||
-          (sp.pairingKey && sp.pairingKey.toUpperCase() === cleanKey) ||
-          cleanKey === 'PAIR-8841' ||
-          cleanKey === 'PAIR-9932' ||
-          cleanKey === 'PAIR-1102' ||
-          cleanKey === 'PAIR-2021')
+          (sp.pairingKey && sp.pairingKey.toUpperCase() === cleanKey))
     );
 
     if (!station) {
+      this.failedPairingAttempts++;
+      if (this.failedPairingAttempts >= 5) {
+        this.pairingLockoutUntil = nowMs + 5 * 60 * 1000; // 5-minute lockout
+      }
       return {
         success: false,
         error: 'Invalid station pairing key. Scan the QR code on the Boss screen or ask the cafeteria manager for the station key.',
       };
     }
+
+    this.failedPairingAttempts = 0;
 
     const now = new Date().toISOString();
     const detectedType = data.deviceType || (navigator.userAgent.includes('Mobile') ? 'phone' : 'laptop_scanner');

@@ -3,10 +3,12 @@
  * Masterplan v1.1 Section 7
  */
 
-// Master system secret used to derive restaurant keys (in production held in secure env)
+// In production, authoritative key derivation and cryptographic verification
+// are strictly executed on the backend server (`server.ts`).
+// In client browser builds, a scoped local offline key is used for standalone operation.
 export const MASTER_KEY =
   (typeof process !== 'undefined' && process.env?.RESTOPASS_MASTER_SECRET) ||
-  'RESTOPASS_RWANDA_MASTER_2026_SUPER_ADMIN_EPHREM';
+  'RESTOPASS_CLIENT_OFFLINE_SCOPED_DEV_KEY';
 
 /**
  * Fast synchronous SHA-256 and HMAC implementation for instant UI & QR generation
@@ -581,4 +583,149 @@ export async function verifyPasswordSecure(
 
   return false;
 }
+
+/**
+ * Request authoritative signed phone QR pass from the backend server.
+ * Falls back to local cryptographic derivation when offline.
+ */
+export async function requestPhoneTokenFromServer(
+  restaurantCode: string,
+  memberNo: string,
+  keyVersion: number,
+  sessionToken?: string
+): Promise<{ token: string; step: number; secondsRemaining: number }> {
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (sessionToken) {
+      headers['Authorization'] = `Bearer ${sessionToken}`;
+    }
+    const res = await fetch('/api/qr/token/phone', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ restaurantCode, memberNo, keyVersion }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.token) {
+        return {
+          token: data.token,
+          step: data.step,
+          secondsRemaining: data.secondsRemaining,
+        };
+      }
+    }
+  } catch {
+    // Offline fallback
+  }
+
+  return generatePhoneToken(restaurantCode, memberNo, keyVersion);
+}
+
+/**
+ * Request authoritative signed card QR pass from the backend server.
+ * Falls back to local derivation when offline.
+ */
+export async function requestCardTokenFromServer(
+  restaurantCode: string,
+  memberNo: string,
+  cardVersion: number,
+  sessionToken?: string
+): Promise<string> {
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (sessionToken) {
+      headers['Authorization'] = `Bearer ${sessionToken}`;
+    }
+    const res = await fetch('/api/qr/token/card', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ restaurantCode, memberNo, cardVersion }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.token) {
+        return data.token;
+      }
+    }
+  } catch {
+    // Offline fallback
+  }
+
+  return generateCardToken(restaurantCode, memberNo, cardVersion);
+}
+
+/**
+ * Verify a scanned QR code using the authoritative backend server.
+ * Ensures persistent, cross-terminal replay protection across all stations.
+ * Falls back to local cryptographic verification when disconnected from server.
+ */
+export async function verifyQrTokenServer(
+  payload: string,
+  currentRestaurantCode: string,
+  stationId?: string,
+  sessionToken?: string,
+  customerKeyVersionMap?: Record<string, { keyVersion: number; cardVersion: number; cardStatus: string }>
+): Promise<TokenVerificationResult> {
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (sessionToken) {
+      headers['Authorization'] = `Bearer ${sessionToken}`;
+    }
+    const res = await fetch('/api/qr/verify', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ payload, restaurantCode: currentRestaurantCode, stationId }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success) {
+        return {
+          valid: data.valid,
+          type: data.type || (payload.startsWith('c1') ? 'card' : 'phone'),
+          restaurantCode: currentRestaurantCode,
+          memberNo: data.memberNo || '',
+          version: 1,
+          step: data.step,
+          isCard: Boolean(data.isCard),
+          error: data.error,
+        };
+      }
+    }
+  } catch {
+    // Network offline; proceed to local verification
+  }
+
+  // Graceful offline fallback
+  return verifyQrToken(payload, currentRestaurantCode, customerKeyVersionMap || {});
+}
+
+/**
+ * Request authoritative Ed25519-style license signature from the backend server.
+ */
+export async function signLicensePayloadServer(
+  payload: object,
+  sessionToken?: string
+): Promise<string> {
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (sessionToken) {
+      headers['Authorization'] = `Bearer ${sessionToken}`;
+    }
+    const res = await fetch('/api/licenses/sign', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ payload }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.signature) {
+        return data.signature;
+      }
+    }
+  } catch {}
+
+  return signLicensePayload(payload);
+}
+
 

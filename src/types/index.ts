@@ -143,6 +143,7 @@ export interface LedgerEntry {
   reason?: string;
   reference?: string;
   reversalOfId?: string;
+  idempotencyKey?: string;
 }
 
 export interface BalanceCheckpoint {
