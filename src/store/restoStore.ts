@@ -36,6 +36,7 @@ import {
   StudentSubscriptionSettings,
   CustomerSubscription,
   StudentSubscriptionPayment,
+  StudentEntitlementFeature,
   StudentEntitlementResult,
   CustomerActivationRequest,
   CustomerPinRecoveryRequest,
@@ -2096,6 +2097,22 @@ export class RestoStore {
           true,
           'physical_card'
         );
+      }
+
+      // 2b. Customer-Dashboard Monetization Rule:
+      // Physical card QR (verifyResult.isCard === true) NEVER requires a dashboard subscription.
+      // Digital dashboard QR (verifyResult.isCard === false) requires an active subscription when monetization is enabled.
+      if (!verifyResult.isCard) {
+        const qrEntitlement = this.checkStudentEntitlement(customer.id, 'digital_qr');
+        if (!qrEntitlement.allowed) {
+          return buildRejection(
+            'ACCOUNT_INACTIVE',
+            'Digital QR pass requires an active dashboard subscription (500 RWF/mo). Please scan your physical card or activate your subscription.',
+            customer,
+            customer.memberNo,
+            currentBalance
+          );
+        }
       }
 
       // Compute pending approvals & unapproved grace meals for this customer
@@ -5499,9 +5516,22 @@ export class RestoStore {
 
   public checkStudentEntitlement(
     customerId: string,
-    feature: 'customer_dashboard' | 'digital_plate_transfer' | 'customer_transaction_history'
+    feature: StudentEntitlementFeature
   ): StudentEntitlementResult {
     const settings = this.getStudentSubscriptionSettings();
+
+    // 0. Physical card QR scanning NEVER requires a dashboard subscription
+    if (feature === 'physical_card_scan') {
+      const sub = this.getCustomerSubscription(customerId);
+      return {
+        allowed: true,
+        feature,
+        status: sub?.status || 'inactive',
+        inGracePeriod: sub?.status === 'grace_period',
+        enforcementEnabled: settings.enabled,
+        reason: 'Physical card QR scanning does not require a dashboard subscription.',
+      };
+    }
 
     // 1. If feature flag is disabled at launch: All existing rules apply without subscription requirement
     if (!settings.enabled) {

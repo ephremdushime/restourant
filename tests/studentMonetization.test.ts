@@ -1,7 +1,7 @@
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { restoStore } from '../src/store/restoStore';
-import { generateCardToken } from '../src/services/cryptoService';
+import { generateCardToken, generatePhoneToken } from '../src/services/cryptoService';
 import {
   app,
   checkServerStudentEntitlement,
@@ -280,6 +280,68 @@ describe('RestoPass Student Monetization — Specification & Business Rules', ()
       assert.equal(scanResult.scanEvent.status, 'approved', 'Physical card scan must succeed even without active digital subscription');
       const balanceAfter = restoStore.getCustomerBalance('cust_28491');
       assert.equal(balanceAfter, balanceBefore - 1, 'Plate balance must decrement accurately');
+    });
+
+    test('digital dashboard QR requires active subscription while physical card QR does not', () => {
+      restoStore.updateStudentSubscriptionSettings({ enabled: true });
+
+      // Expire customer subscription for cust_28492 (Aline)
+      const state = restoStore.getState();
+      state.customerSubscriptions = state.customerSubscriptions.filter((s) => s.customerId !== 'cust_28492');
+
+      // Verify entitlement matrix for inactive customer
+      assert.equal(
+        restoStore.checkStudentEntitlement('cust_28492', 'physical_card_scan').allowed,
+        true,
+        'Physical card QR scanning never requires dashboard subscription'
+      );
+      assert.equal(
+        restoStore.checkStudentEntitlement('cust_28492', 'digital_qr').allowed,
+        false,
+        'Digital dashboard QR requires active subscription'
+      );
+      assert.equal(
+        restoStore.checkStudentEntitlement('cust_28492', 'customer_dashboard').allowed,
+        false,
+        'Viewing remaining plates/balance on dashboard requires active subscription'
+      );
+      assert.equal(
+        restoStore.checkStudentEntitlement('cust_28492', 'digital_plate_transfer').allowed,
+        false,
+        'Plate transfers require active subscription'
+      );
+      assert.equal(
+        restoStore.checkStudentEntitlement('cust_28492', 'customer_transaction_history').allowed,
+        false,
+        'Transaction history requires active subscription'
+      );
+
+      // Digital phone QR scan must be rejected while subscription is inactive
+      const phoneToken = generatePhoneToken('RW01', '28492', 1).token;
+      const phoneScanBlocked = restoStore.processScan(phoneToken);
+      assert.equal(phoneScanBlocked.accepted, false, 'Digital QR scan must be rejected when subscription is inactive');
+      assert.equal(phoneScanBlocked.rejectionCode, 'ACCOUNT_INACTIVE');
+      assert.match(phoneScanBlocked.rejectionReason || '', /Digital QR pass requires an active dashboard subscription/i);
+
+      // Physical card QR scan for the same customer must succeed without subscription
+      const cardToken = generateCardToken('RW01', '28492', 1);
+      const cardScanAllowed = restoStore.processScan(cardToken);
+      assert.equal(cardScanAllowed.accepted, true, 'Physical card scan must succeed when subscription is inactive');
+
+      // Interleave another customer scan so consecutive-scan guard does not block next test scan
+      const otherCardToken = generateCardToken('RW01', '28491', 1);
+      restoStore.processScan(otherCardToken);
+
+      // Now activate subscription for cust_28492 and verify digital QR scan succeeds
+      const checkout = restoStore.initiateStudentCheckout({
+        customerId: 'cust_28492',
+        phoneNumber: '+250 788 234 567',
+        provider: 'mtn_momo',
+      });
+      restoStore.verifyStudentPayment(checkout.payment!.internalReference, 'MTN-ACTIVATE-28492');
+
+      assert.equal(restoStore.checkStudentEntitlement('cust_28492', 'digital_qr').allowed, true);
+      assert.equal(restoStore.checkStudentEntitlement('cust_28492', 'customer_dashboard').allowed, true);
     });
 
     test('subscription payment does not alter meal plate balance or ledger entries', () => {

@@ -80,11 +80,21 @@ export const Header: React.FC<HeaderProps> = ({
   const pendingOutboxCount = state.syncOutbox.filter((i) => !i.syncedToCloud).length;
 
   const currentCustomer = restoStore.getCurrentCustomer();
-  const unreadNotifCount = currentRole === 'customer' && currentCustomer
-    ? restoStore.getUnreadNotificationCount(currentCustomer.id)
-    : restoStore.getRestaurantNotifications(state.currentRestaurantCode).filter(
-        (n) => (Date.now() - new Date(n.timestamp).getTime()) < 24 * 3600 * 1000
-      ).length;
+  const isCustomerDashboardGated =
+    currentRole === 'customer' &&
+    Boolean(
+      currentCustomer &&
+        restoStore.getStudentSubscriptionSettings().enabled &&
+        !restoStore.checkStudentEntitlement(currentCustomer.id, 'customer_dashboard').allowed
+    );
+  const unreadNotifCount =
+    currentRole === 'customer' && currentCustomer
+      ? isCustomerDashboardGated
+        ? 0
+        : restoStore.getUnreadNotificationCount(currentCustomer.id)
+      : restoStore.getRestaurantNotifications(state.currentRestaurantCode).filter(
+          (n) => Date.now() - new Date(n.timestamp).getTime() < 24 * 3600 * 1000
+        ).length;
 
   // Dropdown popover states
   const [isRestoDropdownOpen, setIsRestoDropdownOpen] = useState(false);
@@ -305,8 +315,8 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Notifications Trigger (Only when authenticated) */}
-          {isSessionActive && (
+          {/* Notifications Trigger (Only when authenticated and not gated on customer dashboard) */}
+          {isSessionActive && !isCustomerDashboardGated && (
             <button
               type="button"
               onClick={onOpenNotifications}

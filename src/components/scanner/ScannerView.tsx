@@ -1,35 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Customer, ScanEvent, Language } from '../../types';
+import { ScanEvent, Language } from '../../types';
 import { restoStore } from '../../store/restoStore';
 import { translations } from '../../services/i18n';
 import { sound } from '../../services/audioService';
 import { BatteryIndicator } from '../common/BatteryIndicator';
 import { ScannerProvisionalModal } from './ScannerProvisionalModal';
 import { ShiftHandoverModal } from './ShiftHandoverModal';
-import { UnauthorizedTerminalShield } from './UnauthorizedTerminalShield';
-import { TerminalPairingModal } from './TerminalPairingModal';
 import {
   Camera,
   Barcode,
   RotateCcw,
-  PlusCircle,
-  AlertTriangle,
   ShieldAlert,
   CheckCircle2,
   XCircle,
-  UserCheck,
-  UserX,
   UserPlus,
   History,
-  Info,
-  Clock,
-  Zap,
-  ArrowRight,
   ShieldCheck,
   Coins,
   KeyRound,
-  Lock,
-  Wifi,
   Volume2,
   VolumeX,
 } from 'lucide-react';
@@ -48,14 +36,10 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const t = translations[language];
   const state = restoStore.getState();
   const currentRestaurant = restoStore.getCurrentRestaurant();
-  const terms = restoStore.getRestaurantTerms(state.currentRestaurantCode);
-
-  const [refreshCount, setRefreshCount] = useState(0);
-  const [isPairingModalOpen, setIsPairingModalOpen] = useState(false);
-  const isTerminalPaired = restoStore.isCurrentTerminalPaired(state.currentRestaurantCode);
-  const currentStation = state.scanPoints.find(
-    (sp) => sp.id === state.currentStationId && sp.restaurantCode === state.currentRestaurantCode
-  ) || state.scanPoints.find((sp) => sp.restaurantCode === state.currentRestaurantCode);
+  const currentStation =
+    state.scanPoints.find(
+      (sp) => sp.id === state.currentStationId && sp.restaurantCode === state.currentRestaurantCode
+    ) || state.scanPoints.find((sp) => sp.restaurantCode === state.currentRestaurantCode);
 
   const [inputPayload, setInputPayload] = useState('');
   const [activeScan, setActiveScan] = useState<{
@@ -77,7 +61,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     sound.preloadScannerSounds();
     const handleUnlockGesture = () => {
       sound.unlockAudio().then((ok) => {
-        if (ok) setAudioUnlocked(true);
+        if (ok) setAudioUnlocked((prev) => (prev ? prev : true));
       });
     };
     window.addEventListener('pointerdown', handleUnlockGesture, { once: true });
@@ -95,13 +79,15 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const [overrideModalOpen, setOverrideModalOpen] = useState(false);
   const [overrideReason, setOverrideReason] = useState('Authorized by Head Cafeteria Supervisor');
   const [isCameraActive, setIsCameraActive] = useState(false);
-  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [, setCameraError] = useState<string | null>(null);
   const [isProvisionalModalOpen, setIsProvisionalModalOpen] = useState(false);
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
   const [isPinDeskModalOpen, setIsPinDeskModalOpen] = useState(false);
   const [pinDeskCustomerId, setPinDeskCustomerId] = useState<string>('');
   const [pinDeskMode, setPinDeskMode] = useState<'activation' | 'recovery'>('activation');
-  const [pinDeskIdMethod, setPinDeskIdMethod] = useState<'student_id_check' | 'national_id_check' | 'photo_match' | 'manager_override'>('student_id_check');
+  const [pinDeskIdMethod, setPinDeskIdMethod] = useState<
+    'student_id_check' | 'national_id_check' | 'photo_match' | 'manager_override'
+  >('student_id_check');
   const [pinDeskReason, setPinDeskReason] = useState('Verified patron ID at reception desk');
   const [pinDeskResult, setPinDeskResult] = useState<{
     type: 'activation' | 'recovery';
@@ -114,6 +100,9 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   } | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const keyboardInputRef = useRef<HTMLInputElement | null>(null);
+
+  const isAnyModalOpen =
+    overrideModalOpen || isProvisionalModalOpen || isShiftModalOpen || isPinDeskModalOpen;
 
   // Auto-advance timer countdown
   useEffect(() => {
@@ -135,23 +124,32 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     return () => clearInterval(interval);
   }, [activeScan, autoAdvanceSeconds]);
 
-  // Auto-focus keyboard input for USB/BT barcode scanner wedge
+  // Focus scanner input ONLY when modals close and no other input/select/textarea has focus.
+  // Never run a background interval that steals focus from registration or modal inputs.
   useEffect(() => {
-    const focusScanner = () => {
-      if (keyboardInputRef.current && !overrideModalOpen) {
-        keyboardInputRef.current.focus();
-      }
-    };
-    focusScanner();
-    const interval = setInterval(focusScanner, 1500);
-    return () => clearInterval(interval);
-  }, [overrideModalOpen]);
+    if (isAnyModalOpen) return;
+    const activeEl = document.activeElement;
+    const isInteractiveElementFocused =
+      activeEl instanceof HTMLInputElement ||
+      activeEl instanceof HTMLTextAreaElement ||
+      activeEl instanceof HTMLSelectElement ||
+      Boolean(activeEl?.closest('[role="dialog"]'));
+
+    if (!isInteractiveElementFocused && keyboardInputRef.current) {
+      keyboardInputRef.current.focus();
+    }
+  }, [isAnyModalOpen]);
 
   // POS Physical Keyboard Shortcuts for Stand Operator
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept if typing in an input
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      if (isAnyModalOpen) return;
+      // Don't intercept if typing in an input, textarea, or select
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement
+      ) {
         return;
       }
 
@@ -171,7 +169,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeScan]);
+  }, [activeScan, isAnyModalOpen]);
 
   // Camera video stream & GPU-accelerated Native BarcodeDetector handler
   useEffect(() => {
@@ -190,7 +188,6 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             videoRef.current.srcObject = s;
             videoRef.current.play().catch(() => {});
 
-            // If browser supports hardware BarcodeDetector API (Android Chrome & modern Chromium)
             if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
               try {
                 const detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
@@ -212,7 +209,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                           handleExecuteScan(raw);
                         }
                       }
-                    } catch (e) {
+                    } catch {
                       // Non-fatal frame capture error
                     } finally {
                       isDetecting = false;
@@ -384,87 +381,27 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const demoTokens = getDemoTokens();
   const restoScanEvents = state.scanEvents.filter((ev) => ev.restaurantCode === state.currentRestaurantCode);
 
-  // Helper for window display text
-  const getWindowTimeLabel = (event: ScanEvent) => {
-    const win = restoStore.getPlatesInWindow(event.customerId, event.restaurantCode);
-    if (win.lastServedMinutesAgo !== null) {
-      return `${win.count} plate${win.count > 1 ? 's' : ''}, ${win.lastServedMinutesAgo} min ago`;
-    }
-    return t.scanner.noPlatesInWindow;
-  };
-
-  // ROGUE WI-FI TERMINAL LOCKOUT GUARD
-  if (!isTerminalPaired) {
-    return (
-      <div className="max-w-4xl mx-auto px-4 py-5">
-        <UnauthorizedTerminalShield
-          onOpenPairModal={() => setIsPairingModalOpen(true)}
-          onQuickAuthorize={() => setRefreshCount((c) => c + 1)}
-        />
-        {isPairingModalOpen && (
-          <TerminalPairingModal
-            restaurantCode={state.currentRestaurantCode}
-            onClose={() => setIsPairingModalOpen(false)}
-            onSuccess={() => {
-              setIsPairingModalOpen(false);
-              setRefreshCount((c) => c + 1);
-            }}
-          />
-        )}
-      </div>
-    );
-  }
-
   return (
     <div className="max-w-4xl mx-auto px-4 py-5 space-y-5">
-      {/* 1. Sleek Compact Station Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 rounded-2xl bg-slate-900/90 border border-slate-800">
-        <div className="flex items-center gap-2.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+      {/* 1. Clean Station Header (Simplified: No Pairing Gate, Pairing Code, or Rogue Wi-Fi Controls) */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 rounded-2xl bg-slate-900 border border-slate-700/80 shadow-lg">
+        <div className="flex items-center gap-3">
+          <span className="w-3 h-3 rounded-full bg-emerald-400 animate-pulse shrink-0" />
           <div>
-            <div className="text-sm font-bold text-white tracking-tight">
+            <div className="text-base sm:text-lg font-black text-white tracking-tight">
               {currentRestaurant?.name || 'Restaurant Pass Stand'}
             </div>
-            <div className="text-[11px] text-slate-400 font-mono flex items-center gap-2">
-              <span>{currentStation?.name || 'Stand 1'} · Online</span>
-              <span className="px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 text-[10px]">
-                Authorized Terminal
-              </span>
+            <div className="text-xs sm:text-sm text-slate-300 font-mono flex items-center gap-2">
+              <span>{currentStation?.name || 'Stand 1'} · Ready for Scanning</span>
             </div>
           </div>
         </div>
 
-        {/* Quick Station Controls */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Terminal Pairing Badge & Simulator */}
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-xs">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="text-[11px] font-mono text-slate-300 font-bold">
-              {currentStation?.pairingKey || currentStation?.pairingCode || 'UNPAIRED'}
-            </span>
-            <button
-              type="button"
-              onClick={() => setIsPairingModalOpen(true)}
-              className="text-[10px] text-slate-400 hover:text-white px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 cursor-pointer"
-              title="Pair or switch this terminal"
-            >
-              Pairing
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                restoStore.revokeTerminalPairing(state.currentStationId, 'Test Simulation');
-                setRefreshCount((c) => c + 1);
-              }}
-              className="text-[10px] text-rose-400 hover:text-rose-300 px-1.5 py-0.5 rounded bg-rose-950/50 border border-rose-800/60 cursor-pointer"
-              title="Simulate unauthorized rogue phone accessing cafeteria Wi-Fi address"
-            >
-              Test Rogue Wi-Fi
-            </button>
-          </div>
+        {/* Staff Operational Controls */}
+        <div className="flex items-center gap-2.5 flex-wrap">
           {/* Auto-Advance Speed */}
-          <div className="flex items-center bg-slate-950 rounded-lg p-0.5 border border-slate-800 text-[11px]">
-            <span className="text-slate-400 px-2 font-medium">Auto-Next:</span>
+          <div className="flex items-center bg-slate-950 rounded-xl p-1 border border-slate-700 text-xs sm:text-sm">
+            <span className="text-slate-200 px-2 font-semibold">Auto-Next:</span>
             {[
               { id: 2, label: '2s' },
               { id: 3, label: '3s' },
@@ -474,10 +411,10 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                 key={speed.id}
                 type="button"
                 onClick={() => setAutoAdvanceSeconds(speed.id)}
-                className={`px-2 py-0.5 rounded font-mono font-bold transition-colors cursor-pointer ${
+                className={`px-2.5 py-1 rounded-lg font-mono font-bold transition-colors cursor-pointer ${
                   autoAdvanceSeconds === speed.id
                     ? 'bg-emerald-600 text-white'
-                    : 'text-slate-400 hover:text-white'
+                    : 'text-slate-300 hover:text-white'
                 }`}
               >
                 {speed.label}
@@ -488,12 +425,11 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           <button
             type="button"
             onClick={() => setIsProvisionalModalOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white transition-colors cursor-pointer shadow-sm"
-            title="Register new customer or record recharge with 3 grace meals while boss is away"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold bg-amber-600 hover:bg-amber-500 text-white transition-colors cursor-pointer shadow-sm"
+            title="Register new customer or record recharge with up to 3 grace meals while boss is away"
           >
-            <UserPlus className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Provisional Reg / Top-Up</span>
-            <span className="sm:hidden">Provisional</span>
+            <UserPlus className="w-4 h-4" />
+            <span>Register / Top-Up</span>
           </button>
 
           <button
@@ -504,10 +440,10 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
               setPinDeskResult(null);
               setIsPinDeskModalOpen(true);
             }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-400 hover:text-white transition-colors cursor-pointer shadow-sm"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold bg-slate-800 hover:bg-slate-700 border border-slate-600 text-cyan-300 hover:text-white transition-colors cursor-pointer shadow-sm"
             title="Issue 15-minute non-SMS activation code or request PIN recovery for a patron"
           >
-            <KeyRound className="w-3.5 h-3.5 text-cyan-400" />
+            <KeyRound className="w-4 h-4 text-cyan-400" />
             <span className="hidden sm:inline">PIN / Activation Desk</span>
             <span className="sm:hidden">PIN Desk</span>
           </button>
@@ -515,16 +451,16 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           <button
             type="button"
             onClick={() => setIsShiftModalOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-700 border border-slate-700 text-emerald-400 hover:text-white transition-colors cursor-pointer shadow-sm"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold bg-slate-800 hover:bg-slate-700 border border-slate-600 text-emerald-300 hover:text-white transition-colors cursor-pointer shadow-sm"
             title={t.shifts?.title || 'Cashier Shift Handover & Daily Reconciliation'}
           >
-            <Coins className="w-3.5 h-3.5 text-emerald-400" />
+            <Coins className="w-4 h-4 text-emerald-400" />
             <span className="hidden sm:inline">{t.shifts?.shiftHandoverButton || 'Shift Handover'}</span>
             <span className="sm:hidden">Shift</span>
             {(() => {
               const activeShift = restoStore.getActiveShift(state.currentStationId);
               return activeShift ? (
-                <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-950 text-emerald-300 font-mono">
+                <span className="ml-1 px-2 py-0.5 rounded-full text-xs bg-emerald-950 text-emerald-200 font-mono">
                   {activeShift.platesServedCount}p
                 </span>
               ) : null;
@@ -532,24 +468,20 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           </button>
 
           <button
+            type="button"
             onClick={() => setIsCameraActive(!isCameraActive)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold border transition-colors cursor-pointer ${
               isCameraActive
                 ? 'bg-emerald-600 text-white border-emerald-500'
-                : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
+                : 'bg-slate-800 text-slate-100 border-slate-600 hover:text-white'
             }`}
           >
-            <Camera className="w-3.5 h-3.5" />
+            <Camera className="w-4 h-4" />
             <span>{isCameraActive ? 'Camera ON' : 'Camera'}</span>
           </button>
 
-          <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono text-emerald-400">
-            <Barcode className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Ready</span>
-          </div>
-
           {/* Scanner Audio Control & Volume */}
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-xs">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-700 text-xs sm:text-sm">
             <button
               type="button"
               onClick={() => {
@@ -563,13 +495,13 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                   });
                 }
               }}
-              className={`flex items-center gap-1 font-semibold cursor-pointer ${
-                soundEnabled ? 'text-emerald-400 hover:text-emerald-300' : 'text-rose-400 hover:text-rose-300'
+              className={`flex items-center gap-1.5 font-bold cursor-pointer ${
+                soundEnabled ? 'text-emerald-300 hover:text-emerald-200' : 'text-rose-300 hover:text-rose-200'
               }`}
               title={soundEnabled ? 'Scanner sound alerts ON (click to mute)' : 'Scanner sound alerts MUTED (click to enable)'}
             >
-              {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-              <span className="hidden md:inline text-[11px]">{soundEnabled ? `${Math.round(soundVolume * 100)}%` : 'Muted'}</span>
+              {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+              <span>{soundEnabled ? `${Math.round(soundVolume * 100)}%` : 'Muted'}</span>
             </button>
             {soundEnabled && (
               <input
@@ -584,7 +516,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                   setSoundVolume(v);
                 }}
                 aria-label="Scanner alert volume"
-                className="w-14 accent-emerald-500 cursor-pointer"
+                className="w-16 accent-emerald-500 cursor-pointer"
               />
             )}
           </div>
@@ -595,10 +527,10 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
       {/* Browser Audio Muted / Blocked Warning Banner */}
       {(!soundEnabled || !audioUnlocked) && (
-        <div className="p-3 rounded-2xl bg-amber-950/80 border border-amber-500/60 text-amber-100 flex items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-2">
-            <VolumeX className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>
+        <div className="p-3.5 rounded-2xl bg-amber-950/90 border-2 border-amber-500/70 text-amber-100 flex items-center justify-between gap-3 text-sm">
+          <div className="flex items-center gap-2.5">
+            <VolumeX className="w-5 h-5 text-amber-400 shrink-0" />
+            <span className="font-medium">
               {!soundEnabled
                 ? 'Scanner sound alerts are currently muted. Enable audio so the cashier hears Accepted and Rejected scan tones.'
                 : 'Browser audio is awaiting first interaction. Click Enable Audio to activate loud scan confirmation & warning sounds.'}
@@ -614,7 +546,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                 sound.playSuccessSound(`unlock_test_${Date.now()}`);
               });
             }}
-            className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shrink-0 cursor-pointer"
+            className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-sm shrink-0 cursor-pointer"
           >
             Enable Audio
           </button>
@@ -623,7 +555,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
       {/* 2. Camera Live Viewfinder if activated */}
       {isCameraActive && (
-        <div className="rounded-2xl bg-black border border-slate-800 overflow-hidden relative shadow-2xl">
+        <div className="rounded-2xl bg-black border-2 border-slate-700 overflow-hidden relative shadow-2xl">
           <div className="relative aspect-video max-h-72 mx-auto flex items-center justify-center">
             <video
               ref={videoRef}
@@ -632,20 +564,19 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
               muted
               className="w-full h-full object-cover"
             />
-            {/* Viewfinder target reticle */}
             <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
               <div className="w-52 h-52 border-2 border-emerald-400 rounded-2xl relative shadow-[0_0_20px_rgba(16,185,129,0.3)] animate-pulse">
                 <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-emerald-400/60 shadow-[0_0_8px_#34d399]" />
               </div>
             </div>
           </div>
-          <div className="py-2 text-center text-xs text-slate-400 bg-slate-950 border-t border-slate-800">
-            Hold student card or phone QR in view of camera
+          <div className="py-2.5 text-center text-sm font-medium text-slate-200 bg-slate-950 border-t border-slate-800">
+            Hold customer card or phone QR in view of camera
           </div>
         </div>
       )}
 
-      {/* 3. Streamlined Scan Input Bar (Clean & Focused) */}
+      {/* 3. Streamlined High-Contrast Scan Input Bar */}
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -659,13 +590,13 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             type="text"
             value={inputPayload}
             onChange={(e) => handleInputChange(e.target.value)}
-            placeholder="Scan card or enter Member ID..."
-            className="w-full pl-11 pr-24 py-3.5 bg-slate-900 border border-slate-700/80 focus:border-emerald-500 rounded-2xl text-sm font-mono text-white placeholder-slate-500 outline-hidden transition-all shadow-inner"
+            placeholder="Scan physical card / QR or enter token..."
+            className="w-full pl-12 pr-28 py-4 bg-slate-900 border-2 border-slate-700 focus:border-emerald-400 rounded-2xl text-base sm:text-lg font-mono text-white placeholder-slate-400 outline-hidden transition-all shadow-inner"
           />
-          <Barcode className="w-5 h-5 text-emerald-400 absolute left-3.5 top-3.5" />
+          <Barcode className="w-6 h-6 text-emerald-400 absolute left-4 top-4" />
           <button
             type="submit"
-            className="absolute right-2 top-2 bottom-2 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer"
+            className="absolute right-2.5 top-2.5 bottom-2.5 px-5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-sm transition-colors cursor-pointer shadow-sm"
           >
             Scan
           </button>
@@ -674,34 +605,38 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
       {/* 4. Quick Simulation Pills (Visible when Demo Mode is active) */}
       {isDemoMode && (
-        <div className="flex items-center gap-2 overflow-x-auto py-1 text-xs">
-          <span className="text-[10px] font-mono uppercase tracking-wider text-amber-400 px-2 py-1 rounded bg-amber-500/10 border border-amber-500/20 shrink-0">
+        <div className="flex items-center gap-2.5 overflow-x-auto py-1 text-xs sm:text-sm">
+          <span className="text-xs font-mono font-bold uppercase tracking-wider text-amber-300 px-2.5 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 shrink-0">
             Demo Taps:
           </span>
           <button
+            type="button"
             onClick={() => handleExecuteScan(demoTokens.jpCard)}
-            className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/50 font-semibold text-emerald-400 transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
+            className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-emerald-500/60 font-bold text-emerald-300 transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
           >
             <span>💳 Card Tap</span>
           </button>
 
           <button
+            type="button"
             onClick={() => handleExecuteScan(demoTokens.jpPhone)}
-            className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-cyan-500/50 font-semibold text-cyan-400 transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
+            className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-cyan-500/60 font-bold text-cyan-300 transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
           >
             <span>📱 Phone QR</span>
           </button>
 
           <button
+            type="button"
             onClick={() => handleExecuteScan(demoTokens.kezaLowBalance)}
-            className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-amber-500/50 font-semibold text-amber-400 transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
+            className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-amber-500/60 font-bold text-amber-300 transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
           >
             <span>⚠️ Low Balance</span>
           </button>
 
           <button
+            type="button"
             onClick={() => handleExecuteScan(demoTokens.wrongResto)}
-            className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-rose-500/50 font-semibold text-rose-400 transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
+            className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-rose-500/60 font-bold text-rose-300 transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
           >
             <span>⛔ Other Resto Card</span>
           </button>
@@ -713,57 +648,60 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         <div className="animate-in fade-in zoom-in-95 duration-150">
           {/* 5A. REJECTED / BLOCKED SCREEN */}
           {activeScan.event.status === 'blocked' ? (
-            <div className="p-6 rounded-3xl bg-rose-950/90 border-2 border-rose-500 text-white shadow-2xl space-y-4">
+            <div className="p-6 rounded-3xl bg-rose-950/95 border-2 border-rose-500 text-white shadow-2xl space-y-4">
               <div className="flex items-start justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-rose-600 rounded-2xl text-white shadow-md">
+                <div className="flex items-center gap-3.5">
+                  <div className="p-3.5 bg-rose-600 rounded-2xl text-white shadow-md">
                     <ShieldAlert className="w-8 h-8" />
                   </div>
                   <div>
-                    <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-rose-500/30 border border-rose-400/50 text-[10px] font-black uppercase tracking-wider text-rose-100 mb-1">
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/30 border border-rose-400/60 text-xs font-black uppercase tracking-wider text-rose-100 mb-1">
                       REJECTED · NO MEAL DEDUCTED
                     </div>
-                    <h2 className="text-2xl font-black text-rose-100 tracking-tight">
+                    <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
                       MEAL REJECTED
                     </h2>
-                    <p className="text-sm text-rose-100 mt-1 font-bold">
+                    <p className="text-base text-rose-100 mt-1 font-bold">
                       {activeScan.rejectionReason || activeScan.event.blockedReason}
                     </p>
                   </div>
                 </div>
 
                 <button
+                  type="button"
                   onClick={handleCloseServing}
-                  className="px-4 py-2 rounded-xl bg-rose-900 hover:bg-rose-800 text-xs font-bold text-white transition-colors cursor-pointer"
+                  className="px-4 py-2.5 rounded-xl bg-rose-900 hover:bg-rose-800 text-sm font-bold text-white transition-colors cursor-pointer"
                 >
                   Dismiss
                 </button>
               </div>
 
               {activeScan.event.customerId && (
-                <div className="flex items-center justify-between gap-3 bg-black/30 p-3 rounded-2xl border border-rose-500/30 text-xs">
+                <div className="flex items-center justify-between gap-3 bg-black/40 p-3.5 rounded-2xl border border-rose-500/40 text-sm">
                   <div>
-                    <span className="font-bold text-white">{activeScan.event.customerName}</span>
+                    <span className="font-bold text-white text-base">{activeScan.event.customerName}</span>
                     <span className="text-rose-200 font-mono ml-2">#{activeScan.event.memberNo}</span>
                   </div>
-                  <div className="font-mono font-bold text-rose-200">
+                  <div className="font-mono font-bold text-rose-100 text-sm">
                     Approved Balance: {activeScan.balanceAfter} meal(s)
                   </div>
                 </div>
               )}
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-rose-800/80">
+              <div className="flex items-center justify-end gap-3 pt-2 border-t border-rose-800/80">
                 {activeScan.event.customerId && (
                   <button
+                    type="button"
                     onClick={() => setOverrideModalOpen(true)}
-                    className="px-4 py-2 bg-white text-rose-950 font-bold text-xs rounded-xl hover:bg-rose-100 transition-colors cursor-pointer"
+                    className="px-4 py-2.5 bg-white text-rose-950 font-black text-sm rounded-xl hover:bg-rose-100 transition-colors cursor-pointer"
                   >
                     Supervisor Override
                   </button>
                 )}
                 <button
+                  type="button"
                   onClick={handleCloseServing}
-                  className="px-4 py-2 bg-rose-900/80 hover:bg-rose-900 text-white font-semibold text-xs rounded-xl transition-colors cursor-pointer"
+                  className="px-5 py-2.5 bg-rose-900/90 hover:bg-rose-800 text-white font-bold text-sm rounded-xl transition-colors cursor-pointer"
                 >
                   Next &rarr;
                 </button>
@@ -771,70 +709,77 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             </div>
           ) : activeScan.event.status === 'rejected_photo' ? (
             /* 5B. REJECTED SPOT-CHECK */
-            <div className="p-6 rounded-3xl bg-amber-950/90 border-2 border-amber-500 text-white shadow-2xl flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <XCircle className="w-8 h-8 text-amber-400" />
+            <div className="p-6 rounded-3xl bg-amber-950/95 border-2 border-amber-500 text-white shadow-2xl flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <XCircle className="w-9 h-9 text-amber-400" />
                 <div>
-                  <h2 className="text-xl font-bold text-amber-100">Photo Mismatch</h2>
-                  <p className="text-xs text-amber-200 mt-0.5">Serving cancelled. Plate refunded.</p>
+                  <h2 className="text-2xl font-black text-amber-100">Photo Mismatch</h2>
+                  <p className="text-sm text-amber-200 mt-0.5">Serving cancelled. Plate refunded.</p>
                 </div>
               </div>
               <button
+                type="button"
                 onClick={handleCloseServing}
-                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl text-sm transition-colors cursor-pointer"
               >
                 Next &rarr;
               </button>
             </div>
           ) : activeScan.event.status === 'undone' ? (
             /* 5C. UNDONE */
-            <div className="p-5 rounded-3xl bg-slate-900 border border-slate-700 text-white flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <RotateCcw className="w-6 h-6 text-emerald-400" />
+            <div className="p-5 rounded-3xl bg-slate-900 border-2 border-slate-700 text-white flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <RotateCcw className="w-7 h-7 text-emerald-400" />
                 <div>
-                  <h2 className="text-base font-bold text-white">Serving Undone</h2>
-                  <p className="text-xs text-slate-400">Plate returned to customer balance.</p>
+                  <h2 className="text-lg font-bold text-white">Serving Undone</h2>
+                  <p className="text-sm text-slate-300">Plate returned to customer balance.</p>
                 </div>
               </div>
               <button
+                type="button"
                 onClick={handleCloseServing}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl text-sm transition-colors cursor-pointer"
               >
                 Next &rarr;
               </button>
             </div>
           ) : (
             /* 5D. SUCCESS APPROVED (High Contrast, Bold, Ultra-Clean POS) */
-            <div className={`p-6 rounded-3xl border-2 transition-all shadow-2xl space-y-4 ${
-              activeScan.event.status === 'warning_confirmed'
-                ? 'bg-amber-950/90 border-amber-500 text-white'
-                : 'bg-emerald-950/90 border-emerald-500 text-white'
-            }`}>
+            <div
+              className={`p-6 rounded-3xl border-2 transition-all shadow-2xl space-y-4 ${
+                activeScan.event.status === 'warning_confirmed'
+                  ? 'bg-amber-950/95 border-amber-500 text-white'
+                  : 'bg-emerald-950/95 border-emerald-500 text-white'
+              }`}
+            >
               {/* Header: Deduction Banner & Balance */}
-              <div className="flex items-center justify-between border-b border-white/10 pb-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-11 h-11 rounded-2xl bg-emerald-500 flex items-center justify-center text-slate-950 font-black shadow-md">
-                    <CheckCircle2 className="w-6 h-6" />
+              <div className="flex items-center justify-between border-b border-white/15 pb-3.5">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-500 flex items-center justify-center text-slate-950 font-black shadow-md">
+                    <CheckCircle2 className="w-7 h-7" />
                   </div>
                   <div>
-                    <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/30 border border-emerald-400/50 text-[10px] font-black uppercase tracking-wider text-emerald-100 mb-1">
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/30 border border-emerald-400/60 text-xs font-black uppercase tracking-wider text-emerald-100 mb-1">
                       ACCEPTED · {activeScan.message || 'Meal accepted — 1 meal recorded.'}
                     </div>
-                    <h2 className="text-2xl font-black tracking-tight">
+                    <h2 className="text-2xl sm:text-3xl font-black tracking-tight">
                       {activeScan.event.platesDeducted === 2 ? '2 PLATES SERVED' : '1 PLATE SERVED'}
                     </h2>
-                    <div className="text-xs text-emerald-300 font-mono">
-                      {new Date(activeScan.event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    <div className="text-sm text-emerald-200 font-mono">
+                      {new Date(activeScan.event.timestamp).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
                     </div>
                   </div>
                 </div>
 
                 {/* Remaining Balance */}
                 <div className="text-right">
-                  <div className="text-4xl font-black font-mono tabular-nums text-white">
+                  <div className="text-4xl sm:text-5xl font-black font-mono tabular-nums text-white">
                     {activeScan.balanceAfter}
                   </div>
-                  <div className="text-[11px] uppercase tracking-wider font-bold text-emerald-300">
+                  <div className="text-xs sm:text-sm uppercase tracking-wider font-bold text-emerald-200">
                     Plates Left
                   </div>
                 </div>
@@ -842,20 +787,20 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
               {/* Photo Spot Check prompt if physical card scanned */}
               {activeScan.event.photoCheckRequired && activeScan.event.photoCheckResult === 'none' && (
-                <div className="p-3 rounded-2xl bg-black/50 border border-amber-500/60 flex items-center justify-between gap-3">
-                  <div className="text-xs font-semibold text-amber-200">
-                    Verify Photo Identity:
-                  </div>
-                  <div className="flex items-center gap-2">
+                <div className="p-3.5 rounded-2xl bg-black/50 border border-amber-500/70 flex items-center justify-between gap-3">
+                  <div className="text-sm font-bold text-amber-100">Verify Photo Identity:</div>
+                  <div className="flex items-center gap-2.5">
                     <button
+                      type="button"
                       onClick={() => handlePhotoCheckDecision('matched')}
-                      className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs cursor-pointer"
+                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm cursor-pointer"
                     >
                       Match ✓
                     </button>
                     <button
+                      type="button"
                       onClick={() => handlePhotoCheckDecision('rejected')}
-                      className="px-3 py-1.5 rounded-xl bg-rose-700 hover:bg-rose-600 text-white font-bold text-xs cursor-pointer"
+                      className="px-4 py-2 rounded-xl bg-rose-700 hover:bg-rose-600 text-white font-bold text-sm cursor-pointer"
                     >
                       Mismatch ✕
                     </button>
@@ -864,27 +809,27 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
               )}
 
               {/* Member Card Profile */}
-              <div className="flex items-center gap-3.5 bg-black/30 p-3 rounded-2xl border border-white/10">
+              <div className="flex items-center gap-4 bg-black/35 p-3.5 rounded-2xl border border-white/15">
                 <img
                   src={activeScan.event.customerPhoto}
                   alt={activeScan.event.customerName}
-                  className="w-14 h-14 rounded-xl object-cover border border-white/30 shadow-md shrink-0"
+                  className="w-16 h-16 rounded-xl object-cover border border-white/30 shadow-md shrink-0"
                 />
                 <div>
-                  <div className="text-xl font-black leading-tight text-white">
+                  <div className="text-xl sm:text-2xl font-black leading-tight text-white">
                     {activeScan.event.customerName}
                   </div>
-                  <div className="text-xs text-slate-300 font-mono mt-0.5">
+                  <div className="text-sm text-slate-200 font-mono mt-0.5">
                     Member #{activeScan.event.memberNo}
                   </div>
                   {activeScan.balanceAfter < 5 && (
-                    <div className="text-[11px] text-amber-300 font-bold mt-0.5">
+                    <div className="text-xs sm:text-sm text-amber-300 font-bold mt-1">
                       ⚠️ Low Balance ({activeScan.balanceAfter} remaining)
                     </div>
                   )}
                   {activeScan.event.isGracePlate && (
-                    <div className="mt-1.5 p-2 rounded-xl bg-amber-500/20 border border-amber-500/40 text-[11px] text-amber-200 flex items-center gap-1.5">
-                      <ShieldCheck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <div className="mt-2 p-2.5 rounded-xl bg-amber-500/25 border border-amber-400/50 text-xs sm:text-sm text-amber-100 flex items-center gap-2">
+                      <ShieldCheck className="w-4 h-4 text-amber-300 shrink-0" />
                       <span>
                         <strong>Provisional Grace Plate Served:</strong> Customer authorized for up to 3 plates while awaiting boss Mobile Money payment approval.
                       </span>
@@ -895,27 +840,30 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
               {/* Action Buttons: 2nd Plate, Undo, Done */}
               <div className="flex items-center justify-between gap-3 pt-1">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2.5">
                   {activeScan.event.platesDeducted < 2 && activeScan.balanceAfter >= 1 && (
                     <button
+                      type="button"
                       onClick={handleAddSecondPlate}
-                      className="px-4 py-2 rounded-xl bg-white text-slate-900 font-bold text-xs hover:bg-slate-100 transition-all shadow-md cursor-pointer active:scale-95"
+                      className="px-4 py-2.5 rounded-xl bg-white text-slate-950 font-black text-sm hover:bg-slate-100 transition-all shadow-md cursor-pointer active:scale-95"
                     >
                       + 2nd Plate
                     </button>
                   )}
 
                   <button
+                    type="button"
                     onClick={handleUndo}
-                    className="px-3.5 py-2 rounded-xl bg-black/40 hover:bg-black/60 border border-white/20 text-white font-semibold text-xs transition-all cursor-pointer"
+                    className="px-4 py-2.5 rounded-xl bg-black/50 hover:bg-black/70 border border-white/25 text-white font-bold text-sm transition-all cursor-pointer"
                   >
                     Undo
                   </button>
                 </div>
 
                 <button
+                  type="button"
                   onClick={handleCloseServing}
-                  className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs transition-all shadow-lg cursor-pointer"
+                  className="px-6 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-sm transition-all shadow-lg cursor-pointer"
                 >
                   Next &rarr; {autoAdvanceSeconds > 0 && `(${autoAdvanceRemaining}s)`}
                 </button>
@@ -925,53 +873,60 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         </div>
       )}
 
-      {/* RECENT STAND SCANS FEED (Clean & Uncluttered) */}
-      <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
+      {/* RECENT STAND SCANS FEED */}
+      <div className="p-5 rounded-2xl bg-slate-900 border border-slate-700/80 space-y-3.5 shadow-lg">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <History className="w-4 h-4 text-emerald-400" />
-            <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+            <History className="w-5 h-5 text-emerald-400" />
+            <h3 className="text-sm font-black text-white uppercase tracking-wider">
               Recent Servings
             </h3>
           </div>
-          <span className="text-[11px] font-mono text-slate-400">
+          <span className="text-xs sm:text-sm font-mono text-slate-300 font-semibold">
             {restoScanEvents.length} recorded
           </span>
         </div>
 
         {restoScanEvents.length === 0 ? (
-          <div className="py-6 text-center text-xs text-slate-500">
-            Ready for scans. Tap a card or phone QR.
+          <div className="py-6 text-center text-sm text-slate-300">
+            Ready for scans. Tap a physical card or digital QR pass.
           </div>
         ) : (
-          <div className="divide-y divide-slate-800/80 max-h-56 overflow-y-auto">
+          <div className="divide-y divide-slate-800 max-h-60 overflow-y-auto">
             {restoScanEvents.slice(0, 6).map((ev) => (
-              <div key={ev.id} className="py-2 flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2.5">
-                  <div className={`w-2 h-2 rounded-full ${
-                    ev.status === 'approved'
-                      ? 'bg-emerald-500'
-                      : ev.status === 'warning_confirmed'
-                      ? 'bg-amber-500'
-                      : 'bg-rose-500'
-                  }`} />
+              <div key={ev.id} className="py-2.5 flex items-center justify-between text-sm">
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                      ev.status === 'approved'
+                        ? 'bg-emerald-400'
+                        : ev.status === 'warning_confirmed'
+                        ? 'bg-amber-400'
+                        : 'bg-rose-400'
+                    }`}
+                  />
                   <div>
-                    <span className="font-semibold text-slate-200">
+                    <span className="font-bold text-white">
                       {ev.customerName || 'Unknown Customer'}
                     </span>
-                    <span className="text-slate-400 ml-1.5 font-mono text-[11px]">
+                    <span className="text-slate-300 ml-2 font-mono text-xs sm:text-sm">
                       #{ev.memberNo}
                     </span>
                     {ev.platesDeducted > 0 && (
-                      <span className="text-emerald-400 font-mono ml-2 font-bold">
+                      <span className="text-emerald-300 font-mono ml-2 font-bold">
                         -{ev.platesDeducted} plate{ev.platesDeducted > 1 ? 's' : ''}
                       </span>
                     )}
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3 text-slate-400 font-mono text-[11px] tabular-nums">
-                  <span>{new Date(ev.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                <div className="flex items-center gap-3 text-slate-300 font-mono text-xs sm:text-sm tabular-nums">
+                  <span>
+                    {new Date(ev.timestamp).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </span>
                 </div>
               </div>
             ))}
@@ -981,45 +936,51 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
       {/* ADMIN OVERRIDE MODAL */}
       {overrideModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div className="bg-slate-900 border-2 border-slate-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
             <div className="flex items-center gap-2.5 text-rose-400">
-              <ShieldAlert className="w-5 h-5" />
-              <h3 className="text-base font-bold text-white">Approve Manager Override</h3>
+              <ShieldAlert className="w-6 h-6" />
+              <h3 className="text-lg font-bold text-white">Approve Manager Override</h3>
             </div>
-            <p className="text-xs text-slate-300">
+            <p className="text-sm text-slate-200 leading-relaxed">
               Customer reached maximum serving limit in 2 hours. Overriding requires a logged justification for the platform audit log.
             </p>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-400">Override Reason / Justification</label>
+              <label className="text-sm font-bold text-slate-200">Override Reason / Justification</label>
               <textarea
                 value={overrideReason}
                 onChange={(e) => setOverrideReason(e.target.value)}
                 rows={3}
-                className="w-full p-2.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white focus:border-emerald-500 outline-hidden"
+                className="w-full p-3 rounded-xl bg-slate-950 border-2 border-slate-700 text-sm text-white focus:border-emerald-400 outline-hidden"
               />
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2">
+            <div className="flex items-center justify-end gap-3 pt-2">
               <button
+                type="button"
                 onClick={() => setOverrideModalOpen(false)}
-                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium"
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-bold cursor-pointer"
               >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={handleConfirmOverride}
-                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-sm"
+                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-black shadow-sm cursor-pointer"
               >
-                Confirm Override & Deduct Plate
+                Confirm Override &amp; Deduct Plate
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* PROVISIONAL REGISTRATION & RECHARGE MODAL (Boss Delegation) */}
+      {/* PROVISIONAL REGISTRATION & RECHARGE MODAL */}
       <ScannerProvisionalModal
         isOpen={isProvisionalModalOpen}
         onClose={() => setIsProvisionalModalOpen(false)}
@@ -1034,51 +995,43 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         stationId={state.currentStationId}
       />
 
-      {/* TERMINAL PAIRING MODAL */}
-      {isPairingModalOpen && (
-        <TerminalPairingModal
-          restaurantCode={state.currentRestaurantCode}
-          onClose={() => setIsPairingModalOpen(false)}
-          onSuccess={() => {
-            setIsPairingModalOpen(false);
-            setRefreshCount((c) => c + 1);
-          }}
-        />
-      )}
-
       {/* CUSTOMER NON-SMS ACTIVATION & PIN RECOVERY DESK MODAL */}
       {isPinDeskModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div className="bg-slate-900 border-2 border-slate-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
+                <div className="p-2.5 rounded-xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-400">
                   <KeyRound className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">Customer PIN &amp; Activation Desk</h3>
-                  <p className="text-xs text-slate-400">In-person identity check (No SMS required)</p>
+                  <h3 className="text-lg font-bold text-white">Customer PIN &amp; Activation Desk</h3>
+                  <p className="text-sm text-slate-300">In-person identity check (No SMS required)</p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setIsPinDeskModalOpen(false)}
-                className="text-slate-400 hover:text-white text-xs font-semibold cursor-pointer"
+                className="text-slate-300 hover:text-white text-sm font-bold cursor-pointer"
               >
                 Close
               </button>
             </div>
 
             {/* Mode Switcher */}
-            <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-950 border border-slate-800 text-xs">
+            <div className="grid grid-cols-2 gap-2 p-1.5 rounded-xl bg-slate-950 border border-slate-800 text-sm">
               <button
                 type="button"
                 onClick={() => {
                   setPinDeskMode('activation');
                   setPinDeskResult(null);
                 }}
-                className={`py-2 rounded-lg font-bold transition-colors cursor-pointer ${
-                  pinDeskMode === 'activation' ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-white'
+                className={`py-2.5 rounded-lg font-bold transition-colors cursor-pointer ${
+                  pinDeskMode === 'activation' ? 'bg-cyan-600 text-white' : 'text-slate-300 hover:text-white'
                 }`}
               >
                 1. First-Time Activation
@@ -1089,24 +1042,24 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                   setPinDeskMode('recovery');
                   setPinDeskResult(null);
                 }}
-                className={`py-2 rounded-lg font-bold transition-colors cursor-pointer ${
-                  pinDeskMode === 'recovery' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'
+                className={`py-2.5 rounded-lg font-bold transition-colors cursor-pointer ${
+                  pinDeskMode === 'recovery' ? 'bg-amber-600 text-white' : 'text-slate-300 hover:text-white'
                 }`}
               >
                 2. Forgot PIN Recovery
               </button>
             </div>
 
-            <div className="space-y-3 text-xs">
+            <div className="space-y-3.5 text-sm">
               <div>
-                <label className="block text-slate-300 font-semibold mb-1">Select Verified Patron</label>
+                <label className="block text-slate-200 font-bold mb-1.5">Select Verified Patron</label>
                 <select
                   value={pinDeskCustomerId}
                   onChange={(e) => {
                     setPinDeskCustomerId(e.target.value);
                     setPinDeskResult(null);
                   }}
-                  className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white outline-hidden focus:border-cyan-500"
+                  className="w-full p-3 rounded-xl bg-slate-950 border-2 border-slate-700 text-white outline-hidden focus:border-cyan-400"
                 >
                   {state.customers
                     .filter((c) => c.restaurantCode === state.currentRestaurantCode)
@@ -1121,11 +1074,11 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
               {pinDeskMode === 'recovery' && (
                 <>
                   <div>
-                    <label className="block text-slate-300 font-semibold mb-1">Physical ID Verified</label>
+                    <label className="block text-slate-200 font-bold mb-1.5">Physical ID Verified</label>
                     <select
                       value={pinDeskIdMethod}
                       onChange={(e) => setPinDeskIdMethod(e.target.value as any)}
-                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white outline-hidden"
+                      className="w-full p-3 rounded-xl bg-slate-950 border-2 border-slate-700 text-white outline-hidden"
                     >
                       <option value="student_id_check">University Student ID Card</option>
                       <option value="national_id_check">National ID / Passport</option>
@@ -1134,12 +1087,12 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                     </select>
                   </div>
                   <div>
-                    <label className="block text-slate-300 font-semibold mb-1">Audit Reason</label>
+                    <label className="block text-slate-200 font-bold mb-1.5">Audit Reason</label>
                     <input
                       type="text"
                       value={pinDeskReason}
                       onChange={(e) => setPinDeskReason(e.target.value)}
-                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white outline-hidden"
+                      className="w-full p-3 rounded-xl bg-slate-950 border-2 border-slate-700 text-white outline-hidden"
                     />
                   </div>
                 </>
@@ -1147,32 +1100,32 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
               {pinDeskResult && (
                 <div
-                  className={`p-4 rounded-2xl border space-y-2 ${
+                  className={`p-4 rounded-2xl border-2 space-y-2 ${
                     pinDeskResult.error
-                      ? 'bg-rose-950/80 border-rose-700 text-rose-200'
-                      : 'bg-emerald-950/80 border-emerald-600 text-emerald-200'
+                      ? 'bg-rose-950/90 border-rose-600 text-rose-100'
+                      : 'bg-emerald-950/90 border-emerald-500 text-emerald-100'
                   }`}
                 >
                   {pinDeskResult.error ? (
-                    <div className="font-semibold">{pinDeskResult.error}</div>
+                    <div className="font-bold text-sm">{pinDeskResult.error}</div>
                   ) : (
                     <>
-                      <div className="text-[11px] uppercase tracking-wider font-bold text-emerald-400">
+                      <div className="text-xs uppercase tracking-wider font-black text-emerald-300">
                         {pinDeskResult.type === 'activation'
                           ? '15-Minute Single-Use Activation Code'
                           : 'PIN Recovery Request Logged'}
                       </div>
                       {pinDeskResult.code && (
-                        <div className="text-3xl font-black font-mono tracking-widest text-white bg-slate-950/90 py-3 px-4 rounded-xl text-center border border-emerald-500/40">
+                        <div className="text-3xl font-black font-mono tracking-widest text-white bg-slate-950 py-3 px-4 rounded-xl text-center border border-emerald-500/50">
                           {pinDeskResult.code}
                         </div>
                       )}
                       {pinDeskResult.requestId && (
-                        <div className="text-xs font-mono text-amber-300">
+                        <div className="text-sm font-mono text-amber-300">
                           Request ID: <strong>{pinDeskResult.requestId}</strong>
                         </div>
                       )}
-                      <p className="text-[11px] text-slate-300">
+                      <p className="text-xs sm:text-sm text-slate-200 leading-relaxed">
                         Have <strong>{pinDeskResult.customerName} (#{pinDeskResult.memberNo})</strong> enter this code on the Customer Portal login screen to privately set their new 6-digit PIN.
                       </p>
                     </>
@@ -1234,7 +1187,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                     }
                   }
                 }}
-                className="w-full py-3 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs shadow-md transition-colors cursor-pointer"
+                className="w-full py-3.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-black text-sm shadow-md transition-colors cursor-pointer"
               >
                 {pinDeskMode === 'activation'
                   ? 'Generate 15-Minute Activation Code'

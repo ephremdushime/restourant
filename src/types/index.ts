@@ -545,9 +545,16 @@ export interface StudentSubscriptionPayment {
   failureReason?: string;
 }
 
+export type StudentEntitlementFeature =
+  | 'physical_card_scan'
+  | 'digital_qr'
+  | 'customer_dashboard'
+  | 'digital_plate_transfer'
+  | 'customer_transaction_history';
+
 export interface StudentEntitlementResult {
   allowed: boolean;
-  feature: 'customer_dashboard' | 'digital_plate_transfer' | 'customer_transaction_history';
+  feature: StudentEntitlementFeature;
   status: StudentSubscriptionStatus;
   inGracePeriod: boolean;
   enforcementEnabled: boolean;

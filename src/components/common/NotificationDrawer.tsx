@@ -39,10 +39,21 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({
 
   if (!isOpen) return null;
 
-  // Retrieve relevant notifications
-  const rawNotifications: AppNotification[] = isCustomer && currentCustomer
-    ? restoStore.getCustomerNotifications(currentCustomer.id, state.currentRestaurantCode)
-    : restoStore.getRestaurantNotifications(state.currentRestaurantCode);
+  // Retrieve relevant notifications (gated for customer role if dashboard subscription is required and inactive)
+  const isCustomerGated =
+    isCustomer &&
+    Boolean(
+      currentCustomer &&
+        restoStore.getStudentSubscriptionSettings().enabled &&
+        !restoStore.checkStudentEntitlement(currentCustomer.id, 'customer_dashboard').allowed
+    );
+
+  const rawNotifications: AppNotification[] =
+    isCustomer && currentCustomer
+      ? isCustomerGated
+        ? []
+        : restoStore.getCustomerNotifications(currentCustomer.id, state.currentRestaurantCode)
+      : restoStore.getRestaurantNotifications(state.currentRestaurantCode);
 
   const notifications = rawNotifications.filter((n) => {
     if (activeFilter === 'unread' && isCustomer && currentCustomer) {

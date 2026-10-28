@@ -986,6 +986,16 @@ app.post('/api/qr/token/phone', apiRateLimiter, requireAuth(), (req, res) => {
   if (user.role === 'customer' && (user.username !== memberNo || user.restaurantCode !== restaurantCode)) {
     return res.status(403).json({ success: false, error: 'Forbidden: Customers may only generate their own pass' });
   }
+  if (user.role === 'customer') {
+    const qrEnt = checkServerStudentEntitlement(user.userId, 'digital_qr');
+    if (!qrEnt.allowed) {
+      return res.status(402).json({
+        success: false,
+        requiresSubscription: true,
+        error: qrEnt.reason || 'Digital dashboard QR requires an active subscription (500 RWF/mo).',
+      });
+    }
+  }
   if ((user.role === 'stand_staff' || user.role === 'restaurant_admin') && user.restaurantCode !== restaurantCode) {
     return res.status(403).json({ success: false, error: 'Forbidden: Cross-restaurant token generation not allowed' });
   }
@@ -1121,6 +1131,18 @@ app.post(
 
     // 2. Dynamic Phone QR Verification (v1) with Shared Multi-Terminal Replay Protection
     if (versionPrefix === 'v1') {
+      // Digital dashboard QR requires an active subscription when monetization is enabled
+      const qrEntitlement = checkServerStudentEntitlement(customer.id, 'digital_qr');
+      if (!qrEntitlement.allowed) {
+        return res.json({
+          success: true,
+          valid: false,
+          requiresSubscription: true,
+          error:
+            'Digital QR pass requires an active dashboard subscription (500 RWF/mo). Please scan physical card or activate subscription.',
+        });
+      }
+
       const scannedStep = parseInt(stepOrVer, 10);
       if (isNaN(scannedStep)) {
         return res.json({ success: true, valid: false, error: 'Corrupt token step' });
@@ -1366,7 +1388,12 @@ app.post(
  */
 function checkServerStudentEntitlement(
   customerId: string,
-  feature: 'customer_dashboard' | 'digital_plate_transfer' | 'customer_transaction_history' = 'digital_plate_transfer'
+  feature:
+    | 'physical_card_scan'
+    | 'digital_qr'
+    | 'customer_dashboard'
+    | 'digital_plate_transfer'
+    | 'customer_transaction_history' = 'digital_plate_transfer'
 ): {
   allowed: boolean;
   feature: string;
@@ -1379,6 +1406,20 @@ function checkServerStudentEntitlement(
 } {
   ensureServerDbDefaults(serverDbState);
   const settings = serverDbState?.studentSubscriptionSettings;
+
+  // Physical card QR scanning NEVER requires a dashboard subscription
+  if (feature === 'physical_card_scan') {
+    const subs = serverDbState?.customerSubscriptions || [];
+    const sub = subs.find((s: any) => s.customerId === customerId);
+    return {
+      allowed: true,
+      feature,
+      status: sub?.status || 'inactive',
+      inGracePeriod: sub?.status === 'grace_period',
+      enforcementEnabled: Boolean(settings?.enabled),
+      reason: 'Physical card QR scanning does not require a dashboard subscription.',
+    };
+  }
 
   if (!settings?.enabled) {
     return {
@@ -1913,6 +1954,7 @@ function scopeStateForUser(state: any, user: UserSession): any {
   if (user.role === 'customer') {
     const rCode = user.restaurantCode;
     const custId = user.userId;
+    const dashEnt = checkServerStudentEntitlement(custId, 'customer_dashboard');
     return {
       currentRestaurantCode: rCode,
       restaurants: (state.restaurants || []).filter((r: any) => r.code === rCode),
@@ -1922,12 +1964,12 @@ function scopeStateForUser(state: any, user: UserSession): any {
           ...c,
           pinHash: undefined, // Redact sensitive hash
         })),
-      ledgerEntries: (state.ledgerEntries || []).filter((l: any) => l.customerId === custId),
+      ledgerEntries: dashEnt.allowed ? (state.ledgerEntries || []).filter((l: any) => l.customerId === custId) : [],
       menuItems: (state.menuItems || []).filter((m: any) => m.restaurantCode === rCode),
       packages: (state.packages || []).filter((p: any) => p.restaurantCode === rCode),
-      notifications: (state.notifications || []).filter(
-        (n: any) => !n.targetCustomerId || n.targetCustomerId === custId
-      ),
+      notifications: dashEnt.allowed
+        ? (state.notifications || []).filter((n: any) => !n.targetCustomerId || n.targetCustomerId === custId)
+        : [],
       studentSubscriptionSettings: state.studentSubscriptionSettings || {
         enabled: false,
         priceRwf: 500,
