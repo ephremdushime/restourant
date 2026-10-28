@@ -113,6 +113,13 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   // Non-SMS Customer Activation & Recovery Modal States
   const [showActivationModal, setShowActivationModal] = useState(false);
   const [showRecoveryModal, setShowRecoveryModal] = useState(false);
+  const [pinConfirm, setPinConfirm] = useState('');
+
+  // Check if the entered customer phone/memberNo is Boss-approved and needs first-time PIN setup
+  const customerPortalStatus =
+    activeRole === 'customer' && phoneOrMember.trim()
+      ? restoStore.checkCustomerPortalStatus(phoneOrMember.trim(), selectedRestoCode)
+      : null;
 
   // Activation inputs
   const [actPhone, setActPhone] = useState('');
@@ -270,6 +277,36 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           setErrorMessage(t.auth.enterPin);
           sound.playDangerAlarm();
           setIsVerifying(false);
+          return;
+        }
+
+        // Check if this customer was just approved by the Boss and is setting up their first-time PIN
+        const statusCheck = restoStore.checkCustomerPortalStatus(cleanPhoneOrMember, selectedRestoCode);
+        if (statusCheck.status === 'needs_pin_setup') {
+          if (!/^\d{6,}$/.test(enteredPin)) {
+            setErrorMessage('New personal PIN must be at least 6 numeric digits.');
+            sound.playDangerAlarm();
+            setIsVerifying(false);
+            return;
+          }
+          if (enteredPin !== pinConfirm.trim()) {
+            setErrorMessage('PINs do not match. Please confirm your 6+ digit PIN.');
+            sound.playDangerAlarm();
+            setIsVerifying(false);
+            return;
+          }
+          const setupRes = await restoStore.setupFirstTimeCustomerPin({
+            phoneOrMember: cleanPhoneOrMember,
+            newPin: enteredPin,
+            restaurantCode: selectedRestoCode,
+          });
+          if (setupRes.success && setupRes.customer) {
+            setFailedAttempts(0);
+            sound.playSuccessBeep();
+            onLoginSuccess('customer', `${setupRes.customer.name} (#${setupRes.customer.memberNo})`);
+          } else {
+            handleFailedAttempt(setupRes.error || 'Could not complete first-time PIN setup.');
+          }
           return;
         }
 
@@ -613,49 +650,111 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           {/* Role-Specific Fields: 3. Customer Meal Portal (Phone + 6+ digit PIN) */}
           {activeRole === 'customer' && (
             <>
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-300">
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-200 text-sm">
                   Registered Phone Number (or Member No)
                 </label>
                 <input
                   type="text"
                   value={phoneOrMember}
-                  onChange={(e) => setPhoneOrMember(e.target.value)}
+                  onChange={(e) => {
+                    setPhoneOrMember(e.target.value);
+                    setErrorMessage(null);
+                  }}
                   placeholder="e.g. +250 788 123 456 or 28491"
-                  className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-white outline-hidden font-mono"
+                  className="w-full bg-slate-950 border-2 border-slate-700 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-white outline-hidden font-mono text-sm font-bold"
                 />
               </div>
 
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="font-semibold text-slate-300">Personal PIN (6+ digits)</label>
-                  <button
-                    type="button"
-                    onClick={() => setShowRecoveryModal(true)}
-                    className="text-[11px] text-sky-400 hover:text-sky-300 underline cursor-pointer"
-                  >
-                    Forgot PIN?
-                  </button>
+              {customerPortalStatus?.status === 'needs_pin_setup' && customerPortalStatus.customer ? (
+                <div className="space-y-3 p-3.5 rounded-2xl bg-emerald-950/50 border-2 border-emerald-500/70">
+                  <div className="flex items-start gap-2.5">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="text-sm font-black text-white">
+                        Registration Approved for {customerPortalStatus.customer.name} (#{customerPortalStatus.customer.memberNo})!
+                      </div>
+                      <p className="text-xs text-emerald-200 font-medium mt-0.5">
+                        Create your personal 6+ digit security PIN below to unlock and access your customer dashboard.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="font-bold text-slate-200 text-xs block mb-1">
+                        Create Personal PIN (6+ digits)
+                      </label>
+                      <input
+                        type="password"
+                        inputMode="numeric"
+                        maxLength={16}
+                        value={pin}
+                        onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
+                        placeholder="Min 6 digits"
+                        className="w-full bg-slate-950 border-2 border-emerald-600 focus:border-emerald-400 rounded-xl px-3 py-2.5 text-white outline-hidden font-mono text-center tracking-widest text-base font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-200 text-xs block mb-1">
+                        Confirm Personal PIN
+                      </label>
+                      <input
+                        type="password"
+                        inputMode="numeric"
+                        maxLength={16}
+                        value={pinConfirm}
+                        onChange={(e) => setPinConfirm(e.target.value.replace(/\D/g, ''))}
+                        placeholder="Re-enter PIN"
+                        className="w-full bg-slate-950 border-2 border-emerald-600 focus:border-emerald-400 rounded-xl px-3 py-2.5 text-white outline-hidden font-mono text-center tracking-widest text-base font-bold"
+                      />
+                    </div>
+                  </div>
                 </div>
-                <input
-                  type="password"
-                  maxLength={16}
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  placeholder="•••••• (min. 6 digits)"
-                  className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-white outline-hidden font-mono text-center tracking-widest text-lg font-bold"
-                />
-              </div>
+              ) : customerPortalStatus?.status === 'pending_boss_approval' && customerPortalStatus.customer ? (
+                <div className="p-3.5 rounded-2xl bg-amber-950/60 border-2 border-amber-500/60 text-amber-200 text-xs space-y-1">
+                  <div className="font-black text-sm text-amber-300">
+                    Registration Awaiting Boss Approval (#{customerPortalStatus.customer.memberNo})
+                  </div>
+                  <p className="font-medium leading-relaxed">
+                    Your registration is in the Restaurant Boss approval queue. While waiting, you can already eat up to <strong>3 grace meals</strong> at the cafeteria stand. Once approved, return here to set your personal PIN!
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="font-bold text-slate-200 text-sm">Personal PIN (6+ digits)</label>
+                    <button
+                      type="button"
+                      onClick={() => setShowRecoveryModal(true)}
+                      className="text-xs font-bold text-sky-400 hover:text-sky-300 underline cursor-pointer"
+                    >
+                      Forgot PIN?
+                    </button>
+                  </div>
+                  <input
+                    type="password"
+                    maxLength={16}
+                    value={pin}
+                    onChange={(e) => setPin(e.target.value)}
+                    placeholder="•••••• (min. 6 digits)"
+                    className="w-full bg-slate-950 border-2 border-slate-700 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-white outline-hidden font-mono text-center tracking-widest text-lg font-bold"
+                  />
+                </div>
+              )}
 
               <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 text-xs flex items-center justify-between">
-                <div className="text-slate-400 text-[11px]">First time logging in?</div>
+                <div className="text-slate-300 text-xs font-medium">First time after Boss approval?</div>
                 <button
                   type="button"
-                  onClick={() => setShowActivationModal(true)}
+                  onClick={() => {
+                    setActPhone(phoneOrMember);
+                    setShowActivationModal(true);
+                  }}
                   className="text-xs font-bold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 cursor-pointer"
                 >
                   <Sparkles className="w-3.5 h-3.5" />
-                  <span>Activate Account (No SMS)</span>
+                  <span>Set Up Personal PIN</span>
                 </button>
               </div>
             </>
@@ -788,14 +887,14 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
         </div>
       </div>
 
-      {/* NON-SMS ACCOUNT ACTIVATION MODAL */}
+      {/* FIRST-TIME PIN SETUP & ACCOUNT ACTIVATION MODAL */}
       {showActivationModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+          <div className="bg-slate-900 border-2 border-slate-700 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-emerald-400" />
-                <h3 className="text-base font-bold text-white">Activate RestoPass Account</h3>
+                <h3 className="text-base font-bold text-white">Set Up First-Time Personal PIN</h3>
               </div>
               <button
                 type="button"
@@ -809,8 +908,8 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
               </button>
             </div>
 
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Activate your account privately without SMS OTPs. Enter your registered phone number and the single-use 6-digit activation code issued by cafeteria desk.
+            <p className="text-sm text-slate-200 leading-relaxed">
+              Once the Restaurant Boss approves your registration, enter your registered phone number (or Member ID) below to create your personal 6+ digit PIN and open your dashboard.
             </p>
 
             <form
@@ -818,11 +917,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
                 e.preventDefault();
                 setActError(null);
                 if (!actPhone.trim()) {
-                  setActError('Please enter your phone number');
-                  return;
-                }
-                if (!actCode.trim()) {
-                  setActError('Please enter the 6-digit cashier activation code');
+                  setActError('Please enter your registered phone number or Member ID');
                   return;
                 }
                 if (actPin.length < 6) {
@@ -837,7 +932,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
                 setActLoading(true);
                 const res = await restoStore.completeCustomerActivation({
                   phoneOrMember: actPhone.trim(),
-                  activationCode: actCode.trim(),
+                  activationCode: actCode.trim() || undefined,
                   newPin: actPin.trim(),
                   restaurantCode: selectedRestoCode,
                 });
@@ -851,66 +946,56 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
                   setShowActivationModal(false);
                   onLoginSuccess('customer', `${res.customer.name} (#${res.customer.memberNo})`);
                 } else {
-                  setActError(res.error || 'Activation failed');
+                  setActError(res.error || 'PIN setup failed');
                   sound.playDangerAlarm();
                 }
               }}
-              className="space-y-3 text-xs"
+              className="space-y-3.5 text-sm"
             >
               <div>
-                <label className="font-semibold text-slate-300 block mb-1">Registered Phone Number</label>
+                <label className="font-bold text-slate-200 block mb-1">Registered Phone Number or Member ID</label>
                 <input
                   type="text"
                   value={actPhone}
                   onChange={(e) => setActPhone(e.target.value)}
-                  placeholder="e.g. +250 788 123 456"
-                  className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono focus:border-emerald-500 outline-hidden"
+                  placeholder="e.g. +250 788 123 456 or 28500"
+                  className="w-full p-3 rounded-xl bg-slate-950 border-2 border-slate-700 text-white font-mono font-bold focus:border-emerald-500 outline-hidden"
                 />
               </div>
 
-              <div>
-                <label className="font-semibold text-slate-300 block mb-1">Single-Use Activation Code</label>
-                <input
-                  type="text"
-                  maxLength={8}
-                  value={actCode}
-                  onChange={(e) => setActCode(e.target.value)}
-                  placeholder="6-digit code from cafeteria desk"
-                  className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono text-center tracking-widest text-sm focus:border-emerald-500 outline-hidden"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-2.5">
                 <div>
-                  <label className="font-semibold text-slate-300 block mb-1">Set Personal PIN</label>
+                  <label className="font-bold text-slate-200 block mb-1">Set Personal PIN</label>
                   <input
                     type="password"
+                    inputMode="numeric"
                     maxLength={16}
                     value={actPin}
-                    onChange={(e) => setActPin(e.target.value)}
+                    onChange={(e) => setActPin(e.target.value.replace(/\D/g, ''))}
                     placeholder="Min 6 digits"
-                    className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono text-center focus:border-emerald-500 outline-hidden"
+                    className="w-full p-3 rounded-xl bg-slate-950 border-2 border-slate-700 text-white font-mono font-bold text-center focus:border-emerald-500 outline-hidden"
                   />
                 </div>
                 <div>
-                  <label className="font-semibold text-slate-300 block mb-1">Confirm PIN</label>
+                  <label className="font-bold text-slate-200 block mb-1">Confirm PIN</label>
                   <input
                     type="password"
+                    inputMode="numeric"
                     maxLength={16}
                     value={actPinConfirm}
-                    onChange={(e) => setActPinConfirm(e.target.value)}
+                    onChange={(e) => setActPinConfirm(e.target.value.replace(/\D/g, ''))}
                     placeholder="Re-enter PIN"
-                    className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono text-center focus:border-emerald-500 outline-hidden"
+                    className="w-full p-3 rounded-xl bg-slate-950 border-2 border-slate-700 text-white font-mono font-bold text-center focus:border-emerald-500 outline-hidden"
                   />
                 </div>
               </div>
 
-              <div className="p-2 rounded-xl bg-slate-950 text-[10.5px] text-slate-400">
-                Staff never see or choose your PIN. It is cryptographically salted on your device and the central server.
+              <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300">
+                Staff never see or choose your PIN. Your PIN is cryptographically salted and protects your dashboard and plate transfers.
               </div>
 
               {actError && (
-                <div className="p-2.5 rounded-xl bg-rose-950/80 border border-rose-700 text-rose-300 text-xs">
+                <div className="p-3 rounded-xl bg-rose-950/90 border-2 border-rose-600 text-rose-200 text-xs font-bold">
                   {actError}
                 </div>
               )}
@@ -919,16 +1004,16 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowActivationModal(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold cursor-pointer"
+                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={actLoading}
-                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold shadow-md cursor-pointer disabled:opacity-50"
+                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black shadow-md cursor-pointer disabled:opacity-50"
                 >
-                  {actLoading ? 'Activating...' : 'Activate & Enter Dashboard'}
+                  {actLoading ? 'Setting PIN...' : 'Save PIN & Open Dashboard'}
                 </button>
               </div>
             </form>

@@ -1399,6 +1399,15 @@ export class RestoStore {
     return this.authToken;
   }
 
+  private pendingOfflineAuthParams: {
+    role: string;
+    username?: string;
+    password?: string;
+    pin?: string;
+    restaurantCode?: string;
+    stationId?: string;
+  } | null = null;
+
   public async loginToServer(params: {
     role: string;
     username?: string;
@@ -1407,6 +1416,7 @@ export class RestoStore {
     restaurantCode?: string;
     stationId?: string;
   }): Promise<{ success: boolean; token?: string; user?: any; error?: string }> {
+    this.pendingOfflineAuthParams = params;
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -1425,7 +1435,28 @@ export class RestoStore {
     }
   }
 
+  private async ensureAuthTokenIfOfflineSession(): Promise<boolean> {
+    if (this.authToken) return true;
+    if (!this.pendingOfflineAuthParams || typeof window === 'undefined' || !navigator.onLine) {
+      return false;
+    }
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(this.pendingOfflineAuthParams),
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.token) {
+        this.setAuthToken(data.token);
+        return true;
+      }
+    } catch {}
+    return false;
+  }
+
   public async logoutFromServer(): Promise<void> {
+    this.pendingOfflineAuthParams = null;
     if (this.authToken) {
       try {
         await fetch('/api/auth/logout', {
@@ -1441,7 +1472,11 @@ export class RestoStore {
   }
 
   public async pushStateToServer(): Promise<void> {
-    if (typeof window === 'undefined' || !navigator.onLine || this.isSyncingWithServer || !this.authToken) return;
+    if (typeof window === 'undefined' || !navigator.onLine || this.isSyncingWithServer) return;
+    if (!this.authToken) {
+      const recovered = await this.ensureAuthTokenIfOfflineSession();
+      if (!recovered) return;
+    }
     this.isSyncingWithServer = true;
     try {
       const res = await fetch('/api/sync', {
@@ -1454,6 +1489,14 @@ export class RestoStore {
       });
       if (res.ok) {
         const data = await res.json();
+        // Mark all local outbox items as synced after server confirms receipt
+        this.state.syncOutbox.forEach((item) => {
+          item.syncedToCloud = true;
+        });
+        const r = this.getCurrentRestaurant();
+        if (r) {
+          r.lastSyncAt = new Date().toISOString();
+        }
         if (data.serverState) {
           this.mergeServerState(data.serverState);
         }
@@ -1469,7 +1512,11 @@ export class RestoStore {
   }
 
   public async pullStateFromServer(): Promise<void> {
-    if (typeof window === 'undefined' || !navigator.onLine || this.isSyncingWithServer || !this.authToken) return;
+    if (typeof window === 'undefined' || !navigator.onLine || this.isSyncingWithServer) return;
+    if (!this.authToken) {
+      const recovered = await this.ensureAuthTokenIfOfflineSession();
+      if (!recovered) return;
+    }
     try {
       const res = await fetch('/api/state', {
         headers: {
@@ -1974,6 +2021,20 @@ export class RestoStore {
         tokenPayload: payload,
       };
       this.state.scanEvents.unshift(failEvent);
+      if (customer) {
+        this.sendNotification({
+          restaurantCode,
+          target: customer.id,
+          targetName: `${customer.name} (#${customer.memberNo})`,
+          senderRole: 'system',
+          senderName: station.name,
+          type: 'card_security',
+          title: 'Scan Declined at Stand',
+          message: `A scan attempt at ${station.name} was declined: ${rejectionReason}`,
+          priority: rejectionCode === 'NO_BALANCE' || rejectionCode === 'ACCOUNT_INACTIVE' ? 'important' : 'normal',
+          actionTab: 'my_card',
+        });
+      }
       this.notify();
       return {
         outcome: 'REJECTED' as const,
@@ -2466,6 +2527,24 @@ export class RestoStore {
     scanEvent.status = 'undone';
     scanEvent.platesDeducted = 0;
 
+    if (scanEvent.customerId) {
+      const restoredBal = this.getCustomerBalance(scanEvent.customerId);
+      this.sendNotification({
+        restaurantCode: scanEvent.restaurantCode,
+        target: scanEvent.customerId,
+        targetName: `${scanEvent.customerName} (#${scanEvent.memberNo})`,
+        senderRole: 'system',
+        senderName: scanEvent.scanPointName,
+        type: 'balance_adjustment',
+        title: `Serving Undone (+${platesToRestore} Plate${platesToRestore > 1 ? 's' : ''} Restored)`,
+        message: scanEvent.isGracePlate
+          ? `Stand operator reversed your recent grace meal scan at ${scanEvent.scanPointName}.`
+          : `Stand operator reversed your recent scan at ${scanEvent.scanPointName}. Restored +${platesToRestore} plate(s). Current balance: ${restoredBal} plates.`,
+        priority: 'normal',
+        actionTab: 'history',
+      });
+    }
+
     sound.playUndoBeep();
     this.notify();
     return true;
@@ -2539,6 +2618,22 @@ export class RestoStore {
       action: 'SCAN_OVERRIDE_APPROVED',
       details: `Approved serving override for customer #${scanEvent.memberNo}. Reason: "${reason}"`,
     });
+
+    if (scanEvent.customerId) {
+      const updatedBal = this.getCustomerBalance(scanEvent.customerId);
+      this.sendNotification({
+        restaurantCode: scanEvent.restaurantCode,
+        target: scanEvent.customerId,
+        targetName: `${scanEvent.customerName} (#${scanEvent.memberNo})`,
+        senderRole: 'restaurant_admin',
+        senderName: adminStaffId || 'Restaurant Admin',
+        type: 'meal_served',
+        title: 'Meal Served via Manager Override (-1 Plate)',
+        message: `Manager authorized 1 meal at ${scanEvent.scanPointName} (${reason}). Remaining balance: ${updatedBal} plates.`,
+        priority: 'normal',
+        actionTab: 'history',
+      });
+    }
 
     sound.playSuccessBeep();
     this.notify();
@@ -2968,15 +3063,14 @@ export class RestoStore {
 
   /**
    * Lock / Unlock Card
+   * Note: Temporary lock/unlock preserves cardVersion so the permanent physical card
+   * remains valid when unlocked. Only reissueCard increments cardVersion when a card is stolen/lost.
    */
   public setCustomerCardStatus(customerId: string, status: 'active' | 'locked', actorName: string) {
     const customer = this.state.customers.find((c) => c.id === customerId);
     if (!customer) return;
 
     customer.cardStatus = status;
-    if (status === 'locked') {
-      customer.cardVersion += 1; // raising version invalidates old QR
-    }
 
     this.queueOutboxItem('card_update', customer.id, { cardStatus: status, cardVersion: customer.cardVersion });
     this.logAudit({
@@ -3129,6 +3223,19 @@ export class RestoStore {
       actorName: adminStaffName,
       action: 'CUSTOMER_PROFILE_UPDATED',
       details: `Updated profile details for member #${customer.memberNo} (${customer.name})`,
+    });
+
+    this.sendNotification({
+      restaurantCode: customer.restaurantCode,
+      target: customer.id,
+      targetName: `${customer.name} (#${customer.memberNo})`,
+      senderRole: 'restaurant_admin',
+      senderName: adminStaffName,
+      type: 'card_security',
+      title: 'Member Profile Updated',
+      message: `Your account profile details were updated by ${adminStaffName}.`,
+      priority: 'normal',
+      actionTab: 'my_card',
     });
 
     this.notify();
@@ -3594,6 +3701,7 @@ export class RestoStore {
         details: `Auto-synced ${syncedCount} queued transaction(s) to cloud database immediately upon internet restore.`,
       });
     }
+    this.pushStateToServer();
     this.notify();
     return syncedCount;
   }
@@ -4905,6 +5013,20 @@ export class RestoStore {
       actionTab: 'approvals',
     });
 
+    // Direct receipt notification to the newly registered customer
+    this.sendNotification({
+      restaurantCode,
+      target: newCustomer.id,
+      targetName: `${newCustomer.name} (#${memberNo})`,
+      senderRole: 'system',
+      senderName: approval.stationName,
+      type: 'topup_success',
+      title: `Registration Recorded (#${memberNo}) — Awaiting Boss Approval`,
+      message: `Your registration for ${platesCount} plates (${(approval.amountRwf || 0).toLocaleString()} RWF, Ref: ${approval.paymentReference}) is in the Boss approval queue. You may consume up to 3 grace meals while waiting.`,
+      priority: 'important',
+      actionTab: 'my_card',
+    });
+
     this.scheduleSaveState();
     this.notify();
     return { customer: newCustomer, approval };
@@ -5004,6 +5126,20 @@ export class RestoStore {
       message: `Provisional top-up of ${data.platesRequested} plates submitted with ref ${data.paymentReference}. Please verify Mobile Money deposit.`,
       priority: 'important',
       actionTab: 'approvals',
+    });
+
+    // Direct receipt notification to the customer
+    this.sendNotification({
+      restaurantCode: data.restaurantCode,
+      target: customer.id,
+      targetName: `${customer.name} (#${customer.memberNo})`,
+      senderRole: 'system',
+      senderName: data.stationName,
+      type: 'topup_success',
+      title: `Top-Up Submitted (+${data.platesRequested} Plates Pending)`,
+      message: `Your top-up request of ${data.platesRequested} plates (${data.amountRwf.toLocaleString()} RWF, Ref: ${data.paymentReference}) has been submitted for Boss verification.`,
+      priority: 'normal',
+      actionTab: 'history',
     });
 
     this.scheduleSaveState();
@@ -5112,7 +5248,9 @@ export class RestoStore {
     customer.gracePlatesRemaining = Math.max(0, 3 - remainingGraceUsed);
     customer.pendingApprovalId = remainingPending[0]?.id;
     customer.activationStatus = customer.hasCustomPin ? 'active' : 'ready_for_activation';
-    customer.cardReadyForPrint = true;
+    if (approval.type === 'new_customer') {
+      customer.cardReadyForPrint = true;
+    }
 
     const finalBalance = this.getCustomerBalance(customer.id);
 
@@ -5135,8 +5273,14 @@ export class RestoStore {
       senderRole: 'restaurant_admin',
       senderName: bossName,
       type: 'topup_success',
-      title: 'Payment Confirmed & Account Activated!',
-      message: `Your payment was verified by cafeteria management. Credited ${approval.platesRequested} plates. Current balance: ${finalBalance} plates. Your card and digital pass are fully active.`,
+      title:
+        approval.type === 'new_customer'
+          ? 'Registration Approved — Set Your Personal PIN!'
+          : `Top-Up Approved (+${approval.platesRequested} Plates)`,
+      message:
+        approval.type === 'new_customer'
+          ? `Your registration was verified by cafeteria management! Credited ${approval.platesRequested} plates (Net balance: ${finalBalance} plates). Open the Customer Portal with your phone number to set your personal PIN and access your dashboard.`
+          : `Your top-up payment was verified by cafeteria management! Credited ${approval.platesRequested} plates to your permanent card. Current balance: ${finalBalance} plates.`,
       priority: 'important',
       actionTab: 'history',
     });
@@ -5782,6 +5926,18 @@ export class RestoStore {
       details: `Scheduled cancellation for #${sub.memberNo}. Digital access remains active until ${sub.currentPeriodEnd ? new Date(sub.currentPeriodEnd).toLocaleDateString() : 'end of period'}.`,
     });
 
+    this.sendNotification({
+      restaurantCode: sub.restaurantCode,
+      target: sub.customerId,
+      senderRole: 'system',
+      senderName: 'RestoPass Subscription Authority',
+      type: 'system_broadcast',
+      title: 'Dashboard Subscription Cancellation Scheduled',
+      message: `Your 500 RWF monthly dashboard subscription will remain active until ${sub.currentPeriodEnd ? new Date(sub.currentPeriodEnd).toLocaleDateString() : 'the end of your billing period'} and will not auto-renew.`,
+      priority: 'normal',
+      actionTab: 'my_card',
+    });
+
     this.scheduleSaveState();
     this.notify();
     return { success: true };
@@ -5848,6 +6004,19 @@ export class RestoStore {
       details: `Granted ${days}-day complimentary student pass to #${cust.memberNo} (${cust.name}). Reason: "${params.reason.trim()}"`,
     });
 
+    this.sendNotification({
+      restaurantCode: cust.restaurantCode,
+      target: cust.id,
+      targetName: `${cust.name} (#${cust.memberNo})`,
+      senderRole: 'system',
+      senderName: params.grantedBy || 'Platform Administrator',
+      type: 'system_broadcast',
+      title: `Complimentary Dashboard Pass Granted (${days} Days)`,
+      message: `You have been granted ${days} days of complimentary digital dashboard access (${params.reason.trim()}).`,
+      priority: 'important',
+      actionTab: 'my_card',
+    });
+
     this.scheduleSaveState();
     this.notify();
     return { success: true, subscription: sub };
@@ -5872,6 +6041,18 @@ export class RestoStore {
       actorName: revokedBy,
       action: 'COMPLIMENTARY_STUDENT_SUBSCRIPTION_REVOKED',
       details: `Revoked complimentary pass for #${sub.memberNo}. Reason: "${reason}"`,
+    });
+
+    this.sendNotification({
+      restaurantCode: sub.restaurantCode,
+      target: sub.customerId,
+      senderRole: 'system',
+      senderName: revokedBy,
+      type: 'system_broadcast',
+      title: 'Complimentary Dashboard Pass Ended',
+      message: `Your complimentary digital dashboard pass has ended (${reason}). Your physical card remains active for meals.`,
+      priority: 'normal',
+      actionTab: 'my_card',
     });
 
     this.scheduleSaveState();
@@ -5946,17 +6127,153 @@ export class RestoStore {
   }
 
   /**
+   * Check a customer's portal readiness by phone number or Member ID:
+   * Once the Boss approves a new registration, the customer can immediately set their
+   * personal 6+ digit PIN on the Customer Portal without needing a magic link or WhatsApp link.
+   */
+  public checkCustomerPortalStatus(
+    phoneOrMember: string,
+    restaurantCode?: string
+  ): {
+    status: 'needs_pin_setup' | 'ready_for_login' | 'pending_boss_approval' | 'rejected' | 'not_found';
+    customer?: Customer;
+  } {
+    const clean = phoneOrMember.trim();
+    if (!clean) return { status: 'not_found' };
+    const normPhone = this.normalizePhoneNumber(clean);
+
+    const cust = this.state.customers.find((c) => {
+      if (restaurantCode && c.restaurantCode !== restaurantCode) return false;
+      const cNorm = this.normalizePhoneNumber(c.phone);
+      return (
+        c.phone === clean ||
+        c.phone.replace(/\s+/g, '') === clean.replace(/\s+/g, '') ||
+        (normPhone.length >= 7 && cNorm === normPhone) ||
+        c.memberNo === clean ||
+        c.id === clean
+      );
+    });
+
+    if (!cust) return { status: 'not_found' };
+    if (cust.provisionalStatus === 'pending_approval') {
+      return { status: 'pending_boss_approval', customer: cust };
+    }
+    if (cust.provisionalStatus === 'rejected' || cust.activationStatus === 'suspended') {
+      return { status: 'rejected', customer: cust };
+    }
+    if (!cust.hasCustomPin || cust.activationStatus === 'ready_for_activation') {
+      return { status: 'needs_pin_setup', customer: cust };
+    }
+    return { status: 'ready_for_login', customer: cust };
+  }
+
+  /**
+   * First-time PIN setup directly on Customer Portal once Boss has approved registration
+   */
+  public async setupFirstTimeCustomerPin(params: {
+    phoneOrMember: string;
+    newPin: string;
+    restaurantCode?: string;
+  }): Promise<{ success: boolean; customer?: Customer; error?: string }> {
+    const cleanPin = params.newPin.trim();
+    if (!/^\d{6,}$/.test(cleanPin)) {
+      return { success: false, error: 'PIN must be at least 6 numeric digits.' };
+    }
+
+    const check = this.checkCustomerPortalStatus(params.phoneOrMember, params.restaurantCode);
+    if (check.status === 'not_found' || !check.customer) {
+      return { success: false, error: 'No registered member found with that phone number or Member ID.' };
+    }
+    if (check.status === 'pending_boss_approval') {
+      return {
+        success: false,
+        error: 'Your registration is still awaiting Restaurant Boss approval. You can use up to 3 grace meals at the stand while waiting.',
+      };
+    }
+    if (check.status === 'rejected') {
+      return {
+        success: false,
+        error: 'Your registration was not approved. Please visit cafeteria management.',
+      };
+    }
+    if (check.status === 'ready_for_login' && check.customer.hasCustomPin) {
+      return {
+        success: false,
+        error: 'Your personal PIN is already set. Please sign in with your PIN or use Forgot PIN.',
+      };
+    }
+
+    const cust = check.customer;
+    const salt = getCustomerPinSalt(cust.id, cust.memberNo);
+    const pinHash = await hashPinWithSalt(cleanPin, salt);
+
+    cust.pinHash = pinHash;
+    cust.hasCustomPin = true;
+    cust.pinSetAt = new Date().toISOString();
+    cust.activationStatus = 'active';
+    cust.failedLoginAttempts = 0;
+    cust.lockedUntil = null;
+    cust.lastLoginAt = new Date().toISOString();
+
+    this.pendingOfflineAuthParams = {
+      role: 'customer',
+      username: cust.memberNo,
+      pin: cleanPin,
+      restaurantCode: cust.restaurantCode,
+    };
+
+    this.setRestaurantCode(cust.restaurantCode);
+    this.setCustomer(cust.id);
+    this.setRole('customer');
+    this.queueOutboxItem('customer', cust.id, cust);
+
+    this.logAudit({
+      restaurantCode: cust.restaurantCode,
+      actorRole: 'customer',
+      actorName: cust.name,
+      action: 'CUSTOMER_FIRST_TIME_PIN_SETUP',
+      details: `Customer #${cust.memberNo} (${cust.name}) set personal 6+ digit PIN on Customer Portal after Boss registration approval.`,
+    });
+
+    this.sendNotification({
+      restaurantCode: cust.restaurantCode,
+      target: cust.id,
+      targetName: `${cust.name} (#${cust.memberNo})`,
+      senderRole: 'system',
+      senderName: 'RestoPass Security',
+      type: 'account_activated',
+      title: 'Personal PIN Set & Portal Activated!',
+      message: 'Your personal 6+ digit PIN is now active. You can sign in anytime using your phone number or Member ID.',
+      priority: 'important',
+      actionTab: 'my_card',
+    });
+
+    this.scheduleSaveState();
+    this.notify();
+    return { success: true, customer: cust };
+  }
+
+  /**
    * Customer privately completes activation and sets their personal PIN (Minimum 6 digits, No SMS)
    */
   public async completeCustomerActivation(params: {
     phoneOrMember: string;
-    activationCode: string;
+    activationCode?: string;
     newPin: string;
     restaurantCode?: string;
   }): Promise<{ success: boolean; customer?: Customer; error?: string }> {
     const cleanIdentifier = params.phoneOrMember.trim();
     const cleanPin = params.newPin.trim();
-    const cleanCode = params.activationCode.trim();
+    const cleanCode = (params.activationCode || '').trim();
+
+    // If no cashier code was passed (or 'BOSS_APPROVED'), allow direct first-time PIN setup for Boss-approved accounts
+    if (!cleanCode || cleanCode === 'BOSS_APPROVED') {
+      return this.setupFirstTimeCustomerPin({
+        phoneOrMember: cleanIdentifier,
+        newPin: cleanPin,
+        restaurantCode: params.restaurantCode,
+      });
+    }
 
     // 1. PIN Policy: Minimum 6 digits, allows longer
     if (!/^\d{6,}$/.test(cleanPin)) {
@@ -6295,6 +6612,13 @@ export class RestoStore {
     cust.failedLoginAttempts = 0;
     cust.lockedUntil = null;
     cust.lastLoginAt = new Date().toISOString();
+
+    this.pendingOfflineAuthParams = {
+      role: 'customer',
+      username: cust.memberNo,
+      pin: cleanPin,
+      restaurantCode: cust.restaurantCode,
+    };
 
     this.setRestaurantCode(cust.restaurantCode);
     this.setCustomer(cust.id);

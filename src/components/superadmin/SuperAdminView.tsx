@@ -27,7 +27,6 @@ import {
   Gift,
   ShieldAlert,
 } from 'lucide-react';
-import { DeploymentBlueprintView } from './DeploymentBlueprintView';
 
 interface SuperAdminViewProps {
   language: Language;
@@ -164,20 +163,19 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       </div>
 
       {/* Sub Tabs */}
-      <div className="flex gap-2 border-b border-slate-800 pb-2 text-xs font-medium text-slate-400">
+      <div className="flex flex-wrap gap-2 border-b border-slate-800 pb-3 text-sm font-medium text-slate-300">
         {[
           { id: 'restaurants', label: 'Tenants & Health' },
           { id: 'student_subs', label: 'Student Monetization (500 RWF)' },
           { id: 'plans', label: 'B2B Subscriptions & Limits' },
           { id: 'licenses', label: 'Signed Licences (.lic)' },
           { id: 'revenue', label: 'Platform Revenue' },
-          { id: 'deployment', label: 'Hosting & Deployment Blueprint' },
           { id: 'audit', label: 'Platform Audit Log' },
         ].map((tab) => (
           <button
             key={tab.id}
             onClick={() => onSubTabChange(tab.id)}
-            className={`px-3 py-1.5 rounded-lg transition-colors ${
+            className={`px-3.5 py-2 rounded-xl transition-colors cursor-pointer ${
               activeSubTab === tab.id
                 ? 'bg-amber-600 text-white font-bold shadow-xs'
                 : 'hover:text-white hover:bg-slate-900'
@@ -438,11 +436,6 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
             ))}
           </div>
         </div>
-      )}
-
-      {/* 6. HOSTING & DEPLOYMENT BLUEPRINT */}
-      {activeSubTab === 'deployment' && (
-        <DeploymentBlueprintView />
       )}
 
       {/* 7. STUDENT MONETIZATION (500 RWF / MONTH) - DEVELOPER SPEC */}

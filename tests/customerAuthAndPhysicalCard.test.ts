@@ -356,4 +356,125 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     const entSubscribed = restoStore.checkStudentEntitlement(customer.id, 'customer_dashboard');
     assert.equal(entSubscribed.allowed, true);
   });
+
+  test('Step 8: Boss approves new registration -> Customer immediately sets up PIN on Customer Portal without Magic Link/WhatsApp', async () => {
+    const reg = restoStore.registerProvisionalCustomer({
+      name: 'Habimana Patrick',
+      phone: '+250 788 334 455',
+      restaurantCode: 'RW01',
+      platesRequested: 30,
+      idType: 'student_id',
+      idNumber: '20264455',
+      isStudent: true,
+    } as any);
+    assert.ok(reg.customer);
+    const customerId = reg.customer.id;
+
+    // Before boss approval, portal status reports pending_boss_approval
+    const beforeApprovalStatus = restoStore.checkCustomerPortalStatus('+250 788 334 455', 'RW01');
+    assert.ok(beforeApprovalStatus.customer);
+    assert.equal(beforeApprovalStatus.status, 'pending_boss_approval');
+
+    // Boss approves new customer registration
+    const pendingReq = restoStore.getState().pendingApprovals.find(
+      (a) => a.customerId === customerId && a.status === 'pending'
+    );
+    assert.ok(pendingReq);
+    const approveRes = restoStore.approvePendingRequest(pendingReq.id, 'Boss Jean Paul');
+    assert.equal(approveRes.success, true);
+
+    // First-time customer has cardReadyForPrint = true
+    assert.equal(approveRes.customer?.cardReadyForPrint, true);
+
+    // Portal status now reports needs_pin_setup
+    const afterApprovalStatus = restoStore.checkCustomerPortalStatus('+250 788 334 455', 'RW01');
+    assert.ok(afterApprovalStatus.customer);
+    assert.equal(afterApprovalStatus.status, 'needs_pin_setup');
+
+    // Customer sets their 6+ digit personal PIN directly on Customer Portal
+    const pinSetupRes = await restoStore.setupFirstTimeCustomerPin({
+      phoneOrMember: '+250 788 334 455',
+      newPin: '748392',
+      restaurantCode: 'RW01',
+    });
+    assert.equal(pinSetupRes.success, true);
+    assert.equal(pinSetupRes.customer?.activationStatus, 'active');
+    assert.equal(pinSetupRes.customer?.hasCustomPin, true);
+
+    // Customer can now sign in with Phone + PIN
+    const loginRes = await restoStore.customerLogin({
+      phone: '+250 788 334 455',
+      pin: '748392',
+    });
+    assert.equal(loginRes.success, true);
+    assert.equal(loginRes.customer?.id, customerId);
+
+    // Verify customer received in-app notifications for registration, boss approval, and PIN setup
+    const customerNotifs = restoStore.getCustomerNotifications(customerId);
+    assert.ok(customerNotifs.length >= 3, 'Customer must receive in-app notifications for account lifecycle events');
+  });
+
+  test('Step 9: Permanent Physical Card Rule -> Never expires across top-ups or temporary lock/unlock; old card permanently blocked when revoked & reissued', () => {
+    const customer = restoStore.getState().customers[0];
+    assert.ok(customer);
+
+    // Mark first-time physical card as printed
+    customer.cardReadyForPrint = false;
+    assert.equal(customer.cardReadyForPrint, false);
+    const originalCardVersion = customer.cardVersion;
+    const cardTokenV1 = generateCardToken(customer.restaurantCode, customer.memberNo, originalCardVersion);
+
+    // 1. Existing customer tops up -> physical card remains permanent, cardReadyForPrint stays false
+    const topupApproval = restoStore.rechargeProvisionalCustomer({
+      restaurantCode: customer.restaurantCode,
+      customerId: customer.id,
+      platesRequested: 20,
+      amountRwf: 23000,
+      paymentMethod: 'mtn_momo',
+      paymentReference: 'MOMO-PERM-CARD-01',
+      registeredByStaffId: 'staff_1',
+      registeredByStaffName: 'Cashier Claudine',
+      stationId: 'station_1',
+      stationName: 'Main Gate Stand',
+    });
+    assert.ok(topupApproval.id);
+
+    const approveTopup = restoStore.approvePendingRequest(topupApproval.id, 'Boss Jean Paul');
+    assert.equal(approveTopup.success, true);
+    assert.equal(customer.cardReadyForPrint, false, 'Top-up must not mark permanent physical card for re-printing');
+    assert.equal(customer.cardVersion, originalCardVersion, 'Top-up must not alter permanent physical card version');
+
+    // 2. Temporary lock and unlock preserves permanent physical card version
+    restoStore.setCustomerCardStatus(customer.id, 'locked', 'Temporary security check');
+    const lockedScan = restoStore.processScan(cardTokenV1);
+    assert.notEqual(lockedScan.scanEvent.status, 'approved', 'Locked card must be rejected while locked');
+
+    restoStore.setCustomerCardStatus(customer.id, 'active', 'Customer confirmed card in hand');
+    assert.equal(customer.cardVersion, originalCardVersion, 'Unlocking a temporarily locked card must keep same cardVersion');
+
+    // Clear previous station scans for this customer to test immediate scan after unlock
+    restoStore.getState().scanEvents = restoStore.getState().scanEvents.filter(
+      (e) => e.customerId !== customer.id
+    );
+
+    const unlockedScan = restoStore.processScan(cardTokenV1);
+    assert.equal(unlockedScan.scanEvent.status, 'approved', 'Permanent physical card V1 works again once unlocked');
+
+    // 3. Stolen card revoked & reissued -> V1 permanently invalidated, V2 works immediately
+    restoStore.reissueCard(customer.id, 'Physical card reported stolen by patron');
+    assert.equal(customer.cardVersion, originalCardVersion + 1, 'Reissuing stolen card must increment cardVersion');
+
+    // Clear previous station scans for this customer to test immediate scan with old V1 vs new V2
+    restoStore.getState().scanEvents = restoStore.getState().scanEvents.filter(
+      (e) => e.customerId !== customer.id
+    );
+
+    const stolenV1Scan = restoStore.processScan(cardTokenV1);
+    assert.equal(stolenV1Scan.scanEvent.status, 'blocked', 'Revoked V1 physical card must never work again');
+    assert.match(stolenV1Scan.rejectionReason || '', /Obsolete card|reissued|revoked/i);
+
+    const newCardTokenV2 = generateCardToken(customer.restaurantCode, customer.memberNo, customer.cardVersion);
+    const newV2Scan = restoStore.processScan(newCardTokenV2);
+    assert.equal(newV2Scan.scanEvent.status, 'approved', 'Newly issued V2 physical card works immediately with customer balance');
+  });
 });

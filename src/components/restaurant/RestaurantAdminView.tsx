@@ -24,10 +24,6 @@ import { SecurityAndAuditLogsView } from './SecurityAndAuditLogsView';
 import { RestaurantSecurityCenter } from './RestaurantSecurityCenter';
 import { RestaurantAppearanceManager } from './RestaurantAppearanceManager';
 import { SummaryMetricCards } from './SummaryMetricCards';
-import {
-  generateCustomerMagicToken,
-  generateWhatsAppShareUrl,
-} from '../../services/magicAuthService';
 import { ShiftHandoverModal } from '../scanner/ShiftHandoverModal';
 import {
   exportTransactionsToCsv,
@@ -745,15 +741,10 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
   };
 
   const [copiedOverviewRef, setCopiedOverviewRef] = useState<string | null>(null);
-  const [overviewWhatsAppModal, setOverviewWhatsAppModal] = useState<{
+  const [overviewApprovedModal, setOverviewApprovedModal] = useState<{
     customer: Customer;
-    magicToken: string;
-    waUrl: string;
-    passUrl: string;
     appr: PendingApproval;
   } | null>(null);
-  const [overviewCopiedLink, setOverviewCopiedLink] = useState(false);
-  const [isDeploymentModalOpen, setIsDeploymentModalOpen] = useState(false);
 
   const handleOverviewApprove = (apprId: string, memberNo: string) => {
     const res = restoStore.approvePendingRequest(apprId, 'Restaurant Boss (Executive)');
@@ -761,18 +752,16 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
       const appr = (state.pendingApprovals || []).find((a) => a.id === apprId);
       const cust = res.customer || state.customers.find((c) => c.memberNo === memberNo);
       if (cust && appr) {
-        const magicToken = generateCustomerMagicToken(cust);
-        const waUrl = generateWhatsAppShareUrl(cust, magicToken, restaurant?.name || 'Kigali Campus Resto');
-        const passUrl = `${window.location.origin}/#/customer?auth=${magicToken}`;
-        setOverviewWhatsAppModal({
+        setOverviewApprovedModal({
           customer: cust,
-          magicToken,
-          waUrl,
-          passUrl,
           appr,
         });
       }
-      setActionToast(`Mobile Money verified! Member #${memberNo} card and portal account activated.`);
+      setActionToast(
+        appr?.type === 'new_customer'
+          ? `Approved registration for #${memberNo}! Account active for Customer Portal PIN setup.`
+          : `Approved top-up for #${memberNo}! Plates added to permanent physical card.`
+      );
       setTimeout(() => setActionToast(null), 4500);
     }
   };
@@ -1021,21 +1010,6 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
               </button>
             );
           })}
-        </div>
-
-        {/* Hybrid Deployment & Edge Server Info Trigger */}
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={() => setIsDeploymentModalOpen(true)}
-            className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/60 text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
-            title="Inspect Hybrid Cafeteria Local Server & Cloud Architecture"
-          >
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <Server className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Hybrid Local Server</span>
-            <span className="text-[10px] text-slate-500 font-mono hidden md:inline">LAN Edge</span>
-          </button>
         </div>
       </div>
 
@@ -1618,7 +1592,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-amber-200/90 mt-0.5">
-                  Stand cashiers provisionally register patrons while you are away. Verify Mobile Money deposits here to finalize accounts and dispatch 1-tap WhatsApp passes.
+                  Stand cashiers provisionally register patrons while you are away. Verify Mobile Money deposits here to activate accounts for self-service Customer Portal PIN setup and physical card printing.
                 </p>
               </div>
             </div>
@@ -1630,7 +1604,10 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
             </div>
           </div>
 
-          <BossApprovalsManager restaurantCode={state.currentRestaurantCode} language={language} />
+          <BossApprovalsManager
+            restaurantCode={state.currentRestaurantCode}
+            language={language}
+          />
         </div>
       )}
 
@@ -5068,222 +5045,118 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
         </div>
       )}
 
-      {/* OVERVIEW WHATSAPP SHARE MODAL (Upon Boss approval from overview cards) */}
-      {overviewWhatsAppModal && (
+      {/* OVERVIEW BOSS APPROVAL CONFIRMATION MODAL (No Magic Link / No WhatsApp) */}
+      {overviewApprovedModal && (
         <div className="fixed inset-0 z-60 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-emerald-500/60 rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl relative">
+          <div className="bg-slate-900 border-2 border-emerald-500/70 rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl relative">
             <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-4">
               <div className="flex items-center gap-3">
                 <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0">
-                  <MessageSquare className="w-6 h-6" />
+                  <CheckCircle2 className="w-6 h-6" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h3 className="text-base font-bold text-white">Registration Approved!</h3>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
+                    <h3 className="text-lg font-black text-white">
+                      {overviewApprovedModal.appr.type === 'new_customer'
+                        ? 'Registration Approved & Account Active!'
+                        : 'Top-Up Approved & Balance Credited!'}
+                    </h3>
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
                       Boss Verified
                     </span>
                   </div>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Send the 1-tap digital meal pass directly to the customer on WhatsApp.
+                  <p className="text-xs text-slate-300 mt-1">
+                    {overviewApprovedModal.appr.type === 'new_customer'
+                      ? 'The member account is now active in the system. The customer can sign in to the Customer Portal with their phone number to set up their personal PIN.'
+                      : "The plates have been added to the customer's permanent physical card and ledger."}
                   </p>
                 </div>
               </div>
 
               <button
                 type="button"
-                onClick={() => setOverviewWhatsAppModal(null)}
-                className="text-slate-500 hover:text-white p-1 rounded-lg transition-colors cursor-pointer"
+                onClick={() => setOverviewApprovedModal(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
+            {overviewApprovedModal.appr.type === 'new_customer' ? (
+              <div className="grid grid-cols-2 gap-2.5 text-xs">
+                <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-800 text-emerald-200 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <div>
+                    <div className="font-bold">Portal Ready for PIN</div>
+                    <div className="text-[11px] text-emerald-300">Self-service PIN setup enabled</div>
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl bg-sky-950/80 border border-sky-800 text-sky-200 flex items-center gap-2">
+                  <CreditCard className="w-4 h-4 text-sky-400 shrink-0" />
+                  <div>
+                    <div className="font-bold">First-Time Card Ready</div>
+                    <div className="text-[11px] text-sky-300">Permanent Card V{overviewApprovedModal.customer.cardVersion}</div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="p-3 rounded-xl bg-emerald-950/70 border border-emerald-800 text-emerald-200 text-xs flex items-center gap-2.5">
+                <CreditCard className="w-5 h-5 text-emerald-400 shrink-0" />
+                <div>
+                  <div className="font-bold text-sm">Permanent Physical Card V{overviewApprovedModal.customer.cardVersion} Active</div>
+                  <div className="text-xs text-emerald-300">
+                    No card reprint needed — their existing physical card never expires and automatically uses the updated plate balance.
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <img
-                  src={overviewWhatsAppModal.customer.photoUrl}
-                  alt={overviewWhatsAppModal.customer.name}
-                  className="w-10 h-10 rounded-xl object-cover border border-slate-700"
+                  src={overviewApprovedModal.customer.photoUrl}
+                  alt={overviewApprovedModal.customer.name}
+                  className="w-11 h-11 rounded-xl object-cover border border-slate-700"
                 />
                 <div>
-                  <div className="font-bold text-white text-sm">{overviewWhatsAppModal.customer.name}</div>
-                  <div className="text-xs font-mono text-slate-400">
-                    #{overviewWhatsAppModal.customer.memberNo} · {overviewWhatsAppModal.customer.phone}
+                  <div className="font-black text-white text-sm">{overviewApprovedModal.customer.name}</div>
+                  <div className="text-xs font-mono text-slate-300 font-bold">
+                    #{overviewApprovedModal.customer.memberNo} · {overviewApprovedModal.customer.phone}
                   </div>
                 </div>
               </div>
 
               <div className="text-right">
-                <div className="text-xs font-bold text-emerald-400 font-mono">
-                  +{overviewWhatsAppModal.appr.platesRequested} Plates
+                <div className="text-sm font-black text-emerald-400 font-mono">
+                  +{overviewApprovedModal.appr.platesRequested} Plates
                 </div>
-                <div className="text-[10px] font-mono text-slate-400">
-                  {overviewWhatsAppModal.appr.amountRwf.toLocaleString()} RWF
+                <div className="text-xs font-mono text-slate-300">
+                  Net Balance: {restoStore.getCustomerBalance(overviewApprovedModal.customer.id)} Plates
                 </div>
               </div>
             </div>
 
-            <div className="space-y-2.5">
-              <a
-                href={overviewWhatsAppModal.waUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={() => {
-                  setActionToast(`Dispatched pass link to ${overviewWhatsAppModal.customer.name} via WhatsApp!`);
-                  setTimeout(() => setActionToast(null), 4000);
-                }}
-                className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-950 transition-colors cursor-pointer"
-              >
-                <MessageSquare className="w-4 h-4 fill-current" />
-                <span>Open WhatsApp &amp; Send Pass Link</span>
-                <ExternalLink className="w-3.5 h-3.5 opacity-80" />
-              </a>
-
-              <div className="flex items-center gap-2">
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              {overviewApprovedModal.appr.type === 'new_customer' && (
                 <button
                   type="button"
                   onClick={() => {
-                    navigator.clipboard.writeText(overviewWhatsAppModal.passUrl);
-                    setOverviewCopiedLink(true);
-                    setTimeout(() => setOverviewCopiedLink(false), 2500);
+                    setOverviewApprovedModal(null);
+                    onSubTabChange('cards');
                   }}
-                  className="flex-1 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                  className="flex-1 py-3 px-4 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-black text-sm flex items-center justify-center gap-2 shadow-md transition-colors cursor-pointer"
                 >
-                  {overviewCopiedLink ? (
-                    <>
-                      <Check className="w-3.5 h-3.5 text-emerald-400" />
-                      <span className="text-emerald-400">Pass Link Copied!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3.5 h-3.5" />
-                      <span>Copy 1-Tap Invite Link</span>
-                    </>
-                  )}
+                  <Printer className="w-4 h-4" />
+                  <span>Print First-Time Physical Card</span>
                 </button>
-
-                <button
-                  type="button"
-                  onClick={() => setOverviewWhatsAppModal(null)}
-                  className="px-4 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-white text-xs font-semibold cursor-pointer border border-slate-800"
-                >
-                  Done
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                WhatsApp Message Preview:
-              </span>
-              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-[11px] text-slate-300 font-mono leading-relaxed whitespace-pre-line max-h-32 overflow-y-auto">
-                {`Muraho ${overviewWhatsAppModal.customer.name}!\nYour meal pass at ${restaurant?.name || 'Kigali Campus Resto'} has been officially approved! 🎉\n• Member ID: #${overviewWhatsAppModal.customer.memberNo}\n\nTap the link below to open your pass:\n${overviewWhatsAppModal.passUrl}`}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* HYBRID CAFETERIA DEPLOYMENT & BUSINESS MODEL MODAL */}
-      {isDeploymentModalOpen && (
-        <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-3xl max-w-2xl w-full p-6 space-y-5 shadow-2xl relative max-h-[90vh] overflow-y-auto">
-            <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
-                  <Server className="w-6 h-6" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-white flex items-center gap-2">
-                    <span>Hybrid Local Cafeteria Architecture</span>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
-                      Edge + Cloud Sync
-                    </span>
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    How RestoPass operates seamlessly inside university dining halls with zero downtime.
-                  </p>
-                </div>
-              </div>
+              )}
 
               <button
                 type="button"
-                onClick={() => setIsDeploymentModalOpen(false)}
-                className="text-slate-500 hover:text-white p-1 rounded-lg transition-colors cursor-pointer"
+                onClick={() => setOverviewApprovedModal(null)}
+                className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-black cursor-pointer shadow-md transition-colors"
               >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Architecture Comparison Pillars */}
-            <div className="space-y-3">
-              {/* Pillar 1 */}
-              <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-white text-xs flex items-center gap-2">
-                    <HardDrive className="w-4 h-4 text-emerald-400" />
-                    <span>1. On-Premises Local Edge Appliance (Cafeteria LAN)</span>
-                  </span>
-                  <span className="text-[10px] font-mono text-emerald-400">&lt; 25ms Scan Latency</span>
-                </div>
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  A compact, low-power edge server (e.g. Intel N100 mini-PC or Raspberry Pi 5) runs directly inside the cafeteria kitchen connected to a local Wi-Fi router. Cashier scanning phones and tablet stands connect directly to the local IP, ensuring that student lunch rush lines never freeze or stall when national telecom fiber or mobile towers experience outages.
-                </p>
-              </div>
-
-              {/* Pillar 2 */}
-              <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-white text-xs flex items-center gap-2">
-                    <Wifi className="w-4 h-4 text-blue-400" />
-                    <span>2. Automatic 2-Way Cloud Synchronization</span>
-                  </span>
-                  <span className="text-[10px] font-mono text-blue-400">Heartbeat Sync</span>
-                </div>
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  Whenever an internet uplink (4G/5G backup SIM or campus Wi-Fi) is available, the local server pushes newly audited scans, cashier shift closures, and top-up receipts to the central cloud cluster. Multi-campus cafeterias (e.g. Main Hall and Medical Campus) instantly reflect synchronized patron balances without duplicate meals.
-                </p>
-              </div>
-
-              {/* Pillar 3 */}
-              <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-white text-xs flex items-center gap-2">
-                    <ShieldCheck className="w-4 h-4 text-amber-400" />
-                    <span>3. Cryptographic Token Protection &amp; Grace Meals Policy</span>
-                  </span>
-                  <span className="text-[10px] font-mono text-amber-400">HMAC-SHA256</span>
-                </div>
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  Both physical PVC card barcodes and dynamic WhatsApp mobile passes contain cryptographic signatures that offline stations can verify without internet. To prevent student hunger and line disputes when the boss is away, newly enrolled patrons can eat up to <strong>3 grace plates</strong> immediately upon paying at the counter.
-                </p>
-              </div>
-
-              {/* Pillar 4 */}
-              <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-white text-xs flex items-center gap-2">
-                    <DollarSign className="w-4 h-4 text-purple-400" />
-                    <span>4. Commercial Business Model</span>
-                  </span>
-                  <span className="text-[10px] font-mono text-purple-400">Monthly License / Multi-Stand</span>
-                </div>
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  • <strong>SaaS Subscription</strong>: 140,000 RWF / month per dining hall (includes 4 stations + cloud backup).<br />
-                  • <strong>Physical PVC Cards</strong>: 2,000 RWF per issued card (1,000 RWF platform margin, 1,000 RWF cafeteria revenue).<br />
-                  • <strong>Prepaid Cash Flow</strong>: The restaurant collects 100% of meal revenue upfront via Mobile Money, completely eliminating unpaid credit tabs.
-                </p>
-              </div>
-            </div>
-
-            <div className="pt-2 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setIsDeploymentModalOpen(false)}
-                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md cursor-pointer transition-colors"
-              >
-                Close Guide
+                Done
               </button>
             </div>
           </div>
