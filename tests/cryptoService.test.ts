@@ -72,13 +72,13 @@ describe('Cryptographic Engine & Security Controls', () => {
 
   test('Password salting and verification for Boss & Super Admin', async () => {
     const bossSalt = getBossPasswordSalt('RW01');
-    const hashedBoss = await hashPasswordWithSalt('Boss#2026', bossSalt);
-    assert.equal(await verifyPasswordSecure('Boss#2026', bossSalt, hashedBoss), true);
+    const hashedBoss = await hashPasswordWithSalt('BossSecretPassword!2026', bossSalt);
+    assert.equal(await verifyPasswordSecure('BossSecretPassword!2026', bossSalt, hashedBoss), true);
     assert.equal(await verifyPasswordSecure('WrongPassword', bossSalt, hashedBoss), false);
 
     const superSalt = getSuperAdminSalt();
-    const hashedSuper = await hashPasswordWithSalt('SuperAdmin#2026', superSalt);
-    assert.equal(await verifyPasswordSecure('SuperAdmin#2026', superSalt, hashedSuper), true);
+    const hashedSuper = await hashPasswordWithSalt('SuperSecretPassword!2026', superSalt);
+    assert.equal(await verifyPasswordSecure('SuperSecretPassword!2026', superSalt, hashedSuper), true);
     assert.equal(await verifyPasswordSecure('admin_guess', superSalt, hashedSuper), false);
   });
 

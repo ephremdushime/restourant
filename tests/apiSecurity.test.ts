@@ -14,7 +14,7 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
   test('creates and verifies cryptographically signed session tokens', () => {
     const sessionInput: Omit<UserSession, 'iat' | 'exp'> = {
       userId: 'boss_01',
-      username: 'claire@kigalicampus.rw',
+      username: 'boss@example.local',
       role: 'restaurant_admin',
       restaurantCode: 'RW01',
     };
@@ -123,7 +123,7 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     // 3. Super Admin scope: receives full global multi-tenant state
     const superSession: UserSession = {
       userId: 'ephrem',
-      username: 'ephrem@restopass.rw',
+      username: 'admin@example.local',
       role: 'super_admin',
       restaurantCode: 'ALL',
       iat: Date.now(),

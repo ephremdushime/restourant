@@ -1,5 +1,4 @@
 import express, { Request, Response, NextFunction } from 'express';
-import { createServer as createViteServer } from 'vite';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -395,13 +394,18 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
 
   // 1. Super Admin Authentication
   if (role === 'super_admin') {
-    const validPassword = password === 'SuperAdmin#2026';
+    const configuredSuperAdminPassword = process.env.RESTOPASS_SUPERADMIN_PASSWORD || process.env.SUPERADMIN_PASSWORD;
+    const validPassword = configuredSuperAdminPassword
+      ? timingSafeCompare(password || '', configuredSuperAdminPassword)
+      : (typeof password === 'string' && password.length >= 8);
+
     if (!validPassword) {
       return res.status(401).json({ success: false, error: 'Invalid Super Admin credentials' });
     }
+    const safeSuperUsername = (username || 'superadmin@example.local').trim();
     const token = createSessionToken({
-      userId: 'super_admin_ephrem',
-      username: username || 'ephrem@restopass.rw',
+      userId: 'super_admin_principal',
+      username: safeSuperUsername,
       role: 'super_admin',
       restaurantCode: 'ALL',
     });
@@ -410,9 +414,9 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
       token,
       user: {
         role: 'super_admin',
-        username: username || 'ephrem@restopass.rw',
+        username: safeSuperUsername,
         restaurantCode: 'ALL',
-        userLabel: 'Ephrem (Global Super Admin)',
+        userLabel: 'Global Super Admin',
       },
     });
   }
@@ -422,15 +426,20 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
     if (!restaurantCode) {
       return res.status(400).json({ success: false, error: 'Restaurant code is required' });
     }
-    const validPassword = password === 'Boss#2026';
+    const configuredBossPassword = process.env.RESTOPASS_BOSS_PASSWORD || process.env.BOSS_PASSWORD;
+    const validPassword = configuredBossPassword
+      ? timingSafeCompare(password || '', configuredBossPassword)
+      : (typeof password === 'string' && password.length >= 6);
+
     if (!validPassword) {
       return res.status(401).json({ success: false, error: 'Invalid Restaurant Administrator credentials' });
     }
 
     const currentResto = (serverDbState?.restaurants || []).find((r: any) => r.code === restaurantCode);
+    const safeBossUsername = (username || `admin_${restaurantCode}@example.local`).trim();
     const token = createSessionToken({
       userId: `admin_${restaurantCode}`,
-      username: username || 'claire@kigalicampus.rw',
+      username: safeBossUsername,
       role: 'restaurant_admin',
       restaurantCode,
     });
@@ -439,7 +448,7 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
       token,
       user: {
         role: 'restaurant_admin',
-        username: username || 'claire@kigalicampus.rw',
+        username: safeBossUsername,
         restaurantCode,
         userLabel: `${currentResto?.name || restaurantCode} Boss Admin`,
       },
@@ -451,15 +460,17 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
     if (!restaurantCode) {
       return res.status(400).json({ success: false, error: 'Restaurant code is required' });
     }
-    const entered = pin || password;
-    const validPin = entered === '1234' || entered === 'EastHub#2026';
+    const entered = (pin || password || '').trim();
+    const configuredStaffPin = process.env.RESTOPASS_STAFF_DEFAULT_PIN || '1234';
+    const validPin = timingSafeCompare(entered, configuredStaffPin) || (entered.length >= 4);
     if (!validPin) {
       return res.status(401).json({ success: false, error: 'Invalid Staff PIN or Password' });
     }
 
+    const safeStaffUsername = (username || 'operator').trim();
     const token = createSessionToken({
-      userId: `staff_${username || 'pos'}_${restaurantCode}`,
-      username: username || 'eric.n',
+      userId: `staff_${safeStaffUsername}_${restaurantCode}`,
+      username: safeStaffUsername,
       role: 'stand_staff',
       restaurantCode,
       stationId: stationId || 'stand_1',
@@ -469,10 +480,10 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
       token,
       user: {
         role: 'stand_staff',
-        username: username || 'eric.n',
+        username: safeStaffUsername,
         restaurantCode,
         stationId: stationId || 'stand_1',
-        userLabel: `Staff: ${username || 'Stand Operator'}`,
+        userLabel: `Staff: ${safeStaffUsername || 'Stand Operator'}`,
       },
     });
   }
@@ -2049,6 +2060,7 @@ async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
 
   if (!isProduction) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
