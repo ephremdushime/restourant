@@ -38,18 +38,18 @@ export const PinSetupModal: React.FC<PinSetupModalProps> = ({
   const handleDigit = (digit: string) => {
     setErrorMessage(null);
     if (step === 'create') {
-      if (pin.length < 4) {
+      if (pin.length < 6) {
         const next = pin + digit;
         setPin(next);
-        if (next.length === 4) {
+        if (next.length === 6) {
           setTimeout(() => setStep('confirm'), 200);
         }
       }
     } else {
-      if (confirmPin.length < 4) {
+      if (confirmPin.length < 6) {
         const next = confirmPin + digit;
         setConfirmPin(next);
-        if (next.length === 4) {
+        if (next.length === 6) {
           if (next === pin) {
             // Save PIN
             const ok = restoStore.setCustomerPin(customer.id, next);
@@ -58,6 +58,8 @@ export const PinSetupModal: React.FC<PinSetupModalProps> = ({
               setTimeout(() => {
                 onComplete();
               }, 1200);
+            } else {
+              setErrorMessage('PIN must be at least 6 numeric digits.');
             }
           } else {
             setErrorMessage('PINs do not match. Please try again.');
@@ -109,21 +111,21 @@ export const PinSetupModal: React.FC<PinSetupModalProps> = ({
             {success
               ? 'Security PIN Established!'
               : step === 'create'
-              ? 'Set Your 4-Digit Security PIN'
-              : 'Confirm Your 4-Digit Security PIN'}
+              ? 'Set Your 6-Digit Security PIN'
+              : 'Confirm Your 6-Digit Security PIN'}
           </h2>
           <p className="text-xs text-slate-300 mt-1 leading-relaxed">
             {success
               ? `Your meal pass for #${customer.memberNo} is now protected.`
               : step === 'create'
-              ? `Welcome ${customer.name.split(' ')[0]}! Set a 4-digit PIN to protect your plate balance and auto-lock this device.`
-              : 'Re-enter your 4 digits to confirm.'}
+              ? `Welcome ${customer.name.split(' ')[0]}! Set a 6-digit confidential PIN to protect your plate balance and log in.`
+              : 'Re-enter your 6 digits to confirm.'}
           </p>
         </div>
 
-        {/* 4 Digit Indicators */}
-        <div className="flex justify-center gap-4 py-2">
-          {[0, 1, 2, 3].map((idx) => {
+        {/* 6 Digit Indicators */}
+        <div className="flex justify-center gap-3 py-2">
+          {[0, 1, 2, 3, 4, 5].map((idx) => {
             const hasDigit = activeValue.length > idx;
             return (
               <div

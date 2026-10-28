@@ -308,6 +308,172 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
     );
   }
 
+  // Check customer dashboard subscription entitlement:
+  const dashboardEntitlement = restoStore.checkStudentEntitlement(customer.id, 'customer_dashboard');
+  const isDashboardGated = subSettings.enabled && !dashboardEntitlement.allowed;
+
+  if (isDashboardGated) {
+    return (
+      <div className="max-w-md mx-auto px-4 py-8 space-y-5 animate-in fade-in duration-200">
+        {/* CAFETERIA BRANDING HEADER */}
+        <div className={`p-4 rounded-3xl bg-gradient-to-br ${badgeTheme.gradient} border ${badgeTheme.border} shadow-xl relative overflow-hidden`}>
+          <div className="flex items-center gap-2.5">
+            <div className="w-10 h-10 rounded-2xl bg-slate-900 border border-slate-700/80 flex items-center justify-center text-lg shadow-inner">
+              🍽️
+            </div>
+            <div>
+              <div className="text-sm font-black text-white">{currentRestaurant?.name || 'Campus Dining'}</div>
+              <div className="text-[11px] text-slate-400 font-mono">Member: #{customer.memberNo} · {customer.name}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* PAYWALL HERO CARD */}
+        <div className="p-6 rounded-3xl bg-slate-900 border-2 border-amber-500/70 shadow-2xl space-y-4 relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-36 h-36 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
+
+          <div className="flex items-center gap-2.5 text-amber-400">
+            <Smartphone className="w-6 h-6 shrink-0" />
+            <h2 className="text-base font-black text-white tracking-tight">
+              RestoPass Digital Dashboard Pass
+            </h2>
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-amber-600/40 flex items-center justify-between">
+            <div>
+              <div className="text-[10px] text-slate-400 uppercase font-mono">Monthly Digital Fee</div>
+              <div className="text-2xl font-black text-emerald-400 font-mono">500 RWF <span className="text-xs font-normal text-slate-400">/ month</span></div>
+            </div>
+            <span className="px-2.5 py-1 rounded-full text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 uppercase">
+              Subscription Required
+            </span>
+          </div>
+
+          <p className="text-xs text-slate-300 leading-relaxed">
+            The Digital Dashboard Pass provides full smartphone access: view live plate balances, generate rotating dynamic QR passes, send meal transfers to classmates, and receive cafeteria alerts.
+          </p>
+
+          {/* CRITICAL RESTOPASS PHYSICAL CARD GUARANTEE */}
+          <div className="p-3.5 rounded-2xl bg-emerald-950/70 border border-emerald-600 text-xs space-y-1.5 shadow-sm">
+            <div className="flex items-center gap-2 font-bold text-emerald-300">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+              <span>Physical Card Always Supported (No Extra Fee!)</span>
+            </div>
+            <p className="text-[11px] text-slate-300 leading-relaxed">
+              Don't want the digital subscription? You can <strong>always use your printed physical card</strong> at every campus buffet stand to eat with 100% full meal redemption and zero restrictions.
+            </p>
+          </div>
+
+          {/* MOBILE MONEY CHECKOUT */}
+          <div className="space-y-3 pt-2 border-t border-slate-800">
+            <div className="text-xs font-bold text-slate-200">Activate Smartphone Dashboard via Mobile Money:</div>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => setMomoProvider('mtn_momo')}
+                className={`p-2.5 rounded-xl border text-center font-bold transition-all cursor-pointer ${
+                  momoProvider === 'mtn_momo'
+                    ? 'bg-amber-500/20 border-amber-500 text-amber-300'
+                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                MTN MoMo (*182#)
+              </button>
+              <button
+                type="button"
+                onClick={() => setMomoProvider('airtel_money')}
+                className={`p-2.5 rounded-xl border text-center font-bold transition-all cursor-pointer ${
+                  momoProvider === 'airtel_money'
+                    ? 'bg-rose-500/20 border-rose-500 text-rose-300'
+                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                Airtel Money (*500#)
+              </button>
+            </div>
+
+            <div>
+              <label className="text-[11px] font-semibold text-slate-400 block mb-1">MoMo Phone Number</label>
+              <input
+                type="text"
+                value={momoPhone}
+                onChange={(e) => setMomoPhone(e.target.value)}
+                placeholder="+250 788 123 456"
+                className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono text-xs focus:border-amber-500 outline-hidden"
+              />
+            </div>
+
+            {subCheckoutMessage && (
+              <div className={`p-3 rounded-xl text-xs space-y-2 ${
+                subCheckoutMessage.isError
+                  ? 'bg-rose-950/80 border border-rose-700 text-rose-300'
+                  : 'bg-emerald-950/80 border border-emerald-700 text-emerald-300'
+              }`}>
+                <div>{subCheckoutMessage.text}</div>
+                {subCheckoutMessage.ref && (
+                  <button
+                    onClick={() => {
+                      const verifyRes = restoStore.verifyStudentPayment(subCheckoutMessage.ref!);
+                      if (verifyRes.success) {
+                        setSubCheckoutMessage({ text: 'Payment verified! Digital dashboard unlocked.', isError: false });
+                      }
+                    }}
+                    className="w-full py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors cursor-pointer shadow-sm"
+                  >
+                    Simulate USSD Approval &amp; Unlock Dashboard Now
+                  </button>
+                )}
+              </div>
+            )}
+
+            <button
+              onClick={() => {
+                setSubCheckoutLoading(true);
+                setSubCheckoutMessage(null);
+                const checkoutRes = restoStore.initiateStudentCheckout({
+                  customerId: customer.id,
+                  phoneNumber: momoPhone,
+                  provider: momoProvider,
+                });
+                setSubCheckoutLoading(false);
+                if (checkoutRes.success && checkoutRes.payment) {
+                  setSubCheckoutMessage({
+                    text: checkoutRes.instructions || 'USSD prompt sent. Please approve on your phone.',
+                    isError: false,
+                    ref: checkoutRes.payment.internalReference,
+                  });
+                } else {
+                  setSubCheckoutMessage({
+                    text: checkoutRes.error || 'Failed to initiate Mobile Money payment',
+                    isError: true,
+                  });
+                }
+              }}
+              disabled={subCheckoutLoading || !momoPhone}
+              className="w-full py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer disabled:opacity-50"
+            >
+              <Smartphone className="w-4 h-4" />
+              <span>{subCheckoutLoading ? 'Sending USSD Prompt...' : 'Pay 500 RWF & Access Dashboard'}</span>
+            </button>
+          </div>
+
+          <div className="text-center pt-2">
+            <button
+              onClick={() => {
+                restoStore.logoutFromServer();
+                restoStore.setRole('stand_staff');
+                if (typeof window !== 'undefined') window.location.hash = '#/portal';
+              }}
+              className="text-xs text-slate-400 hover:text-white underline cursor-pointer"
+            >
+              Sign out / Switch account
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-md mx-auto px-4 py-6 space-y-5 animate-in fade-in duration-200">
       {/* PWA ADD TO HOME SCREEN PROMPT BANNER */}

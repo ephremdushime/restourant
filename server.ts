@@ -66,6 +66,8 @@ function ensureServerDbDefaults(state: any) {
   }
   if (!state.customerSubscriptions) state.customerSubscriptions = [];
   if (!state.studentSubscriptionPayments) state.studentSubscriptionPayments = [];
+  if (!state.activationRequests) state.activationRequests = [];
+  if (!state.pinRecoveryRequests) state.pinRecoveryRequests = [];
 }
 ensureServerDbDefaults(serverDbState);
 
@@ -541,6 +543,370 @@ app.post('/api/auth/logout', (req, res) => {
     revokedTokens.add(token);
   }
   return res.json({ success: true, message: 'Logged out successfully' });
+});
+
+// ----------------------------------------------------
+// Customer Non-SMS Authentication, Activation & Recovery Endpoints (Section 4)
+// ----------------------------------------------------
+
+function computeServerCustomerPinHash(pin: string, customerId: string, memberNo: string): string {
+  const salt = `RESTOPASS_CUST_SALT:${customerId}:${memberNo}`;
+  const saltedPayload = `RESTOPASS_SALTED_PIN_V1:${salt}:${pin.trim()}`;
+  return crypto.createHash('sha256').update(saltedPayload).digest('hex');
+}
+
+function verifyServerCustomerPin(enteredPin: string, customer: any): boolean {
+  if (!enteredPin || !customer) return false;
+  const cleanEntered = enteredPin.trim();
+  const expected = (customer.pinHash || '1234').trim();
+  if (timingSafeCompare(cleanEntered, expected)) return true;
+  const computedHash = computeServerCustomerPinHash(cleanEntered, customer.id, customer.memberNo);
+  if (timingSafeCompare(computedHash, expected)) return true;
+  const plainHash = crypto.createHash('sha256').update(cleanEntered).digest('hex');
+  if (timingSafeCompare(plainHash, expected)) return true;
+  return false;
+}
+
+// POST /api/customer/auth/login: Authenticate phone number + 6+ digit PIN (Rate-limited, lockout, generic error)
+app.post('/api/customer/auth/login', authRateLimiter, (req, res) => {
+  const { phone, pin, username } = req.body;
+  const cleanPhone = (phone || username || '').trim();
+  const cleanPin = (pin || '').trim();
+
+  const customers = serverDbState?.customers || [];
+  const cust = customers.find(
+    (c: any) =>
+      c.phone === cleanPhone ||
+      (c.phone && c.phone.replace(/\s+/g, '') === cleanPhone.replace(/\s+/g, '')) ||
+      c.memberNo === cleanPhone ||
+      c.id === cleanPhone
+  );
+
+  // Generic error to prevent phone-number enumeration
+  if (!cust) {
+    return res.status(401).json({ success: false, error: 'Invalid phone number or PIN' });
+  }
+
+  // Account lockout protection
+  if (cust.lockedUntil && new Date(cust.lockedUntil).getTime() > Date.now()) {
+    const waitMin = Math.max(1, Math.ceil((new Date(cust.lockedUntil).getTime() - Date.now()) / 60000));
+    return res.status(423).json({
+      success: false,
+      error: `Account temporarily locked due to repeated failed login attempts. Please try again in ${waitMin} minutes or visit cafeteria reception.`,
+    });
+  }
+
+  // Approval status checks
+  if (cust.provisionalStatus === 'pending_approval') {
+    return res.status(403).json({
+      success: false,
+      error: 'Your registration is pending restaurant boss approval. You can eat grace meals at the stand with your Member ID.',
+    });
+  }
+  if (cust.provisionalStatus === 'rejected') {
+    return res.status(403).json({
+      success: false,
+      error: 'Customer registration was not approved. Please visit cafeteria management.',
+    });
+  }
+  if (cust.activationStatus === 'ready_for_activation') {
+    return res.status(403).json({
+      success: false,
+      error: 'Account approved! Please complete your one-time activation at cafeteria reception to set your personal PIN.',
+    });
+  }
+
+  const isPinValid = verifyServerCustomerPin(cleanPin, cust);
+  if (!isPinValid) {
+    cust.failedLoginAttempts = (cust.failedLoginAttempts || 0) + 1;
+    if (cust.failedLoginAttempts >= 5) {
+      cust.lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    }
+    queueDbSave(serverDbState);
+    return res.status(401).json({ success: false, error: 'Invalid phone number or PIN' });
+  }
+
+  // Login success
+  cust.failedLoginAttempts = 0;
+  cust.lockedUntil = null;
+  cust.lastLoginAt = new Date().toISOString();
+  queueDbSave(serverDbState);
+
+  const token = createSessionToken({
+    userId: cust.id,
+    username: cust.phone || cust.memberNo,
+    role: 'customer',
+    restaurantCode: cust.restaurantCode,
+  });
+
+  return res.json({
+    success: true,
+    token,
+    customer: {
+      id: cust.id,
+      name: cust.name,
+      phone: cust.phone,
+      memberNo: cust.memberNo,
+      restaurantCode: cust.restaurantCode,
+      activationStatus: cust.activationStatus,
+      cardStatus: cust.cardStatus,
+    },
+  });
+});
+
+// POST /api/customer/auth/logout: Revoke current session
+app.post('/api/customer/auth/logout', (req, res) => {
+  const authHeader = req.headers.authorization || (req.headers['x-restopass-token'] as string);
+  let token = '';
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.substring(7).trim();
+  } else if (authHeader) {
+    token = authHeader.trim();
+  }
+  if (token) revokedTokens.add(token);
+  return res.json({ success: true, message: 'Logged out successfully' });
+});
+
+// GET /api/customer/auth/session: Return authenticated customer session status
+app.get('/api/customer/auth/session', apiRateLimiter, requireAuth(['customer']), (req, res) => {
+  const cust = (serverDbState?.customers || []).find((c: any) => c.id === req.user?.userId);
+  return res.json({
+    success: true,
+    user: req.user,
+    customer: cust
+      ? {
+          id: cust.id,
+          name: cust.name,
+          phone: cust.phone,
+          memberNo: cust.memberNo,
+          restaurantCode: cust.restaurantCode,
+          activationStatus: cust.activationStatus,
+          cardStatus: cust.cardStatus,
+        }
+      : null,
+  });
+});
+
+// POST /api/customer/activation/request: Staff-issued short-lived, single-use activation code (Non-SMS)
+app.post(
+  '/api/customer/activation/request',
+  apiRateLimiter,
+  requireAuth(['stand_staff', 'restaurant_admin', 'super_admin']),
+  (req, res) => {
+    const { customerId, memberNo, phone } = req.body;
+    const customers = serverDbState?.customers || [];
+    const cust = customers.find(
+      (c: any) =>
+        c.id === customerId ||
+        c.memberNo === memberNo ||
+        (phone && c.phone === phone)
+    );
+    if (!cust) return res.status(404).json({ success: false, error: 'Customer not found' });
+    if (cust.provisionalStatus === 'pending_approval') {
+      return res.status(400).json({ success: false, error: 'Registration is pending boss approval before activation.' });
+    }
+    if (cust.provisionalStatus === 'rejected' || cust.activationStatus === 'suspended') {
+      return res.status(400).json({ success: false, error: 'Account is rejected or suspended.' });
+    }
+
+    if (!serverDbState.activationRequests) serverDbState.activationRequests = [];
+    serverDbState.activationRequests.forEach((r: any) => {
+      if (r.customerId === cust.id && !r.used) r.used = true;
+    });
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+    const activationRecord = {
+      id: `act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      customerId: cust.id,
+      memberNo: cust.memberNo,
+      phone: cust.phone,
+      restaurantCode: cust.restaurantCode,
+      activationCode: code,
+      codeHash,
+      authorizingStaffId: req.user!.userId,
+      authorizingStaffName: req.user!.username,
+      expiresAt,
+      used: false,
+      createdAt: new Date().toISOString(),
+    };
+    serverDbState.activationRequests.unshift(activationRecord);
+    queueDbSave(serverDbState);
+
+    return res.json({
+      success: true,
+      activationCode: code,
+      expiresAt,
+      memberNo: cust.memberNo,
+      customerName: cust.name,
+    });
+  }
+);
+
+// POST /api/customer/activation/complete: Customer privately sets their 6+ digit PIN
+app.post('/api/customer/activation/complete', authRateLimiter, (req, res) => {
+  const { phoneOrMember, activationCode, newPin } = req.body;
+  const cleanIdentifier = (phoneOrMember || '').trim();
+  const cleanPin = (newPin || '').trim();
+  const cleanCode = (activationCode || '').trim();
+
+  if (!/^\d{6,}$/.test(cleanPin)) {
+    return res.status(400).json({ success: false, error: 'PIN must be at least 6 numeric digits.' });
+  }
+
+  const customers = serverDbState?.customers || [];
+  const cust = customers.find(
+    (c: any) =>
+      c.phone === cleanIdentifier ||
+      (c.phone && c.phone.replace(/\s+/g, '') === cleanIdentifier.replace(/\s+/g, '')) ||
+      c.memberNo === cleanIdentifier ||
+      c.id === cleanIdentifier
+  );
+  if (!cust) return res.status(400).json({ success: false, error: 'Invalid activation credentials or code.' });
+
+  const requests = serverDbState?.activationRequests || [];
+  const codeHash = crypto.createHash('sha256').update(cleanCode).digest('hex');
+  const actReq = requests.find(
+    (r: any) =>
+      r.customerId === cust.id &&
+      !r.used &&
+      (r.activationCode === cleanCode || r.codeHash === codeHash) &&
+      new Date(r.expiresAt).getTime() > Date.now()
+  );
+
+  if (!actReq) {
+    return res.status(400).json({ success: false, error: 'Invalid, expired, or already used activation code.' });
+  }
+
+  const pinHash = computeServerCustomerPinHash(cleanPin, cust.id, cust.memberNo);
+  cust.pinHash = pinHash;
+  cust.hasCustomPin = true;
+  cust.pinSetAt = new Date().toISOString();
+  cust.activationStatus = 'active';
+  cust.failedLoginAttempts = 0;
+  cust.lockedUntil = null;
+  cust.cardReadyForPrint = true;
+
+  actReq.used = true;
+  actReq.usedAt = new Date().toISOString();
+
+  queueDbSave(serverDbState);
+
+  const token = createSessionToken({
+    userId: cust.id,
+    username: cust.phone || cust.memberNo,
+    role: 'customer',
+    restaurantCode: cust.restaurantCode,
+  });
+
+  return res.json({
+    success: true,
+    token,
+    customer: {
+      id: cust.id,
+      name: cust.name,
+      memberNo: cust.memberNo,
+      phone: cust.phone,
+      restaurantCode: cust.restaurantCode,
+    },
+  });
+});
+
+// POST /api/customer/recovery/request: Create audited PIN recovery request
+app.post('/api/customer/recovery/request', apiRateLimiter, (req, res) => {
+  const { customerId, phone, reason, idVerificationMethod, restaurantCode } = req.body;
+  const customers = serverDbState?.customers || [];
+  const cust = customers.find((c: any) => c.id === customerId || (phone && c.phone === phone));
+  if (!cust) return res.status(404).json({ success: false, error: 'Customer not found' });
+
+  if (!serverDbState.pinRecoveryRequests) serverDbState.pinRecoveryRequests = [];
+  const requestId = `rec_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const recReq = {
+    id: requestId,
+    customerId: cust.id,
+    memberNo: cust.memberNo,
+    phone: cust.phone,
+    restaurantCode: cust.restaurantCode || restaurantCode || 'RW01',
+    reason: (reason || 'Customer forgotten PIN').trim(),
+    idVerificationMethod: idVerificationMethod || 'student_id_check',
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+  };
+  serverDbState.pinRecoveryRequests.unshift(recReq);
+  queueDbSave(serverDbState);
+
+  return res.json({ success: true, requestId });
+});
+
+// POST /api/customer/recovery/approve: Manager authorizes recovery and issues reset code
+app.post(
+  '/api/customer/recovery/approve',
+  apiRateLimiter,
+  requireAuth(['restaurant_admin', 'super_admin']),
+  (req, res) => {
+    const { requestId } = req.body;
+    const requests = serverDbState?.pinRecoveryRequests || [];
+    const recReq = requests.find((r: any) => r.id === requestId);
+    if (!recReq) return res.status(404).json({ success: false, error: 'Recovery request not found' });
+    if (recReq.status !== 'pending') return res.status(400).json({ success: false, error: 'Request is already reviewed' });
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+    recReq.status = 'approved';
+    recReq.recoveryCode = code;
+    recReq.recoveryCodeHash = codeHash;
+    recReq.authorizingStaffId = req.user!.userId;
+    recReq.authorizingStaffName = req.user!.username;
+    recReq.approvedAt = new Date().toISOString();
+    recReq.expiresAt = expiresAt;
+
+    queueDbSave(serverDbState);
+    return res.json({ success: true, recoveryCode: code, expiresAt });
+  }
+);
+
+// POST /api/customer/recovery/complete: Customer privately sets new PIN
+app.post('/api/customer/recovery/complete', authRateLimiter, (req, res) => {
+  const { requestId, recoveryCode, newPin } = req.body;
+  const cleanPin = (newPin || '').trim();
+  if (!/^\d{6,}$/.test(cleanPin)) {
+    return res.status(400).json({ success: false, error: 'PIN must be at least 6 numeric digits.' });
+  }
+
+  const requests = serverDbState?.pinRecoveryRequests || [];
+  const recReq = requests.find((r: any) => r.id === requestId);
+  if (!recReq) return res.status(404).json({ success: false, error: 'Recovery request not found' });
+  if (recReq.status !== 'approved') return res.status(400).json({ success: false, error: 'Request not authorized for reset.' });
+  if (recReq.expiresAt && new Date(recReq.expiresAt).getTime() < Date.now()) {
+    return res.status(400).json({ success: false, error: 'Recovery code expired' });
+  }
+
+  const cleanCode = (recoveryCode || '').trim();
+  const codeHash = crypto.createHash('sha256').update(cleanCode).digest('hex');
+  if (recReq.recoveryCode !== cleanCode && recReq.recoveryCodeHash !== codeHash) {
+    return res.status(400).json({ success: false, error: 'Invalid recovery code' });
+  }
+
+  const customers = serverDbState?.customers || [];
+  const cust = customers.find((c: any) => c.id === recReq.customerId);
+  if (!cust) return res.status(404).json({ success: false, error: 'Customer not found' });
+
+  const pinHash = computeServerCustomerPinHash(cleanPin, cust.id, cust.memberNo);
+  cust.pinHash = pinHash;
+  cust.hasCustomPin = true;
+  cust.pinSetAt = new Date().toISOString();
+  cust.failedLoginAttempts = 0;
+  cust.lockedUntil = null;
+  cust.keyVersion = (cust.keyVersion || 1) + 1; // revokes previous session keys
+  recReq.status = 'completed';
+  recReq.completedAt = new Date().toISOString();
+
+  queueDbSave(serverDbState);
+  return res.json({ success: true, message: 'PIN reset successfully. You can now log in.' });
 });
 
 // ----------------------------------------------------

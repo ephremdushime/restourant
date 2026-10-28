@@ -109,10 +109,15 @@ export interface Customer {
   cardVersion: number; // raised when reissued or locked
   keyVersion: number; // raised when phone key reissued
   cardStatus: 'active' | 'locked' | 'reissued';
-  pinHash: string; // 4-digit PIN hash
-  hasCustomPin?: boolean; // false until customer sets 4-digit PIN on magic link arrival
+  pinHash: string; // 6+ digit PIN hash
+  hasCustomPin?: boolean; // false until customer sets PIN
   pinSetAt?: string;
   provisionalStatus?: 'pending_approval' | 'approved' | 'rejected';
+  activationStatus?: 'pending_approval' | 'ready_for_activation' | 'active' | 'suspended';
+  cardReadyForPrint?: boolean;
+  failedLoginAttempts?: number;
+  lockedUntil?: string | null;
+  lastLoginAt?: string;
   gracePlatesConsumed?: number; // max 3 consumed while awaiting boss approval
   gracePlatesRemaining?: number;
   pendingApprovalId?: string;
@@ -403,7 +408,9 @@ export type NotificationType =
   | 'topup_success'
   | 'card_security'
   | 'plate_transfer'
-  | 'balance_adjustment';
+  | 'balance_adjustment'
+  | 'account_activated'
+  | 'security_alert';
 
 export type NotificationPriority = 'normal' | 'important' | 'urgent';
 
@@ -549,3 +556,37 @@ export interface StudentEntitlementResult {
   gracePeriodEnd?: string;
 }
 
+export interface CustomerActivationRequest {
+  id: string;
+  customerId: string;
+  memberNo: string;
+  phone: string;
+  restaurantCode: string;
+  activationCode: string; // 6-character single-use code
+  codeHash: string;
+  authorizingStaffId: string;
+  authorizingStaffName: string;
+  expiresAt: string; // 15-minute validity
+  used: boolean;
+  usedAt?: string;
+  createdAt: string;
+}
+
+export interface CustomerPinRecoveryRequest {
+  id: string;
+  customerId: string;
+  memberNo: string;
+  phone: string;
+  restaurantCode: string;
+  reason: string;
+  idVerificationMethod: 'student_id_check' | 'national_id_check' | 'photo_match' | 'manager_override';
+  status: 'pending' | 'approved' | 'completed' | 'rejected';
+  recoveryCode?: string;
+  recoveryCodeHash?: string;
+  authorizingStaffId?: string;
+  authorizingStaffName?: string;
+  approvedAt?: string;
+  completedAt?: string;
+  expiresAt?: string;
+  createdAt: string;
+}

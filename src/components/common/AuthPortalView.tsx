@@ -29,6 +29,8 @@ import {
   ArrowRight,
   Zap,
   Clock,
+  Sparkles,
+  XCircle,
 } from 'lucide-react';
 
 interface AuthPortalViewProps {
@@ -100,13 +102,34 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
         setSelectedBranchId(branches[0].id);
       }
     } else if (activeRole === 'customer') {
-      setPhoneOrMember('28491'); // Jean-Paul
+      setPhoneOrMember('+250 788 123 456');
       setPin('');
     } else if (activeRole === 'super_admin') {
       setUsername('ephrem@restopass.rw');
       setPassword('');
     }
   }, [activeRole, selectedRestoCode]);
+
+  // Non-SMS Customer Activation & Recovery Modal States
+  const [showActivationModal, setShowActivationModal] = useState(false);
+  const [showRecoveryModal, setShowRecoveryModal] = useState(false);
+
+  // Activation inputs
+  const [actPhone, setActPhone] = useState('');
+  const [actCode, setActCode] = useState('');
+  const [actPin, setActPin] = useState('');
+  const [actPinConfirm, setActPinConfirm] = useState('');
+  const [actError, setActError] = useState<string | null>(null);
+  const [actLoading, setActLoading] = useState(false);
+
+  // Recovery inputs
+  const [recRequestId, setRecRequestId] = useState('');
+  const [recCode, setRecCode] = useState('');
+  const [recPin, setRecPin] = useState('');
+  const [recPinConfirm, setRecPinConfirm] = useState('');
+  const [recError, setRecError] = useState<string | null>(null);
+  const [recSuccess, setRecSuccess] = useState(false);
+  const [recLoading, setRecLoading] = useState(false);
 
   const currentResto = restoStore.getState().restaurants.find((r) => r.code === selectedRestoCode) || restoStore.getCurrentRestaurant();
   const branches = restoStore.getRestaurantBranches(selectedRestoCode);
@@ -251,43 +274,18 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           return;
         }
 
-        const serverAuth = await restoStore.loginToServer({
-          role: 'customer',
-          username: cleanPhoneOrMember,
+        const customerLoginRes = await restoStore.customerLogin({
+          phone: cleanPhoneOrMember,
           pin: enteredPin,
           restaurantCode: selectedRestoCode,
         });
 
-        const cust = state.customers.find(
-          (c) =>
-            c.memberNo === cleanPhoneOrMember ||
-            c.phone.includes(cleanPhoneOrMember) ||
-            c.id === cleanPhoneOrMember
-        );
-
-        if (serverAuth.success) {
+        if (customerLoginRes.success && customerLoginRes.customer) {
           setFailedAttempts(0);
-          restoStore.setRestaurantCode(serverAuth.user?.restaurantCode || selectedRestoCode);
-          if (serverAuth.user?.customerId) restoStore.setCustomer(serverAuth.user.customerId);
-          restoStore.setRole('customer');
           sound.playSuccessBeep();
-          onLoginSuccess('customer', serverAuth.user?.userLabel || `Member #${cleanPhoneOrMember}`);
-        } else if (cust) {
-          const custSalt = getCustomerPinSalt(cust.id, cust.memberNo);
-          const isPinValid = await verifyPinSecure(enteredPin, custSalt, cust.pinHash || '1234');
-
-          if (isPinValid) {
-            setFailedAttempts(0);
-            restoStore.setRestaurantCode(cust.restaurantCode);
-            restoStore.setCustomer(cust.id);
-            restoStore.setRole('customer');
-            sound.playSuccessBeep();
-            onLoginSuccess('customer', `${cust.name} (#${cust.memberNo})`);
-          } else {
-            handleFailedAttempt(t.auth.authError);
-          }
+          onLoginSuccess('customer', `${customerLoginRes.customer.name} (#${customerLoginRes.customer.memberNo})`);
         } else {
-          handleFailedAttempt('Invalid Member Number, Phone, or PIN');
+          handleFailedAttempt(customerLoginRes.error || 'Invalid phone number or PIN');
         }
       } else if (activeRole === 'super_admin') {
         if (!password) {
@@ -613,32 +611,53 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
             </>
           )}
 
-          {/* Role-Specific Fields: 3. Customer Meal Portal */}
+          {/* Role-Specific Fields: 3. Customer Meal Portal (Phone + 6+ digit PIN) */}
           {activeRole === 'customer' && (
             <>
               <div className="space-y-1">
                 <label className="font-semibold text-slate-300">
-                  Phone Number or Member No (#)
+                  Registered Phone Number (or Member No)
                 </label>
                 <input
                   type="text"
                   value={phoneOrMember}
                   onChange={(e) => setPhoneOrMember(e.target.value)}
-                  placeholder="e.g. 28491 or +250 788 334 112"
+                  placeholder="e.g. +250 788 123 456 or 28491"
                   className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-white outline-hidden font-mono"
                 />
               </div>
 
               <div className="space-y-1">
-                <label className="font-semibold text-slate-300">{t.auth.pin}</label>
+                <div className="flex items-center justify-between">
+                  <label className="font-semibold text-slate-300">Personal PIN (6+ digits)</label>
+                  <button
+                    type="button"
+                    onClick={() => setShowRecoveryModal(true)}
+                    className="text-[11px] text-sky-400 hover:text-sky-300 underline cursor-pointer"
+                  >
+                    Forgot PIN?
+                  </button>
+                </div>
                 <input
                   type="password"
-                  maxLength={4}
+                  maxLength={16}
                   value={pin}
                   onChange={(e) => setPin(e.target.value)}
-                  placeholder="•••• (4 digits)"
+                  placeholder="•••••• (min. 6 digits)"
                   className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-white outline-hidden font-mono text-center tracking-widest text-lg font-bold"
                 />
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 text-xs flex items-center justify-between">
+                <div className="text-slate-400 text-[11px]">First time logging in?</div>
+                <button
+                  type="button"
+                  onClick={() => setShowActivationModal(true)}
+                  className="text-xs font-bold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Activate Account (No SMS)</span>
+                </button>
               </div>
             </>
           )}
@@ -769,6 +788,310 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* NON-SMS ACCOUNT ACTIVATION MODAL */}
+      {showActivationModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-emerald-400" />
+                <h3 className="text-base font-bold text-white">Activate RestoPass Account</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowActivationModal(false);
+                  setActError(null);
+                }}
+                className="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Activate your account privately without SMS OTPs. Enter your registered phone number and the single-use 6-digit activation code issued by cafeteria desk.
+            </p>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setActError(null);
+                if (!actPhone.trim()) {
+                  setActError('Please enter your phone number');
+                  return;
+                }
+                if (!actCode.trim()) {
+                  setActError('Please enter the 6-digit cashier activation code');
+                  return;
+                }
+                if (actPin.length < 6) {
+                  setActError('PIN must be at least 6 numeric digits');
+                  return;
+                }
+                if (actPin !== actPinConfirm) {
+                  setActError('PINs do not match');
+                  return;
+                }
+
+                setActLoading(true);
+                const res = await restoStore.completeCustomerActivation({
+                  phoneOrMember: actPhone.trim(),
+                  activationCode: actCode.trim(),
+                  newPin: actPin.trim(),
+                  restaurantCode: selectedRestoCode,
+                });
+                setActLoading(false);
+
+                if (res.success && res.customer) {
+                  restoStore.setCustomer(res.customer.id);
+                  restoStore.setRestaurantCode(res.customer.restaurantCode);
+                  restoStore.setRole('customer');
+                  sound.playSuccessBeep();
+                  setShowActivationModal(false);
+                  onLoginSuccess('customer', `${res.customer.name} (#${res.customer.memberNo})`);
+                } else {
+                  setActError(res.error || 'Activation failed');
+                  sound.playDangerAlarm();
+                }
+              }}
+              className="space-y-3 text-xs"
+            >
+              <div>
+                <label className="font-semibold text-slate-300 block mb-1">Registered Phone Number</label>
+                <input
+                  type="text"
+                  value={actPhone}
+                  onChange={(e) => setActPhone(e.target.value)}
+                  placeholder="e.g. +250 788 123 456"
+                  className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono focus:border-emerald-500 outline-hidden"
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-300 block mb-1">Single-Use Activation Code</label>
+                <input
+                  type="text"
+                  maxLength={8}
+                  value={actCode}
+                  onChange={(e) => setActCode(e.target.value)}
+                  placeholder="6-digit code from cafeteria desk"
+                  className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono text-center tracking-widest text-sm focus:border-emerald-500 outline-hidden"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="font-semibold text-slate-300 block mb-1">Set Personal PIN</label>
+                  <input
+                    type="password"
+                    maxLength={16}
+                    value={actPin}
+                    onChange={(e) => setActPin(e.target.value)}
+                    placeholder="Min 6 digits"
+                    className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono text-center focus:border-emerald-500 outline-hidden"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-300 block mb-1">Confirm PIN</label>
+                  <input
+                    type="password"
+                    maxLength={16}
+                    value={actPinConfirm}
+                    onChange={(e) => setActPinConfirm(e.target.value)}
+                    placeholder="Re-enter PIN"
+                    className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono text-center focus:border-emerald-500 outline-hidden"
+                  />
+                </div>
+              </div>
+
+              <div className="p-2 rounded-xl bg-slate-950 text-[10.5px] text-slate-400">
+                Staff never see or choose your PIN. It is cryptographically salted on your device and the central server.
+              </div>
+
+              {actError && (
+                <div className="p-2.5 rounded-xl bg-rose-950/80 border border-rose-700 text-rose-300 text-xs">
+                  {actError}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowActivationModal(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actLoading}
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold shadow-md cursor-pointer disabled:opacity-50"
+                >
+                  {actLoading ? 'Activating...' : 'Activate & Enter Dashboard'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* NON-SMS PIN RECOVERY MODAL */}
+      {showRecoveryModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Key className="w-5 h-5 text-sky-400" />
+                <h3 className="text-base font-bold text-white">Audited PIN Recovery (No SMS)</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowRecoveryModal(false);
+                  setRecError(null);
+                  setRecSuccess(false);
+                }}
+                className="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs space-y-2">
+              <div className="font-bold text-white flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-sky-400" />
+                <span>Audited In-Person Verification Process</span>
+              </div>
+              <ol className="list-decimal list-inside space-y-1 text-slate-300 text-[11px] leading-relaxed">
+                <li>Present your Student ID or National ID at cafeteria reception.</li>
+                <li>Manager verifies your physical identity and authorizes a reset code.</li>
+                <li>Enter the manager reset code below to privately set your new PIN.</li>
+              </ol>
+            </div>
+
+            {recSuccess ? (
+              <div className="p-4 rounded-2xl bg-emerald-950/80 border border-emerald-600 text-emerald-200 text-xs text-center space-y-1">
+                <CheckCircle2 className="w-6 h-6 text-emerald-400 mx-auto" />
+                <div className="font-bold text-sm">PIN Reset Successfully!</div>
+                <div className="text-[11px]">All previous sessions revoked. You can now log in with your new PIN.</div>
+              </div>
+            ) : (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  setRecError(null);
+                  if (!recRequestId.trim()) {
+                    setRecError('Please enter the Request ID from cafeteria management');
+                    return;
+                  }
+                  if (!recCode.trim()) {
+                    setRecError('Please enter the 6-digit reset code');
+                    return;
+                  }
+                  if (recPin.length < 6) {
+                    setRecError('New PIN must be at least 6 digits');
+                    return;
+                  }
+                  if (recPin !== recPinConfirm) {
+                    setRecError('PINs do not match');
+                    return;
+                  }
+
+                  setRecLoading(true);
+                  const res = await restoStore.completeCustomerPinRecovery({
+                    requestId: recRequestId.trim(),
+                    recoveryCode: recCode.trim(),
+                    newPin: recPin.trim(),
+                  });
+                  setRecLoading(false);
+
+                  if (res.success) {
+                    setRecSuccess(true);
+                    sound.playSuccessBeep();
+                  } else {
+                    setRecError(res.error || 'PIN reset failed');
+                    sound.playDangerAlarm();
+                  }
+                }}
+                className="space-y-3 text-xs"
+              >
+                <div>
+                  <label className="font-semibold text-slate-300 block mb-1">Recovery Request ID</label>
+                  <input
+                    type="text"
+                    value={recRequestId}
+                    onChange={(e) => setRecRequestId(e.target.value)}
+                    placeholder="e.g. rec_179314..."
+                    className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono focus:border-sky-500 outline-hidden"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-semibold text-slate-300 block mb-1">Manager Reset Code</label>
+                  <input
+                    type="text"
+                    maxLength={8}
+                    value={recCode}
+                    onChange={(e) => setRecCode(e.target.value)}
+                    placeholder="6-digit reset code"
+                    className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono text-center tracking-widest text-sm focus:border-sky-500 outline-hidden"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="font-semibold text-slate-300 block mb-1">New PIN (6+ digits)</label>
+                    <input
+                      type="password"
+                      maxLength={16}
+                      value={recPin}
+                      onChange={(e) => setRecPin(e.target.value)}
+                      placeholder="Min 6 digits"
+                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono text-center focus:border-sky-500 outline-hidden"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-semibold text-slate-300 block mb-1">Confirm New PIN</label>
+                    <input
+                      type="password"
+                      maxLength={16}
+                      value={recPinConfirm}
+                      onChange={(e) => setRecPinConfirm(e.target.value)}
+                      placeholder="Re-enter PIN"
+                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono text-center focus:border-sky-500 outline-hidden"
+                    />
+                  </div>
+                </div>
+
+                {recError && (
+                  <div className="p-2.5 rounded-xl bg-rose-950/80 border border-rose-700 text-rose-300 text-xs">
+                    {recError}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowRecoveryModal(false)}
+                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={recLoading}
+                    className="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold shadow-md cursor-pointer disabled:opacity-50"
+                  >
+                    {recLoading ? 'Resetting...' : 'Set New PIN'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

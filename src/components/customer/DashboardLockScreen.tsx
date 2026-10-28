@@ -30,10 +30,10 @@ export const DashboardLockScreen: React.FC<DashboardLockScreenProps> = ({
 
   const handleDigit = (digit: string) => {
     setErrorMessage(null);
-    if (pin.length < 4) {
+    if (pin.length < 6) {
       const next = pin + digit;
       setPin(next);
-      if (next.length === 4) {
+      if (next.length === 6) {
         // Verify PIN
         const isValid = restoStore.verifyCustomerPin(customer.id, next);
         if (isValid) {
@@ -100,17 +100,17 @@ export const DashboardLockScreen: React.FC<DashboardLockScreenProps> = ({
             <span>Dashboard Auto-Locked</span>
           </div>
           <p className="text-[11px] text-slate-400">
-            Screen went off. Enter your 4-digit PIN to access your meal pass.
+            Screen went off. Enter your 6-digit PIN to access your meal pass.
           </p>
         </div>
 
-        {/* 4 Digit Dots Indicator */}
+        {/* 6 Digit Dots Indicator */}
         <div
-          className={`flex justify-center gap-5 py-2 transition-transform ${
+          className={`flex justify-center gap-3 py-2 transition-transform ${
             isShaking ? 'translate-x-[-8px] animate-shake' : ''
           }`}
         >
-          {[0, 1, 2, 3].map((idx) => {
+          {[0, 1, 2, 3, 4, 5].map((idx) => {
             const hasDigit = pin.length > idx;
             return (
               <div
@@ -172,7 +172,7 @@ export const DashboardLockScreen: React.FC<DashboardLockScreenProps> = ({
             className="text-[11px] text-slate-400 hover:text-slate-200 flex items-center gap-1 transition-colors cursor-pointer"
           >
             <HelpCircle className="w-3.5 h-3.5 text-slate-500" />
-            <span>Forgot 4-digit PIN?</span>
+            <span>Forgot 6-digit PIN?</span>
           </button>
         </div>
 
@@ -185,11 +185,8 @@ export const DashboardLockScreen: React.FC<DashboardLockScreenProps> = ({
             </div>
             <p className="text-[11px] text-slate-400 leading-relaxed">
               For student security, your plate balance is guarded on this phone. If you forgot your PIN, visit the{' '}
-              <strong className="text-white">Restaurant Boss Room</strong> or any dining stand cashier. They will verify your Student ID / National ID document and issue an instant reset.
+              <strong className="text-white">Restaurant Boss Room</strong> or any dining stand cashier. They will verify your Student ID / National ID document and issue an instant reset code.
             </p>
-            <div className="text-[10px] text-slate-500 font-mono">
-              Demo bypass: default test PIN is 1234
-            </div>
           </div>
         )}
       </div>

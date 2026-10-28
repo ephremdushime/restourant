@@ -27,7 +27,9 @@ import {
   MessageSquare,
   Send,
   Share2,
+  Printer,
 } from 'lucide-react';
+import { CardFrontView, CardBackView } from './CardPrintStudio';
 
 interface BossApprovalsManagerProps {
   restaurantCode: string;
@@ -46,6 +48,7 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
   const [activeTab, setActiveTab] = useState<'pending' | 'history'>('pending');
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'new_customer' | 'balance_topup'>('all');
+  const [printCardCustomer, setPrintCardCustomer] = useState<Customer | null>(null);
 
   // Copy feedback
   const [copiedRefId, setCopiedRefId] = useState<string | null>(null);
@@ -507,35 +510,80 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
               </button>
             </div>
 
-            {/* Customer Summary Card */}
-            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <img
-                    src={whatsAppModalData.customer.photoUrl}
-                    alt={whatsAppModalData.customer.name}
-                    className="w-10 h-10 rounded-xl object-cover border border-slate-700"
-                  />
-                  <div>
-                    <div className="font-bold text-white text-sm">
-                      {whatsAppModalData.customer.name}
-                    </div>
-                    <div className="text-xs font-mono text-slate-400">
-                      #{whatsAppModalData.customer.memberNo} · {whatsAppModalData.customer.phone}
-                    </div>
-                  </div>
+            {/* Status & Entitlement Badges */}
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="p-2.5 rounded-xl bg-emerald-950/80 border border-emerald-800 text-emerald-200 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <div>
+                  <div className="font-bold">Dashboard Activated</div>
+                  <div className="text-[10px] text-emerald-300">Customer account is active</div>
                 </div>
-
-                <div className="text-right">
-                  <div className="text-xs font-bold text-emerald-400 font-mono">
-                    +{whatsAppModalData.approval.platesRequested} Plates
-                  </div>
-                  <div className="text-[10px] font-mono text-slate-400">
-                    {whatsAppModalData.approval.amountRwf.toLocaleString()} RWF
-                  </div>
+              </div>
+              <div className="p-2.5 rounded-xl bg-sky-950/80 border border-sky-800 text-sky-200 flex items-center gap-2">
+                <CreditCard className="w-4 h-4 text-sky-400 shrink-0" />
+                <div>
+                  <div className="font-bold">Physical Card Ready</div>
+                  <div className="text-[10px] text-sky-300">Front &amp; Back layout generated</div>
                 </div>
               </div>
             </div>
+
+            {/* Customer Summary Card & Net Balance Accounting */}
+            {(() => {
+              const graceConsumed = whatsAppModalData.approval.gracePlatesConsumed || whatsAppModalData.customer.gracePlatesConsumed || 0;
+              const finalBal = restoStore.getCustomerBalance(whatsAppModalData.customer.id);
+              return (
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <img
+                        src={whatsAppModalData.customer.photoUrl}
+                        alt={whatsAppModalData.customer.name}
+                        className="w-10 h-10 rounded-xl object-cover border border-slate-700"
+                      />
+                      <div>
+                        <div className="font-bold text-white text-sm">
+                          {whatsAppModalData.customer.name}
+                        </div>
+                        <div className="text-xs font-mono text-slate-400">
+                          #{whatsAppModalData.customer.memberNo} · {whatsAppModalData.customer.phone}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-right">
+                      <div className="text-xs font-bold text-emerald-400 font-mono">
+                        +{whatsAppModalData.approval.platesRequested} Plates
+                      </div>
+                      <div className="text-[10px] font-mono text-slate-400">
+                        {whatsAppModalData.approval.amountRwf.toLocaleString()} RWF
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Net Balance Breakdown minus Consumed Grace Meals (< 3) */}
+                  <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs flex items-center justify-between">
+                    <div className="text-slate-400 text-[11px]">
+                      <span>Provisional Grace Consumed: </span>
+                      <strong className="text-amber-400 font-mono">-{graceConsumed}</strong>
+                    </div>
+                    <div className="text-right font-mono font-bold text-emerald-300 text-xs">
+                      Net Balance: {finalBal} Plates
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Print Physical Card Action Button */}
+            <button
+              type="button"
+              onClick={() => setPrintCardCustomer(whatsAppModalData.customer)}
+              className="w-full py-2.5 px-4 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md transition-colors cursor-pointer"
+            >
+              <Printer className="w-4 h-4" />
+              <span>Print Physical Card (Front &amp; Back CR80)</span>
+            </button>
 
             {/* Instant WhatsApp Share Action Buttons */}
             <div className="space-y-2.5">
@@ -646,6 +694,69 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
                 className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-md cursor-pointer transition-colors"
               >
                 Confirm Rejection &amp; Lock Card
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PHYSICAL CARD PRINT PREVIEW MODAL */}
+      {printCardCustomer && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-3xl max-w-3xl w-full p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Printer className="w-5 h-5 text-sky-400" />
+                <h3 className="text-base font-bold text-white">
+                  Physical Meal Card (Front &amp; Back CR80) — #{printCardCustomer.memberNo}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPrintCardCustomer(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors cursor-pointer"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300">
+              Double-sided physical card with scannable offline cryptographic QR and property notice in Kinyarwanda &amp; English. (No plate balances printed).
+            </p>
+
+            <div className="flex flex-col md:flex-row gap-6 items-center justify-center p-4 bg-slate-950 rounded-2xl border border-slate-800">
+              <div className="flex flex-col items-center">
+                <span className="text-[10px] font-bold uppercase text-slate-400 mb-1.5">Front Side</span>
+                <CardFrontView
+                  customer={printCardCustomer}
+                  restaurantName={currentResto?.name || 'Kigali Independent University Canteen'}
+                />
+              </div>
+
+              <div className="flex flex-col items-center">
+                <span className="text-[10px] font-bold uppercase text-slate-400 mb-1.5">Back Side (Property Notice)</span>
+                <CardBackView
+                  customer={printCardCustomer}
+                  restaurantName={currentResto?.name || 'Kigali Independent University Canteen'}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setPrintCardCustomer(null)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs shadow-md flex items-center gap-2 cursor-pointer transition-colors"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Print Card Now</span>
               </button>
             </div>
           </div>

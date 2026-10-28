@@ -132,9 +132,10 @@ export function deriveCustomerKey(restaurantKey: string, memberNo: string, keyVe
 /**
  * Computes ID hash for duplicate checking without exposing raw ID
  */
-export function hashIdNumber(idType: string, idNumber: string): string {
+export function hashIdNumber(idType?: string, idNumber?: string): string {
+  if (!idNumber) return '';
   const normalized = idNumber.replace(/[\s-]/g, '').toUpperCase();
-  return sha256(`ID_SALT_RESTOPASS_RWANDA:${idType}:${normalized}`);
+  return sha256(`ID_SALT_RESTOPASS_RWANDA:${idType || 'UNKNOWN'}:${normalized}`);
 }
 
 export function maskIdNumber(idNumber: string): string {

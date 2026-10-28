@@ -37,6 +37,8 @@ import {
   CustomerSubscription,
   StudentSubscriptionPayment,
   StudentEntitlementResult,
+  CustomerActivationRequest,
+  CustomerPinRecoveryRequest,
 } from '../types';
 import {
   deriveRestaurantKey,
@@ -60,6 +62,7 @@ import {
   getStationUserSalt,
   getBossPasswordSalt,
   getSuperAdminSalt,
+  sha256,
 } from '../services/cryptoService';
 import { sound } from '../services/audioService';
 
@@ -147,6 +150,9 @@ export interface AppState {
   studentSubscriptionSettings: StudentSubscriptionSettings;
   customerSubscriptions: CustomerSubscription[];
   studentSubscriptionPayments: StudentSubscriptionPayment[];
+
+  activationRequests: CustomerActivationRequest[];
+  pinRecoveryRequests: CustomerPinRecoveryRequest[];
 }
 
 function getInitialState(): AppState {
@@ -1309,6 +1315,8 @@ function getInitialState(): AppState {
       },
       customerSubscriptions: [],
       studentSubscriptionPayments: [],
+      activationRequests: [],
+      pinRecoveryRequests: [],
     };
   }
 
@@ -2945,14 +2953,17 @@ export class RestoStore {
   }
 
   /**
-   * Set or update customer's personal 4-digit security PIN
+   * Set or update customer's personal security PIN (Minimum 6 digits, salted hash)
    */
   public setCustomerPin(customerId: string, newPin: string): boolean {
     const customer = this.state.customers.find((c) => c.id === customerId);
     if (!customer) return false;
-    if (!/^\d{4}$/.test(newPin)) return false;
+    const cleanPin = newPin.trim();
+    if (!/^\d{6,}$/.test(cleanPin)) return false;
 
-    customer.pinHash = newPin;
+    const salt = getCustomerPinSalt(customer.id, customer.memberNo);
+    const saltedPayload = `RESTOPASS_SALTED_PIN_V1:${salt}:${cleanPin}`;
+    customer.pinHash = sha256(saltedPayload);
     customer.hasCustomPin = true;
     customer.pinSetAt = new Date().toISOString();
 
@@ -2962,7 +2973,7 @@ export class RestoStore {
       actorRole: 'customer',
       actorName: customer.name,
       action: 'CUSTOMER_PIN_UPDATED',
-      details: `Customer #${customer.memberNo} set personal 4-digit dashboard security PIN`,
+      details: `Customer #${customer.memberNo} established personal 6+ digit security PIN`,
     });
 
     this.sendNotification({
@@ -2973,7 +2984,7 @@ export class RestoStore {
       senderName: 'Security Guard',
       type: 'card_security',
       title: 'Security PIN Activated',
-      message: 'Your 4-digit security PIN is active. The dashboard will lock automatically whenever your screen goes off.',
+      message: 'Your 6+ digit security PIN is active. The dashboard will lock automatically whenever your screen goes off.',
       priority: 'normal',
       actionTab: 'my_card',
     });
@@ -2983,12 +2994,19 @@ export class RestoStore {
   }
 
   /**
-   * Verify customer's 4-digit PIN for dashboard unlock or sensitive actions
+   * Verify customer's 6+ digit PIN for dashboard unlock or sensitive actions
    */
   public verifyCustomerPin(customerId: string, pin: string): boolean {
     const customer = this.state.customers.find((c) => c.id === customerId);
     if (!customer) return false;
-    return customer.pinHash === pin;
+    const cleanPin = pin.trim();
+    if (customer.pinHash === cleanPin) return true;
+    const salt = getCustomerPinSalt(customer.id, customer.memberNo);
+    const saltedPayload = `RESTOPASS_SALTED_PIN_V1:${salt}:${cleanPin}`;
+    const computedHash = sha256(saltedPayload);
+    if (customer.pinHash === computedHash) return true;
+    if (customer.pinHash === sha256(cleanPin)) return true;
+    return false;
   }
 
   /**
@@ -4748,16 +4766,20 @@ export class RestoStore {
       name: data.name.trim(),
       phone: data.phone.trim(),
       photoUrl: data.photoUrl || '/src/assets/images/avatar_student_male_1790979380050.jpg',
-      idType: data.idType,
-      idHash: hashIdNumber(data.idType, data.idNumber),
-      idNumberMasked: data.idNumber.length > 5 ? `${data.idNumber.slice(0, 5)}****` : '****',
+      idType: data.idType || 'Student ID',
+      idHash: data.idNumber ? hashIdNumber(data.idType, data.idNumber) : '',
+      idNumberMasked: data.idNumber ? (data.idNumber.length > 5 ? `${data.idNumber.slice(0, 5)}****` : '****') : '****',
       isStudent: data.isStudent,
       studentProfile: data.studentProfile,
       cardVersion: 1,
       keyVersion: 1,
       cardStatus: 'active', // Allowed for provisional grace taps
       pinHash: '1234',
+      hasCustomPin: false,
       provisionalStatus: 'pending_approval',
+      activationStatus: 'pending_approval',
+      cardReadyForPrint: false,
+      failedLoginAttempts: 0,
       gracePlatesConsumed: 0,
       gracePlatesRemaining: 3,
       pendingApprovalId: approvalId,
@@ -4767,6 +4789,8 @@ export class RestoStore {
     };
 
     const pkg = data.packageId ? this.state.packages.find((p) => p.id === data.packageId) : null;
+
+    const platesCount = data.platesRequested || (data as any).requestedPlates || 0;
 
     const approval: PendingApproval = {
       id: approvalId,
@@ -4780,15 +4804,15 @@ export class RestoStore {
       customerPhoto: newCustomer.photoUrl,
       memberNo,
       packageId: data.packageId,
-      packageName: pkg ? pkg.name : `${data.platesRequested} Custom Plates`,
-      platesRequested: data.platesRequested,
-      amountRwf: data.amountRwf,
-      paymentMethod: data.paymentMethod,
-      paymentReference: data.paymentReference.trim(),
-      registeredByStaffId: data.registeredByStaffId,
-      registeredByStaffName: data.registeredByStaffName,
-      stationId: data.stationId,
-      stationName: data.stationName,
+      packageName: pkg ? pkg.name : `${platesCount} Custom Plates`,
+      platesRequested: platesCount,
+      amountRwf: data.amountRwf || (platesCount * 1000),
+      paymentMethod: data.paymentMethod || 'momo',
+      paymentReference: (data.paymentReference || (data as any).momoReference || `MOMO-${Date.now()}`).trim(),
+      registeredByStaffId: data.registeredByStaffId || 'staff_prov',
+      registeredByStaffName: data.registeredByStaffName || 'Station Staff',
+      stationId: data.stationId || 'sp_kgl_01',
+      stationName: data.stationName || 'Reception POS Desk',
       gracePlatesAllowed: 3,
       gracePlatesConsumed: 0,
       createdAt: now,
@@ -4808,7 +4832,7 @@ export class RestoStore {
       actorRole: 'reception',
       actorName: staffName,
       action: 'PROVISIONAL_CUSTOMER_REGISTERED',
-      details: `Provisionally registered #${memberNo} (${newCustomer.name}). MoMo/Payment Ref: "${data.paymentReference}" (${data.amountRwf.toLocaleString()} RWF for ${data.platesRequested} plates). Awaiting boss Mobile Money confirmation. Grace plates allowed: 3.`,
+      details: `Provisionally registered #${memberNo} (${newCustomer.name}). MoMo/Payment Ref: "${approval.paymentReference}" (${(approval.amountRwf || 0).toLocaleString()} RWF for ${data.platesRequested} plates). Awaiting boss Mobile Money confirmation. Grace plates allowed: 3.`,
     });
 
     // Notify Restaurant Boss
@@ -4816,10 +4840,10 @@ export class RestoStore {
       restaurantCode,
       target: 'all',
       senderRole: 'system',
-      senderName: `${staffName} (${data.stationName})`,
+      senderName: `${staffName} (${approval.stationName})`,
       type: 'system_broadcast',
       title: `Pending Approval: New Customer #${memberNo}`,
-      message: `${newCustomer.name} provisionally registered with ${data.paymentMethod.toUpperCase()} ref ${data.paymentReference} (${data.amountRwf.toLocaleString()} RWF). Please verify payment on Mobile Money.`,
+      message: `${newCustomer.name} provisionally registered with ${approval.paymentMethod.toUpperCase()} ref ${approval.paymentReference} (${(approval.amountRwf || 0).toLocaleString()} RWF). Please verify payment on Mobile Money.`,
       priority: 'important',
       actionTab: 'approvals',
     });
@@ -4937,7 +4961,8 @@ export class RestoStore {
     if (!customer) return { success: false, error: 'Customer not found' };
 
     const now = new Date().toISOString();
-    const graceConsumed = approval.gracePlatesConsumed || customer.gracePlatesConsumed || 0;
+    const graceConsumed = approval.gracePlatesConsumed || (customer as any).graceMealsConsumed || customer.gracePlatesConsumed || 0;
+    const requested = approval.platesRequested || 0;
 
     // 1. Record confirmed purchase payment on ledger
     const ledgerEntry: LedgerEntry = {
@@ -4945,13 +4970,29 @@ export class RestoStore {
       customerId: customer.id,
       restaurantCode: approval.restaurantCode,
       type: 'purchase',
-      platesDelta: approval.platesRequested,
+      platesDelta: requested,
       timestamp: now,
       staffId: bossName,
-      reason: `Boss Verified & Approved: +${approval.platesRequested} plates (${approval.paymentMethod.toUpperCase()} Ref: ${approval.paymentReference})${graceConsumed > 0 ? ` [${graceConsumed} grace plates consumed while waiting]` : ''}`,
+      reason: `Boss Verified & Approved: +${requested} plates (${approval.paymentMethod.toUpperCase()} Ref: ${approval.paymentReference})${graceConsumed > 0 ? ` [${graceConsumed} grace plates consumed while waiting]` : ''}`,
       reference: approval.paymentReference,
     };
     this.state.ledgerEntries.push(ledgerEntry);
+
+    // If grace plates were consumed while awaiting approval, deduct them so balance is exact net
+    if (graceConsumed > 0) {
+      const graceEntry: LedgerEntry = {
+        id: `led_grace_deduct_${Date.now()}`,
+        customerId: customer.id,
+        restaurantCode: approval.restaurantCode,
+        type: 'scan',
+        platesDelta: -graceConsumed,
+        timestamp: now,
+        staffId: bossName,
+        reason: `Deduction: -${graceConsumed} grace meals consumed while awaiting boss approval (< 3 policy)`,
+        reference: `GRACE-CONSUMED-${customer.memberNo}`,
+      };
+      this.state.ledgerEntries.push(graceEntry);
+    }
 
     // 2. Add confirmed payment record
     const payment: PaymentRecord = {
@@ -4979,6 +5020,8 @@ export class RestoStore {
     customer.provisionalStatus = 'approved';
     customer.cardStatus = 'active';
     customer.pendingApprovalId = undefined;
+    customer.activationStatus = customer.hasCustomPin ? 'active' : 'ready_for_activation';
+    customer.cardReadyForPrint = true;
 
     approval.status = 'approved';
     approval.reviewedAt = now;
@@ -5723,6 +5766,440 @@ export class RestoStore {
     this.scheduleSaveState();
     this.notify();
     return { success: true };
+  }
+
+  // ----------------------------------------------------
+  // Non-SMS Customer Activation & PIN Lifecycle Methods
+  // ----------------------------------------------------
+
+  /**
+   * Cashier / Manager Station issues a short-lived, single-use activation code (Non-SMS)
+   */
+  public requestCustomerActivation(params: {
+    customerId: string;
+    authorizingStaffId: string;
+    authorizingStaffName: string;
+    restaurantCode?: string;
+  }): { success: boolean; activationCode?: string; expiresAt?: string; error?: string } {
+    const cust = this.state.customers.find((c) => c.id === params.customerId);
+    if (!cust) return { success: false, error: 'Customer not found' };
+    if (cust.provisionalStatus === 'pending_approval') {
+      return { success: false, error: 'Registration is pending boss approval before activation.' };
+    }
+    if (cust.provisionalStatus === 'rejected' || cust.activationStatus === 'suspended') {
+      return { success: false, error: 'Customer registration was rejected or suspended.' };
+    }
+
+    if (!this.state.activationRequests) this.state.activationRequests = [];
+
+    // Invalidate any previous unused requests for this customer
+    this.state.activationRequests.forEach((req) => {
+      if (req.customerId === cust.id && !req.used) {
+        req.used = true;
+      }
+    });
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const codeHash = sha256(code);
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 15 * 60 * 1000).toISOString();
+
+    const activationRequest: CustomerActivationRequest = {
+      id: `act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      customerId: cust.id,
+      memberNo: cust.memberNo,
+      phone: cust.phone,
+      restaurantCode: cust.restaurantCode,
+      activationCode: code,
+      codeHash,
+      authorizingStaffId: params.authorizingStaffId,
+      authorizingStaffName: params.authorizingStaffName,
+      expiresAt,
+      used: false,
+      createdAt: now.toISOString(),
+    };
+
+    this.state.activationRequests.unshift(activationRequest);
+
+    this.logAudit({
+      restaurantCode: cust.restaurantCode,
+      actorRole: 'stand_staff',
+      actorName: params.authorizingStaffName,
+      action: 'CUSTOMER_ACTIVATION_REQUESTED',
+      details: `Issued 15-minute non-SMS activation code for #${cust.memberNo} (${cust.name}). Staff verified customer identity at desk.`,
+    });
+
+    this.scheduleSaveState();
+    this.notify();
+    return { success: true, activationCode: code, expiresAt };
+  }
+
+  /**
+   * Customer privately completes activation and sets their personal PIN (Minimum 6 digits, No SMS)
+   */
+  public async completeCustomerActivation(params: {
+    phoneOrMember: string;
+    activationCode: string;
+    newPin: string;
+    restaurantCode?: string;
+  }): Promise<{ success: boolean; customer?: Customer; error?: string }> {
+    const cleanIdentifier = params.phoneOrMember.trim();
+    const cleanPin = params.newPin.trim();
+    const cleanCode = params.activationCode.trim();
+
+    // 1. PIN Policy: Minimum 6 digits, allows longer
+    if (!/^\d{6,}$/.test(cleanPin)) {
+      return { success: false, error: 'PIN must be at least 6 numeric digits.' };
+    }
+
+    const cust = this.state.customers.find(
+      (c) =>
+        c.phone === cleanIdentifier ||
+        c.phone.replace(/\s+/g, '') === cleanIdentifier.replace(/\s+/g, '') ||
+        c.memberNo === cleanIdentifier ||
+        c.id === cleanIdentifier
+    );
+    if (!cust) return { success: false, error: 'Invalid activation credentials or code.' };
+
+    if (!this.state.activationRequests) this.state.activationRequests = [];
+
+    // Find valid activation request
+    const codeHash = sha256(cleanCode);
+    const req = this.state.activationRequests.find(
+      (r) =>
+        r.customerId === cust.id &&
+        !r.used &&
+        (r.activationCode === cleanCode || r.codeHash === codeHash) &&
+        new Date(r.expiresAt).getTime() > Date.now()
+    );
+
+    if (!req) {
+      return { success: false, error: 'Invalid, expired, or already used activation code.' };
+    }
+
+    // 2. Hash PIN with customer salt
+    const salt = getCustomerPinSalt(cust.id, cust.memberNo);
+    const pinHash = await hashPinWithSalt(cleanPin, salt);
+
+    // 3. Activate account
+    cust.pinHash = pinHash;
+    cust.hasCustomPin = true;
+    cust.pinSetAt = new Date().toISOString();
+    cust.activationStatus = 'active';
+    cust.failedLoginAttempts = 0;
+    cust.lockedUntil = null;
+    cust.cardReadyForPrint = true;
+
+    req.used = true;
+    req.usedAt = new Date().toISOString();
+
+    this.logAudit({
+      restaurantCode: cust.restaurantCode,
+      actorRole: 'customer',
+      actorName: cust.name,
+      action: 'CUSTOMER_ACTIVATION_COMPLETED',
+      details: `Customer #${cust.memberNo} (${cust.name}) privately established personal 6+ digit PIN without SMS OTP. Account activated.`,
+    });
+
+    this.sendNotification({
+      restaurantCode: cust.restaurantCode,
+      target: cust.id,
+      targetName: cust.name,
+      senderRole: 'system',
+      senderName: 'RestoPass Security',
+      type: 'account_activated',
+      title: 'RestoPass Account Activated!',
+      message: 'Your personal PIN has been securely set. You can now access your meal dashboard anytime using your registered phone number.',
+      priority: 'important',
+      actionTab: 'history',
+    });
+
+    this.scheduleSaveState();
+    this.notify();
+    return { success: true, customer: cust };
+  }
+
+  /**
+   * Create an audited non-SMS PIN recovery request after manager in-person identity check
+   */
+  public requestCustomerPinRecovery(params: {
+    customerId: string;
+    reason: string;
+    idVerificationMethod: CustomerPinRecoveryRequest['idVerificationMethod'];
+    restaurantCode: string;
+    staffId: string;
+    staffName: string;
+  }): { success: boolean; requestId?: string; error?: string } {
+    const cust = this.state.customers.find((c) => c.id === params.customerId);
+    if (!cust) return { success: false, error: 'Customer not found' };
+
+    if (!this.state.pinRecoveryRequests) this.state.pinRecoveryRequests = [];
+
+    const requestId = `rec_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const recReq: CustomerPinRecoveryRequest = {
+      id: requestId,
+      customerId: cust.id,
+      memberNo: cust.memberNo,
+      phone: cust.phone,
+      restaurantCode: cust.restaurantCode,
+      reason: params.reason.trim(),
+      idVerificationMethod: params.idVerificationMethod,
+      status: 'pending',
+      authorizingStaffId: params.staffId,
+      authorizingStaffName: params.staffName,
+      createdAt: new Date().toISOString(),
+    };
+
+    this.state.pinRecoveryRequests.unshift(recReq);
+
+    this.logAudit({
+      restaurantCode: cust.restaurantCode,
+      actorRole: 'stand_staff',
+      actorName: params.staffName,
+      action: 'CUSTOMER_PIN_RECOVERY_REQUESTED',
+      details: `Initiated PIN recovery request for #${cust.memberNo} (${cust.name}). Reason: "${params.reason}". Verification: ${params.idVerificationMethod}.`,
+    });
+
+    this.scheduleSaveState();
+    this.notify();
+    return { success: true, requestId };
+  }
+
+  /**
+   * Restaurant Manager/Boss approves PIN recovery request and issues single-use reset code
+   */
+  public approveCustomerPinRecovery(params: {
+    requestId: string;
+    authorizingStaffId: string;
+    authorizingStaffName: string;
+  }): { success: boolean; recoveryCode?: string; expiresAt?: string; error?: string } {
+    if (!this.state.pinRecoveryRequests) return { success: false, error: 'No recovery requests found' };
+    const req = this.state.pinRecoveryRequests.find((r) => r.id === params.requestId);
+    if (!req) return { success: false, error: 'Recovery request not found' };
+    if (req.status !== 'pending') return { success: false, error: 'Request is already reviewed or completed' };
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const codeHash = sha256(code);
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+    req.status = 'approved';
+    req.recoveryCode = code;
+    req.recoveryCodeHash = codeHash;
+    req.authorizingStaffId = params.authorizingStaffId;
+    req.authorizingStaffName = params.authorizingStaffName;
+    req.approvedAt = new Date().toISOString();
+    req.expiresAt = expiresAt;
+
+    this.logAudit({
+      restaurantCode: req.restaurantCode,
+      actorRole: 'restaurant_admin',
+      actorName: params.authorizingStaffName,
+      action: 'CUSTOMER_PIN_RECOVERY_APPROVED',
+      details: `Manager approved PIN recovery for #${req.memberNo}. Single-use reset code issued. Customer to set new PIN privately.`,
+    });
+
+    this.scheduleSaveState();
+    this.notify();
+    return { success: true, recoveryCode: code, expiresAt };
+  }
+
+  /**
+   * Customer privately sets new PIN through recovery flow
+   */
+  public async completeCustomerPinRecovery(params: {
+    requestId: string;
+    recoveryCode: string;
+    newPin: string;
+  }): Promise<{ success: boolean; error?: string }> {
+    const cleanPin = params.newPin.trim();
+    if (!/^\d{6,}$/.test(cleanPin)) {
+      return { success: false, error: 'PIN must be at least 6 numeric digits.' };
+    }
+
+    if (!this.state.pinRecoveryRequests) return { success: false, error: 'No recovery requests found' };
+    const req = this.state.pinRecoveryRequests.find((r) => r.id === params.requestId);
+    if (!req) return { success: false, error: 'Recovery request not found' };
+    if (req.status !== 'approved') return { success: false, error: 'Request is not authorized for reset.' };
+
+    if (req.expiresAt && new Date(req.expiresAt).getTime() < Date.now()) {
+      return { success: false, error: 'Recovery code has expired. Please request a new reset.' };
+    }
+
+    const cleanCode = params.recoveryCode.trim();
+    const codeHash = sha256(cleanCode);
+    if (req.recoveryCode !== cleanCode && req.recoveryCodeHash !== codeHash) {
+      return { success: false, error: 'Invalid recovery code.' };
+    }
+
+    const cust = this.state.customers.find((c) => c.id === req.customerId);
+    if (!cust) return { success: false, error: 'Customer not found' };
+
+    const salt = getCustomerPinSalt(cust.id, cust.memberNo);
+    const pinHash = await hashPinWithSalt(cleanPin, salt);
+
+    cust.pinHash = pinHash;
+    cust.hasCustomPin = true;
+    cust.pinSetAt = new Date().toISOString();
+    cust.failedLoginAttempts = 0;
+    cust.lockedUntil = null;
+    cust.cardStatus = 'active';
+
+    req.status = 'completed';
+    req.completedAt = new Date().toISOString();
+
+    // Invalidate existing sessions
+    cust.keyVersion = (cust.keyVersion || 1) + 1;
+
+    this.logAudit({
+      restaurantCode: cust.restaurantCode,
+      actorRole: 'customer',
+      actorName: cust.name,
+      action: 'CUSTOMER_PIN_RESET_COMPLETED',
+      details: `Customer #${cust.memberNo} reset security PIN following manager-approved identity verification. All previous sessions revoked.`,
+    });
+
+    this.sendNotification({
+      restaurantCode: cust.restaurantCode,
+      target: cust.id,
+      targetName: cust.name,
+      senderRole: 'system',
+      senderName: 'RestoPass Security',
+      type: 'security_alert',
+      title: 'Security PIN Reset Completed',
+      message: 'Your personal PIN was reset at cafeteria management desk. If you did not authorize this, alert staff immediately.',
+      priority: 'important',
+      actionTab: 'history',
+    });
+
+    this.scheduleSaveState();
+    this.notify();
+    return { success: true };
+  }
+
+  /**
+   * Customer Phone + PIN login with progressive delays, lockout, and generic error (Section 3)
+   */
+  public async customerLogin(params: {
+    phone: string;
+    pin: string;
+    restaurantCode?: string;
+  }): Promise<{ success: boolean; customer?: Customer; error?: string }> {
+    const cleanPhone = params.phone.trim();
+    const cleanPin = params.pin.trim();
+
+    // 1. Server authentication attempt first if online
+    if (typeof window !== 'undefined' && navigator.onLine) {
+      try {
+        const res = await fetch('/api/customer/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            phone: cleanPhone,
+            pin: cleanPin,
+            restaurantCode: params.restaurantCode,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data.success && data.token) {
+          this.setAuthToken(data.token);
+          if (data.customer?.id) {
+            this.setCustomer(data.customer.id);
+            this.setRestaurantCode(data.customer.restaurantCode);
+          }
+          this.setRole('customer');
+          this.pullStateFromServer();
+          return { success: true, customer: this.getCurrentCustomer() || undefined };
+        } else if (res.status === 401 || res.status === 403 || res.status === 423) {
+          return { success: false, error: data.error || 'Invalid phone number or PIN' };
+        }
+      } catch {
+        // Fall through to local offline verification
+      }
+    }
+
+    // 2. Offline / local verification fallback
+    const cust = this.state.customers.find(
+      (c) =>
+        c.phone === cleanPhone ||
+        c.phone.replace(/\s+/g, '') === cleanPhone.replace(/\s+/g, '') ||
+        c.memberNo === cleanPhone ||
+        c.id === cleanPhone
+    );
+
+    // Account enumeration protection: Return generic error if customer does not exist
+    if (!cust) {
+      return { success: false, error: 'Invalid phone number or PIN' };
+    }
+
+    // Check account lockout
+    if (cust.lockedUntil && new Date(cust.lockedUntil).getTime() > Date.now()) {
+      const waitMinutes = Math.max(1, Math.ceil((new Date(cust.lockedUntil).getTime() - Date.now()) / 60000));
+      return {
+        success: false,
+        error: `Account temporarily locked due to multiple failed login attempts. Please try again in ${waitMinutes} minutes or visit cafeteria reception.`,
+      };
+    }
+
+    // Check pending / rejected status
+    if (cust.provisionalStatus === 'pending_approval') {
+      return {
+        success: false,
+        error: 'Your registration is pending restaurant boss approval. You can eat grace meals at the stand with your Member ID.',
+      };
+    }
+    if (cust.provisionalStatus === 'rejected') {
+      return {
+        success: false,
+        error: 'Customer registration was not approved. Please visit cafeteria management.',
+      };
+    }
+    if (cust.activationStatus === 'ready_for_activation') {
+      return {
+        success: false,
+        error: 'Account approved! Please complete your one-time activation at cafeteria reception to set your personal PIN.',
+      };
+    }
+
+    // Verify PIN with constant-time equality and salt
+    const salt = getCustomerPinSalt(cust.id, cust.memberNo);
+    const isPinValid = await verifyPinSecure(cleanPin, salt, cust.pinHash || '1234');
+
+    if (!isPinValid) {
+      cust.failedLoginAttempts = (cust.failedLoginAttempts || 0) + 1;
+      if (cust.failedLoginAttempts >= 5) {
+        cust.lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+        this.logAudit({
+          restaurantCode: cust.restaurantCode,
+          actorRole: 'customer',
+          actorName: `Customer #${cust.memberNo}`,
+          action: 'CUSTOMER_ACCOUNT_LOCKED',
+          details: `Account #${cust.memberNo} temporarily locked for 15 minutes after 5 consecutive failed PIN attempts.`,
+        });
+      }
+      this.scheduleSaveState();
+      return { success: false, error: 'Invalid phone number or PIN' };
+    }
+
+    // Success: reset attempts
+    cust.failedLoginAttempts = 0;
+    cust.lockedUntil = null;
+    cust.lastLoginAt = new Date().toISOString();
+
+    this.setRestaurantCode(cust.restaurantCode);
+    this.setCustomer(cust.id);
+    this.setRole('customer');
+
+    this.logAudit({
+      restaurantCode: cust.restaurantCode,
+      actorRole: 'customer',
+      actorName: cust.name,
+      action: 'CUSTOMER_LOGIN_SUCCESS',
+      details: `Customer #${cust.memberNo} logged into meal dashboard using registered phone and PIN.`,
+    });
+
+    this.scheduleSaveState();
+    this.notify();
+    return { success: true, customer: cust };
   }
 }
 
