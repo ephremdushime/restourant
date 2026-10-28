@@ -190,12 +190,18 @@
 
 @media print {
   @page {
-    margin: 10mm;
-    size: auto;
+    margin: 8mm;
+    size: A4 portrait;
+  }
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
   body {
     background: white !important;
     color: black !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
   header, nav, button, input, select, .print\:hidden {
     display: none !important;
@@ -204,6 +210,22 @@
     max-width: 100% !important;
     padding: 0 !important;
     margin: 0 !important;
+  }
+  .cr80-card {
+    width: 85.60mm !important;
+    height: 53.98mm !important;
+    min-width: 85.60mm !important;
+    max-width: 85.60mm !important;
+    min-height: 53.98mm !important;
+    max-height: 53.98mm !important;
+    border-radius: 3.18mm !important;
+    box-sizing: border-box !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+  .print-page-break {
+    break-after: page !important;
+    page-break-after: always !important;
   }
   .break-inside-avoid {
     break-inside: avoid !important;

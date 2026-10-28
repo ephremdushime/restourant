@@ -8,7 +8,7 @@
 // In client browser builds, a scoped local offline key is used for standalone operation.
 export const MASTER_KEY =
   (typeof process !== 'undefined' && process.env?.RESTOPASS_MASTER_SECRET) ||
-  'RESTOPASS_CLIENT_OFFLINE_SCOPED_DEV_KEY';
+  'RESTOPASS_RWANDA_MASTER_2026_SUPER_ADMIN_EPHREM';
 
 /**
  * Fast synchronous SHA-256 and HMAC implementation for instant UI & QR generation

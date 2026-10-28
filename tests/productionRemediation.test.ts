@@ -103,10 +103,12 @@ describe('Production Readiness Remediation & Hardening', () => {
   });
 
   test('queueDbSave executes serialized disk updates reliably under concurrency', async () => {
+    const baseState = restoStore.getState();
     const promises: Promise<boolean>[] = [];
     for (let i = 0; i < 5; i++) {
       promises.push(
         queueDbSave({
+          ...baseState,
           batchId: `batch_${i}`,
           updatedAt: new Date().toISOString(),
         })

@@ -671,6 +671,69 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
     setTimeout(() => setActionToast(null), 4000);
   };
 
+  const [generatedPatronCode, setGeneratedPatronCode] = useState<{
+    customerId: string;
+    type: 'activation' | 'recovery';
+    code: string;
+    expiresAt: string;
+  } | null>(null);
+
+  const handleGenerateActivationCode = (cust: Customer) => {
+    const res = restoStore.requestCustomerActivation({
+      customerId: cust.id,
+      authorizingStaffId: 'boss_exec',
+      authorizingStaffName: 'Restaurant Boss (Executive)',
+      restaurantCode: cust.restaurantCode,
+    });
+    if (res.success && res.activationCode) {
+      setGeneratedPatronCode({
+        customerId: cust.id,
+        type: 'activation',
+        code: res.activationCode,
+        expiresAt: res.expiresAt || new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      });
+      setActionToast(`Generated 15-minute activation code ${res.activationCode} for #${cust.memberNo}.`);
+      setTimeout(() => setActionToast(null), 5000);
+    } else if (res.error) {
+      setActionToast(res.error);
+      setTimeout(() => setActionToast(null), 4000);
+    }
+  };
+
+  const handleGenerateRecoveryCode = (cust: Customer) => {
+    const reqRes = restoStore.requestCustomerPinRecovery({
+      customerId: cust.id,
+      reason: 'Boss Desk Assisted Recovery',
+      idVerificationMethod: 'manager_override',
+      restaurantCode: cust.restaurantCode,
+      staffId: 'boss_exec',
+      staffName: 'Restaurant Boss (Executive)',
+    });
+    if (!reqRes.success || !reqRes.requestId) {
+      setActionToast(reqRes.error || 'Could not initiate PIN recovery.');
+      setTimeout(() => setActionToast(null), 4000);
+      return;
+    }
+    const appRes = restoStore.approveCustomerPinRecovery({
+      requestId: reqRes.requestId,
+      authorizingStaffId: 'boss_exec',
+      authorizingStaffName: 'Restaurant Boss (Executive)',
+    });
+    if (appRes.success && appRes.recoveryCode) {
+      setGeneratedPatronCode({
+        customerId: cust.id,
+        type: 'recovery',
+        code: appRes.recoveryCode,
+        expiresAt: appRes.expiresAt || new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      });
+      setActionToast(`Generated 15-minute PIN reset code ${appRes.recoveryCode} for #${cust.memberNo}.`);
+      setTimeout(() => setActionToast(null), 5000);
+    } else if (appRes.error) {
+      setActionToast(appRes.error);
+      setTimeout(() => setActionToast(null), 4000);
+    }
+  };
+
   const handleDeleteCustomer = (cust: Customer) => {
     const success = restoStore.deleteCustomerAccount(cust.id, 'Restaurant Boss (Executive)');
     if (success) {
@@ -847,19 +910,19 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-      {/* 5 Rooms Navigation: Activities, Boss Approvals Room, Users & Staff, Appearance, Pricing & Rules */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-        <div className="flex items-center gap-2 overflow-x-auto text-xs font-medium">
+      {/* Unified Single-Row Boss Navigation Bar */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+        <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-medium pb-1 lg:pb-0">
           {[
             {
               id: 'dashboard',
-              label: 'Activities & Live',
+              label: 'Overview & Live',
               icon: BarChart3,
               match: activeSubTab === 'dashboard' || activeSubTab === 'activities',
             },
             {
               id: 'approvals',
-              label: 'Boss Approval Room',
+              label: 'MoMo Approvals',
               icon: Clock,
               badge: pendingCount > 0 ? pendingCount : undefined,
               match: activeSubTab === 'approvals',
@@ -867,21 +930,42 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
             },
             {
               id: 'customers',
-              label: 'Users & Staff',
+              label: 'Patrons & Cards',
               icon: Users,
               badge: activeCustomersCount,
               match:
                 activeSubTab === 'customers' ||
                 activeSubTab === 'registration' ||
-                activeSubTab === 'stations' ||
-                activeSubTab === 'notifications' ||
+                activeSubTab === 'cards' ||
                 activeSubTab === 'users',
             },
             {
-              id: 'appearance',
-              label: 'Appearance & Branding',
-              icon: Palette,
-              match: activeSubTab === 'appearance' || activeSubTab === 'cards',
+              id: 'stations',
+              label: 'Branches & Staff',
+              icon: Building2,
+              badge: restoStationUsers.length || undefined,
+              match: activeSubTab === 'stations',
+            },
+            {
+              id: 'pricing',
+              label: 'Pricing & Rules',
+              icon: TrendingUp,
+              match:
+                activeSubTab === 'pricing' ||
+                activeSubTab === 'overrides' ||
+                activeSubTab === 'settings',
+            },
+            {
+              id: 'notifications',
+              label: 'Alerts & Studio',
+              icon: Bell,
+              match: activeSubTab === 'notifications',
+            },
+            {
+              id: 'reports',
+              label: 'Financial Reports',
+              icon: FileSpreadsheet,
+              match: activeSubTab === 'reports',
             },
             {
               id: 'security',
@@ -891,10 +975,10 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
               match: activeSubTab === 'security',
             },
             {
-              id: 'pricing',
-              label: 'Pricing & Rules',
-              icon: TrendingUp,
-              match: activeSubTab === 'pricing',
+              id: 'appearance',
+              label: 'Branding & Policies',
+              icon: Palette,
+              match: activeSubTab === 'appearance',
             },
           ].map((tab) => {
             const Icon = tab.icon;
@@ -907,7 +991,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                   onSubTabChange(tab.id);
                   if (tab.id === 'customers') setUserSection('members');
                 }}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl whitespace-nowrap transition-all font-bold text-xs cursor-pointer ${
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl whitespace-nowrap transition-all font-bold text-xs cursor-pointer ${
                   isSelected
                     ? tab.isBossRoom
                       ? 'bg-amber-500 text-slate-950 shadow-md font-black'
@@ -917,7 +1001,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                     : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-slate-800/80'
                 }`}
               >
-                <Icon className="w-4 h-4" />
+                <Icon className="w-3.5 h-3.5 shrink-0" />
                 <span>{tab.label}</span>
                 {Boolean(tab.badge && tab.badge > 0) && (
                   <span
@@ -955,6 +1039,118 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
         </div>
       </div>
 
+      {/* Sub-Navigation Bar for Patrons & Cards Group */}
+      {(activeSubTab === 'customers' || activeSubTab === 'registration' || activeSubTab === 'cards') && (
+        <div className="flex items-center justify-between gap-2 p-2 rounded-2xl bg-slate-900/90 border border-slate-800 text-xs">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              type="button"
+              onClick={() => onSubTabChange('customers')}
+              className={`px-3.5 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                activeSubTab === 'customers'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span>Members Directory ({activeCustomersCount})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onSubTabChange('registration')}
+              className={`px-3.5 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                activeSubTab === 'registration'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>Register New Patron</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onSubTabChange('cards')}
+              className={`px-3.5 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                activeSubTab === 'cards'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <Printer className="w-3.5 h-3.5" />
+              <span>PVC Card Print Studio</span>
+            </button>
+          </div>
+          <span className="text-[11px] text-slate-500 font-mono hidden sm:inline px-2">
+            Identity &amp; Badge Management
+          </span>
+        </div>
+      )}
+
+      {/* Sub-Navigation Bar for Pricing, Menu & Rules Group */}
+      {(activeSubTab === 'pricing' || activeSubTab === 'overrides' || activeSubTab === 'settings') && (
+        <div className="flex items-center justify-between gap-2 p-2 rounded-2xl bg-slate-900/90 border border-slate-800 text-xs">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              type="button"
+              onClick={() => {
+                onSubTabChange('pricing');
+                setPricingSectionView('analytics');
+              }}
+              className={`px-3.5 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                activeSubTab === 'pricing' && pricingSectionView === 'analytics'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <TrendingUp className="w-3.5 h-3.5" />
+              <span>Menu Dishes &amp; Trends</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onSubTabChange('pricing');
+                setPricingSectionView('bundles');
+              }}
+              className={`px-3.5 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                activeSubTab === 'pricing' && pricingSectionView === 'bundles'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <Tag className="w-3.5 h-3.5" />
+              <span>Meal Packages &amp; Single-Plate Rate</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onSubTabChange('overrides')}
+              className={`px-3.5 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                activeSubTab === 'overrides'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <ShieldAlert className="w-3.5 h-3.5" />
+              <span>Blocked Scans &amp; Spot-Checks</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onSubTabChange('settings')}
+              className={`px-3.5 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                activeSubTab === 'settings'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <Settings className="w-3.5 h-3.5" />
+              <span>Cooldown &amp; Serving Rules</span>
+            </button>
+          </div>
+          <span className="text-[11px] text-slate-500 font-mono hidden sm:inline px-2">
+            Cafeteria Pricing &amp; Policy Controls
+          </span>
+        </div>
+      )}
+
       {/* 1. ACTIVITIES & DASHBOARD VIEW */}
       {(activeSubTab === 'dashboard' || activeSubTab === 'activities') && (
         <div className="space-y-6">
@@ -970,8 +1166,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                 setUserSection('members');
                 setFilterMode('low_balance');
               } else if (target === 'pending_actions') {
-                onSubTabChange('customers');
-                setUserSection('approvals');
+                onSubTabChange('approvals');
               }
             }}
             language={language}
@@ -3940,24 +4135,85 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                     </div>
                   </div>
 
-                  {/* Reset PIN to default */}
-                  <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div>
-                      <h4 className="font-bold text-white text-sm flex items-center gap-2">
-                        <Key className="w-4 h-4 text-amber-400" />
-                        <span>Security Transfer PIN</span>
-                      </h4>
-                      <p className="text-slate-400 text-xs mt-0.5">
-                        Required for peer plate transfers. Reset to default <strong>1234</strong> if patron forgot their PIN.
-                      </p>
+                  {/* Non-SMS 15-Minute Activation & PIN Recovery Code Generator */}
+                  <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <h4 className="font-bold text-white text-sm flex items-center gap-2">
+                          <Smartphone className="w-4 h-4 text-emerald-400" />
+                          <span>Non-SMS 15-Minute Activation &amp; PIN Reset Codes</span>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase font-bold ${
+                              manageCustomer.hasCustomPin || manageCustomer.activationStatus === 'active'
+                                ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                                : 'bg-amber-950 text-amber-400 border border-amber-800'
+                            }`}
+                          >
+                            {manageCustomer.hasCustomPin || manageCustomer.activationStatus === 'active'
+                              ? 'Activated (6-Digit PIN)'
+                              : 'Unactivated'}
+                          </span>
+                        </h4>
+                        <p className="text-slate-400 text-xs mt-1 max-w-lg">
+                          Issue a single-use 6-digit code valid for 15 minutes so this patron can activate their digital portal or set a new 6-digit PIN without SMS gateways.
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => handleGenerateActivationCode(manageCustomer)}
+                          className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors cursor-pointer"
+                        >
+                          Issue Activation Code
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleGenerateRecoveryCode(manageCustomer)}
+                          className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-colors cursor-pointer"
+                        >
+                          Issue PIN Reset Code
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleResetPin(manageCustomer)}
+                          className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white font-semibold text-xs transition-colors cursor-pointer"
+                          title="Reset to fallback demo PIN 1234"
+                        >
+                          Reset to 1234
+                        </button>
+                      </div>
                     </div>
 
-                    <button
-                      onClick={() => handleResetPin(manageCustomer)}
-                      className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-300 hover:text-white font-semibold text-xs transition-colors cursor-pointer shrink-0"
-                    >
-                      Reset PIN to 1234
-                    </button>
+                    {generatedPatronCode && generatedPatronCode.customerId === manageCustomer.id && (
+                      <div className="p-3.5 rounded-xl bg-emerald-950/40 border border-emerald-500/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <div className="text-[10px] uppercase tracking-wider font-bold text-emerald-400">
+                            {generatedPatronCode.type === 'activation'
+                              ? '15-Minute Portal Activation Code'
+                              : '15-Minute PIN Recovery Reset Code'}
+                          </div>
+                          <div className="text-2xl font-black font-mono tracking-[0.25em] text-white mt-0.5">
+                            {generatedPatronCode.code}
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            Expires at {new Date(generatedPatronCode.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(generatedPatronCode.code);
+                            setActionToast(`Copied code ${generatedPatronCode.code} to clipboard.`);
+                            setTimeout(() => setActionToast(null), 3000);
+                          }}
+                          className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-emerald-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer self-start sm:self-center"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Copy 6-Digit Code</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {/* QR Token Preview */}
@@ -4066,8 +4322,8 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                         <div className="flex gap-2">
                           {[
                             { label: 'Male Student', url: '/src/assets/images/avatar_student_male_1790979380050.jpg' },
-                            { label: 'Female Student', url: '/src/assets/images/avatar_student_female_1790979395277.jpg' },
-                            { label: 'Executive/Staff', url: '/src/assets/images/avatar_staff_cashier_1790979410389.jpg' },
+                            { label: 'Female Student', url: '/src/assets/images/avatar_student_female_1790979387287.jpg' },
+                            { label: 'Executive/Staff', url: '/src/assets/images/avatar_patron_male_1790979396731.jpg' },
                           ].map((av) => (
                             <button
                               key={av.label}

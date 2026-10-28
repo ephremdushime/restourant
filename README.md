@@ -348,3 +348,4 @@ npm run build
 ## License & Ownership
 
 Proprietary — **RestoPass Rwanda** (`2026`). Designed and engineered for campus dining halls, university cafeterias, and multi-branch hospitality operators.
+

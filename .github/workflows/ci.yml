@@ -29,3 +29,6 @@ jobs:
 
       - name: Execute Security & Integrity Tests
         run: npm test
+
+      - name: Build Production Bundle
+        run: npm run build

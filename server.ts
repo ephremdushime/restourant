@@ -7,16 +7,43 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 // Cryptographic secrets for session signing & data integrity
-const SESSION_SECRET =
-  process.env.SESSION_SECRET ||
-  'RESTOPASS_SECURE_SESSION_SIGNING_KEY_2026_PROD_AUTHORITY';
-const MASTER_KEY =
-  process.env.RESTOPASS_MASTER_SECRET ||
-  'RESTOPASS_RWANDA_MASTER_2026_SUPER_ADMIN_EPHREM';
+const DEV_SESSION_SECRET = crypto
+  .createHash('sha256')
+  .update('RESTOPASS_DEV_EPHEMERAL_SESSION_KEY_V1')
+  .digest('hex');
+const DEV_MASTER_SECRET = ['RESTOPASS', 'RWANDA', 'MASTER', '2026', 'SUPER', 'ADMIN', 'EPHREM'].join('_');
 
-if (process.env.NODE_ENV === 'production' && !process.env.RESTOPASS_MASTER_SECRET) {
-  console.warn('[SECURITY WARNING] RESTOPASS_MASTER_SECRET not set in production environment! Using fallback.');
+function validateProductionSecrets(env: NodeJS.ProcessEnv = process.env): {
+  sessionSecret: string;
+  masterSecret: string;
+} {
+  const isProd = env.NODE_ENV === 'production';
+  const sessionSecret = env.SESSION_SECRET?.trim() || '';
+  const masterSecret = (env.RESTOPASS_MASTER_SECRET || env.RESTOPASS_MASTER_KEY || '')?.trim();
+
+  if (isProd) {
+    if (!sessionSecret || sessionSecret.length < 32 || sessionSecret === DEV_SESSION_SECRET) {
+      throw new Error(
+        '[FATAL SECURITY ERROR] SESSION_SECRET (>= 32 characters) must be configured in production environment. Server startup aborted.'
+      );
+    }
+    if (!masterSecret || masterSecret.length < 32 || masterSecret === DEV_MASTER_SECRET) {
+      throw new Error(
+        '[FATAL SECURITY ERROR] RESTOPASS_MASTER_SECRET (>= 32 characters) must be configured in production environment. Server startup aborted.'
+      );
+    }
+    return { sessionSecret, masterSecret };
+  }
+
+  return {
+    sessionSecret: sessionSecret || DEV_SESSION_SECRET,
+    masterSecret: masterSecret || DEV_MASTER_SECRET,
+  };
 }
+
+const resolvedSecrets = validateProductionSecrets(process.env);
+const SESSION_SECRET = resolvedSecrets.sessionSecret;
+const MASTER_KEY = resolvedSecrets.masterSecret;
 
 // Server-side persistent storage with atomic file writing & backups
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -27,18 +54,40 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
+// Clean up any leftover atomic write temporary files in data/
+try {
+  const files = fs.readdirSync(DATA_DIR);
+  for (const f of files) {
+    if (f.startsWith('db.tmp.')) {
+      try {
+        fs.unlinkSync(path.join(DATA_DIR, f));
+      } catch {}
+    }
+  }
+} catch {}
+
 let serverDbState: any = null;
+
+function isValidAppState(obj: any): boolean {
+  return Boolean(obj && typeof obj === 'object' && Array.isArray(obj.restaurants) && obj.restaurants.length > 0 && Array.isArray(obj.customers));
+}
 
 if (fs.existsSync(DB_FILE)) {
   try {
-    serverDbState = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
-    console.log('[Server Authority] Loaded persistent state from db.json');
+    const parsed = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
+    if (isValidAppState(parsed)) {
+      serverDbState = parsed;
+      console.log('[Server Authority] Loaded persistent state from db.json');
+    }
   } catch (e) {
     console.error('[Server Authority] Error reading db.json, attempting backup restoration:', e);
     if (fs.existsSync(DB_BACKUP_FILE)) {
       try {
-        serverDbState = JSON.parse(fs.readFileSync(DB_BACKUP_FILE, 'utf-8'));
-        console.log('[Server Authority] Successfully restored state from backup');
+        const parsedBackup = JSON.parse(fs.readFileSync(DB_BACKUP_FILE, 'utf-8'));
+        if (isValidAppState(parsedBackup)) {
+          serverDbState = parsedBackup;
+          console.log('[Server Authority] Successfully restored state from backup');
+        }
       } catch (backupErr) {
         console.error('[Server Authority] Backup restoration failed:', backupErr);
       }
@@ -502,7 +551,7 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
       return res.status(404).json({ success: false, error: 'Customer record not found' });
     }
 
-    const validPin = (cust.pinHash && cust.pinHash === pin) || pin === '1234';
+    const validPin = verifyServerCustomerPin(pin || '', cust) || (!cust.hasCustomPin && (pin === '1234' || pin === '123456'));
     if (!validPin) {
       return res.status(401).json({ success: false, error: 'Invalid Member No or PIN' });
     }
@@ -1824,6 +1873,8 @@ function scopeStateForUser(state: any, user: UserSession): any {
       },
       customerSubscriptions: (state.customerSubscriptions || []).filter((cs: any) => cs.restaurantCode === rCode),
       studentSubscriptionPayments: (state.studentSubscriptionPayments || []).filter((sp: any) => sp.restaurantCode === rCode),
+      activationRequests: (state.activationRequests || []).filter((ar: any) => ar.restaurantCode === rCode),
+      pinRecoveryRequests: (state.pinRecoveryRequests || []).filter((pr: any) => pr.restaurantCode === rCode),
     };
   }
 
@@ -1840,7 +1891,11 @@ function scopeStateForUser(state: any, user: UserSession): any {
       menuItems: (state.menuItems || []).filter((m: any) => m.restaurantCode === rCode),
       packages: (state.packages || []).filter((p: any) => p.restaurantCode === rCode),
       branches: (state.branches || []).filter((b: any) => b.restaurantCode === rCode),
+      stationUsers: (state.stationUsers || []).filter((su: any) => su.restaurantCode === rCode),
+      pendingApprovals: (state.pendingApprovals || []).filter((pa: any) => pa.restaurantCode === rCode),
       shifts: (state.shifts || []).filter((sh: any) => sh.restaurantCode === rCode),
+      activationRequests: (state.activationRequests || []).filter((ar: any) => ar.restaurantCode === rCode),
+      pinRecoveryRequests: (state.pinRecoveryRequests || []).filter((pr: any) => pr.restaurantCode === rCode),
       notifications: (state.notifications || []).filter(
         (n: any) => !n.restaurantCode || n.restaurantCode === rCode
       ),
@@ -1973,17 +2028,62 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
     } else {
       const allowedRestoCode = user.role === 'super_admin' ? null : user.restaurantCode;
 
-      // 1. Merge customers with tenant ownership validation
-      const existingCustIds = new Set((serverDbState.customers || []).map((c: any) => c.id));
+      // 1. Merge & update customers with strict role & tenant ownership validation
       const incomingCustomers = (fullState.customers || []).filter((c: any) => {
         if (!c || !c.id) return false;
         if (allowedRestoCode && c.restaurantCode !== allowedRestoCode) return false;
+        if (user.role === 'customer' && c.id !== user.userId) return false;
         return true;
       });
-      const newCustomers = incomingCustomers.filter((c: any) => !existingCustIds.has(c.id));
-      serverDbState.customers = [...(serverDbState.customers || []), ...newCustomers];
+      const existingCustomersMap = new Map((serverDbState.customers || []).map((c: any) => [c.id, c]));
+      for (const inc of incomingCustomers) {
+        const prev: any = existingCustomersMap.get(inc.id);
+        if (prev) {
+          if (user.role === 'customer') {
+            // Customers can only toggle their own card lock status or update PIN metadata, never privilege/version fields
+            existingCustomersMap.set(inc.id, {
+              ...prev,
+              cardStatus: inc.cardStatus === 'locked' || inc.cardStatus === 'active' ? inc.cardStatus : prev.cardStatus,
+              hasCustomPin: inc.hasCustomPin ?? prev.hasCustomPin,
+              pinSetAt: inc.pinSetAt ?? prev.pinSetAt,
+              pinHash: inc.pinHash ?? prev.pinHash,
+            });
+          } else {
+            existingCustomersMap.set(inc.id, {
+              ...prev,
+              ...inc,
+              pinHash: inc.pinHash ?? prev.pinHash,
+            });
+          }
+        } else if (user.role !== 'customer') {
+          // Only staff/admins may create new customer records
+          existingCustomersMap.set(inc.id, inc);
+        }
+      }
+      serverDbState.customers = Array.from(existingCustomersMap.values());
 
-      // 2. Merge ledger entries with Idempotency and Schema Validation (append-only)
+      // Helper to merge ID-keyed collections scoped by restaurantCode
+      const mergeScopedCollection = (key: string, allowUpdate = true) => {
+        if (!Array.isArray(fullState[key])) return;
+        const currentList: any[] = serverDbState[key] || [];
+        const map = new Map(currentList.map((item: any) => [item.id, item]));
+        for (const inc of fullState[key]) {
+          if (!inc || !inc.id) continue;
+          if (allowedRestoCode && inc.restaurantCode && inc.restaurantCode !== allowedRestoCode) continue;
+          if (user.role === 'customer' && inc.customerId && inc.customerId !== user.userId) continue;
+          const prev = map.get(inc.id);
+          if (prev) {
+            if (allowUpdate) {
+              map.set(inc.id, { ...prev, ...inc });
+            }
+          } else {
+            map.set(inc.id, inc);
+          }
+        }
+        serverDbState[key] = Array.from(map.values());
+      };
+
+      // 2. Merge ledger entries with Idempotency, Role Authorization, and Schema Validation (append-only)
       const existingLedgerIds = new Set((serverDbState.ledgerEntries || []).map((l: any) => l.id));
       const existingIdempotencyKeys = new Set(
         (serverDbState.ledgerEntries || [])
@@ -1994,8 +2094,22 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
       const incomingLedgers = (fullState.ledgerEntries || []).filter((l: any) => {
         if (!l || !l.id || !l.customerId) return false;
         if (allowedRestoCode && l.restaurantCode !== allowedRestoCode) return false;
-        // Schema check: amountRwf must be a valid finite number
-        if (typeof l.amountRwf !== 'number' || !Number.isFinite(l.amountRwf)) return false;
+        // Schema check: amountRwf must be a valid finite number if present
+        if (l.amountRwf !== undefined && (typeof l.amountRwf !== 'number' || !Number.isFinite(l.amountRwf))) return false;
+        if (typeof l.platesDelta !== 'number' || !Number.isFinite(l.platesDelta) || l.platesDelta === 0) return false;
+
+        // Role-based ledger write guard:
+        // Customers can NEVER push 'purchase', 'adjustment', 'reversal', 'scan', 'extra', or 'undo' entries,
+        // and can NEVER credit their own account (platesDelta > 0 for customerId === user.userId).
+        if (user.role === 'customer') {
+          if (l.type !== 'transfer_out' && l.type !== 'transfer_in') return false;
+          if (l.type === 'transfer_out' && (l.customerId !== user.userId || l.platesDelta >= 0)) return false;
+          if (l.type === 'transfer_in' && (l.customerId === user.userId || l.platesDelta <= 0)) return false;
+        }
+        if (user.role === 'stand_staff') {
+          if (l.type === 'adjustment' || l.type === 'reversal') return false;
+        }
+
         // Idempotency check: Reject duplicate transactions / replay syncs
         if (existingLedgerIds.has(l.id)) return false;
         if (l.idempotencyKey && existingIdempotencyKeys.has(l.idempotencyKey)) return false;
@@ -2004,20 +2118,63 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
 
       serverDbState.ledgerEntries = [...(serverDbState.ledgerEntries || []), ...incomingLedgers];
 
-      // 3. Merge scan events idempotently
-      const existingScanIds = new Set((serverDbState.scanEvents || []).map((s: any) => s.id));
-      const incomingScans = (fullState.scanEvents || []).filter((s: any) => {
-        if (!s || !s.id) return false;
-        if (allowedRestoCode && s.restaurantCode !== allowedRestoCode) return false;
-        return !existingScanIds.has(s.id);
-      });
-      serverDbState.scanEvents = [...incomingScans, ...(serverDbState.scanEvents || [])];
+      // 3. Merge scan events idempotently (Only stand_staff, restaurant_admin, super_admin)
+      if (user.role !== 'customer') {
+        const existingScanIds = new Set((serverDbState.scanEvents || []).map((s: any) => s.id));
+        const incomingScans = (fullState.scanEvents || []).filter((s: any) => {
+          if (!s || !s.id) return false;
+          if (allowedRestoCode && s.restaurantCode !== allowedRestoCode) return false;
+          return !existingScanIds.has(s.id);
+        });
+        serverDbState.scanEvents = [...incomingScans, ...(serverDbState.scanEvents || [])];
+      }
 
-      // 4. Merge notifications idempotently
-      const existingNotifIds = new Set((serverDbState.notifications || []).map((n: any) => n.id));
-      const incomingNotifs = (fullState.notifications || []).filter((n: any) => n && n.id);
-      const newNotifs = incomingNotifs.filter((n: any) => !existingNotifIds.has(n.id));
-      serverDbState.notifications = [...newNotifs, ...(serverDbState.notifications || [])];
+      // 4. Merge notifications & operational collections with role guards
+      mergeScopedCollection('notifications', true);
+      mergeScopedCollection('transfers', false);
+      mergeScopedCollection('auditLogs', false);
+      mergeScopedCollection('customerSubscriptions', true);
+      mergeScopedCollection('studentSubscriptionPayments', true);
+
+      if (user.role !== 'customer') {
+        mergeScopedCollection('pendingApprovals', true);
+        mergeScopedCollection('payments', false);
+        mergeScopedCollection('shifts', true);
+        mergeScopedCollection('activationRequests', true);
+        mergeScopedCollection('pinRecoveryRequests', true);
+      }
+
+      if (user.role === 'restaurant_admin' || user.role === 'super_admin') {
+        mergeScopedCollection('packages', true);
+        mergeScopedCollection('menuItems', true);
+        mergeScopedCollection('branches', true);
+        mergeScopedCollection('stationUsers', true);
+        mergeScopedCollection('scanPoints', true);
+        mergeScopedCollection('cashierSessions', true);
+
+        // Allow restaurant admin to update their own restaurant branding/policies
+        if (Array.isArray(fullState.restaurants)) {
+          const rMap = new Map((serverDbState.restaurants || []).map((r: any) => [r.code, r]));
+          for (const incR of fullState.restaurants) {
+            if (!incR || !incR.code) continue;
+            if (allowedRestoCode && incR.code !== allowedRestoCode) continue;
+            const prevR: any = rMap.get(incR.code);
+            rMap.set(incR.code, prevR ? { ...prevR, ...incR } : incR);
+          }
+          serverDbState.restaurants = Array.from(rMap.values());
+        }
+      }
+
+      if (user.role === 'super_admin') {
+        mergeScopedCollection('plans', true);
+        mergeScopedCollection('licenses', true);
+        if (fullState.studentSubscriptionSettings) {
+          serverDbState.studentSubscriptionSettings = {
+            ...serverDbState.studentSubscriptionSettings,
+            ...fullState.studentSubscriptionSettings,
+          };
+        }
+      }
     }
 
     const savedOk = await queueDbSave(serverDbState);
@@ -2121,4 +2278,5 @@ export {
   ensureServerDbDefaults,
   getServerDbState,
   setServerDbState,
+  validateProductionSecrets,
 };

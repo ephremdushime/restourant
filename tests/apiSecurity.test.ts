@@ -7,8 +7,10 @@ import {
   verifySessionToken,
   scopeStateForUser,
   atomicSaveDb,
+  validateProductionSecrets,
   UserSession,
 } from '../server';
+import { restoStore } from '../src/store/restoStore';
 
 describe('Server API Security, Session Engine & Role Scoping', () => {
   test('creates and verifies cryptographically signed session tokens', () => {
@@ -136,6 +138,7 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
 
   test('atomicSaveDb writes atomically and maintains backup (Finding 5)', () => {
     const testState = {
+      ...restoStore.getState(),
       testId: 'atomic_test_01',
       timestamp: new Date().toISOString(),
     };
@@ -149,5 +152,75 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
 
     const readBack = JSON.parse(fs.readFileSync(dbFile, 'utf-8'));
     assert.equal(readBack.testId, 'atomic_test_01');
+  });
+
+  test('customer identity isolation: getCurrentCustomer never falls back to first customer when missing or invalid', () => {
+    const state = restoStore.getState();
+    const originalResto = state.currentRestaurantCode;
+    const originalCustomer = state.currentCustomerId;
+
+    try {
+      restoStore.setRestaurantCode('RW01');
+      // 1. Valid customer ID resolves to that exact customer
+      restoStore.setCustomer('cust_28491');
+      const cust1 = restoStore.getCurrentCustomer();
+      assert.ok(cust1);
+      assert.equal(cust1.id, 'cust_28491');
+
+      // 2. Second distinct customer resolves only to their own identity
+      restoStore.setCustomer('cust_28492');
+      const cust2 = restoStore.getCurrentCustomer();
+      assert.ok(cust2);
+      assert.equal(cust2.id, 'cust_28492');
+      assert.notEqual(cust1.id, cust2.id);
+
+      // 3. Invalid or missing customer ID returns undefined (NEVER silently selects cust_28491)
+      restoStore.setCustomer('cust_non_existent_99999');
+      assert.equal(restoStore.getCurrentCustomer(), undefined);
+
+      restoStore.setCustomer('');
+      assert.equal(restoStore.getCurrentCustomer(), undefined);
+
+      // 4. Switching restaurant clears currentCustomerId if customer does not belong to target restaurant
+      restoStore.setCustomer('cust_28491'); // belongs to RW01
+      restoStore.setRestaurantCode('RW02');
+      assert.equal(restoStore.getCurrentCustomer(), undefined);
+    } finally {
+      restoStore.setRestaurantCode(originalResto);
+      restoStore.setCustomer(originalCustomer);
+    }
+  });
+
+  test('validateProductionSecrets throws fatal error in production when secrets are missing or weak', () => {
+    // Missing secrets in production must throw
+    assert.throws(
+      () =>
+        validateProductionSecrets({
+          NODE_ENV: 'production',
+        } as unknown as NodeJS.ProcessEnv),
+      /FATAL SECURITY ERROR/
+    );
+
+    // Short secrets (<32 chars) in production must throw
+    assert.throws(
+      () =>
+        validateProductionSecrets({
+          NODE_ENV: 'production',
+          SESSION_SECRET: 'too_short_secret',
+          RESTOPASS_MASTER_SECRET: 'also_too_short',
+        } as unknown as NodeJS.ProcessEnv),
+      /FATAL SECURITY ERROR/
+    );
+
+    // Strong 32+ char secrets in production succeed
+    const strongSession = 'prod_session_secret_with_at_least_32_characters_random_2026';
+    const strongMaster = 'prod_master_secret_with_at_least_32_characters_random_2026!';
+    const valid = validateProductionSecrets({
+      NODE_ENV: 'production',
+      SESSION_SECRET: strongSession,
+      RESTOPASS_MASTER_SECRET: strongMaster,
+    } as unknown as NodeJS.ProcessEnv);
+    assert.equal(valid.sessionSecret, strongSession);
+    assert.equal(valid.masterSecret, strongMaster);
   });
 });

@@ -36,12 +36,35 @@ export default function App() {
     };
   });
 
-  const [sessionLabels, setSessionLabels] = useState<Record<UserRole, string>>({
-    stand_staff: 'Not signed in',
-    restaurant_admin: 'Not signed in',
-    customer: 'Not signed in',
-    super_admin: 'Not signed in',
+  const [sessionLabels, setSessionLabels] = useState<Record<UserRole, string>>(() => {
+    try {
+      const saved = sessionStorage.getItem('restopass_portal_session_labels');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {
+      stand_staff: 'Not signed in',
+      restaurant_admin: 'Not signed in',
+      customer: 'Not signed in',
+      super_admin: 'Not signed in',
+    };
   });
+
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem('restopass_demo_mode') === 'true';
+    } catch {}
+    return false;
+  });
+
+  const handleToggleDemoMode = () => {
+    setIsDemoMode((prev) => {
+      const next = !prev;
+      try {
+        sessionStorage.setItem('restopass_demo_mode', String(next));
+      } catch {}
+      return next;
+    });
+  };
 
   useEffect(() => {
     const unsubscribe = restoStore.subscribe(() => {
@@ -249,7 +272,13 @@ export default function App() {
       } catch {}
       return next;
     });
-    setSessionLabels((prev) => ({ ...prev, [role]: userLabel }));
+    setSessionLabels((prev) => {
+      const next = { ...prev, [role]: userLabel };
+      try {
+        sessionStorage.setItem('restopass_portal_session_labels', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     handleRoleChange(role);
   };
 
@@ -261,7 +290,13 @@ export default function App() {
       } catch {}
       return next;
     });
-    setSessionLabels((prev) => ({ ...prev, [role]: 'Not signed in' }));
+    setSessionLabels((prev) => {
+      const next = { ...prev, [role]: 'Not signed in' };
+      try {
+        sessionStorage.setItem('restopass_portal_session_labels', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     restoStore.logoutFromServer();
     restoStore.logAudit({
       actorRole: role,
@@ -311,6 +346,8 @@ export default function App() {
         isSessionActive={Boolean(sessions[state.currentRole])}
         onLockSession={() => handleLockSession(state.currentRole)}
         sessionUserLabel={sessionLabels[state.currentRole]}
+        isDemoMode={isDemoMode}
+        onToggleDemoMode={handleToggleDemoMode}
       />
 
       {/* Main Viewport Container */}
@@ -325,7 +362,11 @@ export default function App() {
         ) : (
           <>
             {state.currentRole === 'stand_staff' && (
-              <ScannerView language={state.currentLanguage} />
+              <ScannerView
+                language={state.currentLanguage}
+                operatorName={sessionLabels.stand_staff !== 'Not signed in' ? sessionLabels.stand_staff : undefined}
+                isDemoMode={isDemoMode}
+              />
             )}
 
             {state.currentRole === 'restaurant_admin' && (
@@ -344,6 +385,7 @@ export default function App() {
                 language={state.currentLanguage}
                 activeSubTab={activeTab}
                 onNavigateTab={(tab) => handleTabChange(tab)}
+                isDemoMode={isDemoMode}
               />
             )}
 

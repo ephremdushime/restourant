@@ -29,23 +29,31 @@ export interface CardPrintStudioProps {
   onBack?: () => void;
   initialCustomerId?: string;
   initialMode?: 'bulk_onboarding' | 'existing_customers';
+  operatorName?: string;
 }
 
 export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
   onBack,
   initialCustomerId,
   initialMode,
+  operatorName,
 }) => {
   const state = restoStore.getState();
   const restaurant = restoStore.getCurrentRestaurant();
 
+  const resolvedOperatorName =
+    operatorName ||
+    (typeof window !== 'undefined' && sessionStorage.getItem('restopass_user_label')) ||
+    'Restaurant Administrator';
+
   // Active Tab: 'bulk_onboarding' | 'existing_customers'
   const [activeMode, setActiveMode] = useState<'bulk_onboarding' | 'existing_customers'>(
-    initialMode || (initialCustomerId ? 'existing_customers' : 'bulk_onboarding')
+    initialMode || 'existing_customers'
   );
 
-  // Card Side Layout format: Double-Sided (Front & Back), Front Only, Back Only
-  const [cardSideView, setCardSideView] = useState<'double_sided' | 'front_only' | 'back_only'>('double_sided');
+  // Card Side Layout format: Duplex Aligned (Page 1 Front / Page 2 Back), Side-by-Side Proof, Front Only, Back Only
+  const [cardSideView, setCardSideView] = useState<'duplex_aligned' | 'double_sided' | 'front_only' | 'back_only'>('duplex_aligned');
+  const [sandboxSimEnabled, setSandboxSimEnabled] = useState<boolean>(false);
 
   // Bulk Generator Options
   const [batchCount, setBatchCount] = useState<number>(10);
@@ -64,19 +72,20 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
   );
   const [isExistingBatchMode, setIsExistingBatchMode] = useState(false);
 
-  const selectedExistingCustomer = restoCustomers.find((c) => c.id === selectedCustomerId) || restoCustomers[0];
+  // Strict lookup: NEVER silently fall back to restoCustomers[0] if selectedCustomerId is missing or invalid
+  const selectedExistingCustomer = restoCustomers.find((c) => c.id === selectedCustomerId) || null;
 
-  // Handler to generate bulk onboarding cards
+  // Handler to generate bulk onboarding cards using authenticated operator attribution
   const handleGenerateBulk = () => {
     const pkgId = selectedPackageId !== 'blank' ? selectedPackageId : undefined;
     const created = restoStore.generateBulkOnboardingCards({
       restaurantCode: state.currentRestaurantCode,
       count: Number(batchCount),
       packageId: pkgId,
-      adminStaffName: 'Claire Mukamurenzi (Cashier)',
+      adminStaffName: resolvedOperatorName,
     });
     setLastGeneratedBatch(created);
-    setBatchSuccessNotice(`Successfully generated ${created.length} new onboarding cards (#${created[0]?.memberNo} to #${created[created.length - 1]?.memberNo})! Ready to print.`);
+    setBatchSuccessNotice(`Successfully generated ${created.length} new onboarding cards (#${created[0]?.memberNo} to #${created[created.length - 1]?.memberNo}) by ${resolvedOperatorName}! Ready to print.`);
     setTimeout(() => setBatchSuccessNotice(null), 5000);
   };
 
@@ -223,9 +232,21 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
           </button>
         </div>
 
-        {/* Card Sides Selector (Double-Sided / Front Only / Back Only) */}
-        <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
-          <span className="text-[11px] text-slate-400 px-2 font-mono">Layout:</span>
+        {/* Card Sides Selector (Duplex Aligned / Side-by-Side Proof / Front Only / Back Only) */}
+        <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 flex-wrap">
+          <span className="text-[11px] text-slate-400 px-2 font-mono">Print Mode:</span>
+          <button
+            type="button"
+            onClick={() => setCardSideView('duplex_aligned')}
+            className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+              cardSideView === 'duplex_aligned'
+                ? 'bg-sky-600 text-white shadow-xs'
+                : 'text-slate-400 hover:text-white'
+            }`}
+            title="Prints Front on Page 1 and aligned Back on Page 2 for physical duplex CR80 card printing"
+          >
+            Duplex (Aligned Front/Back Pages)
+          </button>
           <button
             type="button"
             onClick={() => setCardSideView('double_sided')}
@@ -235,7 +256,7 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            Front &amp; Back
+            Side-by-Side Proof
           </button>
           <button
             type="button"
@@ -258,6 +279,18 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
             }`}
           >
             Back Only
+          </button>
+          <button
+            type="button"
+            onClick={() => setSandboxSimEnabled((v) => !v)}
+            className={`ml-1 px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold transition-colors cursor-pointer border ${
+              sandboxSimEnabled
+                ? 'bg-amber-500/20 border-amber-500 text-amber-300'
+                : 'bg-slate-900 border-slate-800 text-slate-500 hover:text-slate-300'
+            }`}
+            title="Toggle local sandbox scan simulation button"
+          >
+            {sandboxSimEnabled ? 'Sandbox Sim: ON' : 'Sandbox Sim: OFF'}
           </button>
         </div>
       </div>
@@ -410,60 +443,107 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
 
       {/* PRINT CANVAS */}
       <div className="flex flex-col items-center justify-center p-2 w-full">
-        <div className="flex flex-col gap-6 w-full max-w-4xl print:gap-4">
-          {displayCards.map((cust) => (
-            <div
-              key={cust.id}
-              className="flex flex-col md:flex-row gap-6 items-center justify-center p-5 rounded-2xl bg-slate-900/60 border border-slate-800 print:bg-white print:border-none print:p-0 print:gap-3 break-inside-avoid shadow-sm"
-            >
-              {/* FRONT SIDE */}
-              {(cardSideView === 'double_sided' || cardSideView === 'front_only') && (
-                <div className="flex flex-col items-center">
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2 print:hidden flex items-center gap-1.5">
-                    <CreditCard className="w-3.5 h-3.5 text-sky-400" />
-                    <span>Front Side (RestoPass Smart Meal Access)</span>
-                  </div>
-                  <CardFrontView
-                    customer={cust}
-                    restaurantName={restaurant?.name || 'Kigali Independent University Canteen'}
-                    isOnboarding={cust.name.startsWith('Onboarding Patron')}
-                  />
-                  <div className="mt-2 flex items-center gap-2 print:hidden">
-                    <button
-                      onClick={() => handleTestCardScan(cust)}
-                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[10px] font-bold flex items-center gap-1 transition-colors cursor-pointer border border-slate-700"
-                      title="Test real-time buffet scanner deduction"
-                    >
-                      <Radio className="w-3 h-3 text-sky-400" />
-                      <span>Test Real-Time QR Scan</span>
-                    </button>
-                  </div>
-                </div>
-              )}
+        {displayCards.length === 0 ? (
+          <div className="p-8 rounded-2xl bg-slate-900 border border-slate-800 text-center space-y-2 max-w-md print:hidden">
+            <AlertCircle className="w-8 h-8 text-amber-400 mx-auto" />
+            <div className="text-sm font-bold text-white">No Customer Selected for Printing</div>
+            <p className="text-xs text-slate-400">
+              Please select a verified patron from the list above or generate a bulk onboarding batch.
+            </p>
+          </div>
+        ) : (
+          <>
+            {/* ON-SCREEN INTERACTIVE PREVIEW (Hidden during physical window.print() when duplex_aligned is active) */}
+            <div className={`flex flex-col gap-6 w-full max-w-4xl ${cardSideView === 'duplex_aligned' ? 'print:hidden' : 'print:gap-4'}`}>
+              {displayCards.map((cust) => (
+                <div
+                  key={cust.id}
+                  className="flex flex-col md:flex-row gap-6 items-center justify-center p-5 rounded-2xl bg-slate-900/60 border border-slate-800 print:bg-white print:border-none print:p-0 print:gap-3 break-inside-avoid shadow-sm"
+                >
+                  {/* FRONT SIDE */}
+                  {(cardSideView === 'duplex_aligned' || cardSideView === 'double_sided' || cardSideView === 'front_only') && (
+                    <div className="flex flex-col items-center">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2 print:hidden flex items-center gap-1.5">
+                        <CreditCard className="w-3.5 h-3.5 text-sky-400" />
+                        <span>Side A — Front (85.60 × 53.98 mm CR80)</span>
+                      </div>
+                      <CardFrontView
+                        customer={cust}
+                        restaurantName={restaurant?.name || 'Kigali Independent University Canteen'}
+                        isOnboarding={cust.name.startsWith('Onboarding Patron')}
+                      />
+                      {sandboxSimEnabled && (
+                        <div className="mt-2 flex items-center gap-2 print:hidden">
+                          <button
+                            onClick={() => handleTestCardScan(cust)}
+                            className="px-2.5 py-1 rounded-lg bg-amber-950/80 hover:bg-amber-900 text-amber-300 hover:text-white text-[10px] font-bold flex items-center gap-1 transition-colors cursor-pointer border border-amber-700/70"
+                            title="Local client store simulation only — does not represent a live server stand scan"
+                          >
+                            <Radio className="w-3 h-3 text-amber-400" />
+                            <span>[SANDBOX SIM] Test Local QR Scan</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
-              {/* BACK SIDE */}
-              {(cardSideView === 'double_sided' || cardSideView === 'back_only') && (
-                <div className="flex flex-col items-center">
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2 print:hidden flex items-center gap-1.5">
-                    <ShieldCheck className="w-3.5 h-3.5 text-sky-400" />
-                    <span>Back Side (Property Notice &amp; Badges)</span>
-                  </div>
-                  <CardBackView
-                    customer={cust}
-                    restaurantName={restaurant?.name || 'Kigali Independent University Canteen'}
-                  />
+                  {/* BACK SIDE */}
+                  {(cardSideView === 'duplex_aligned' || cardSideView === 'double_sided' || cardSideView === 'back_only') && (
+                    <div className="flex flex-col items-center">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2 print:hidden flex items-center gap-1.5">
+                        <ShieldCheck className="w-3.5 h-3.5 text-sky-400" />
+                        <span>Side B — Back (Aligned Duplex Reverse)</span>
+                      </div>
+                      <CardBackView
+                        customer={cust}
+                        restaurantName={restaurant?.name || 'Kigali Independent University Canteen'}
+                      />
+                    </div>
+                  )}
                 </div>
-              )}
+              ))}
             </div>
-          ))}
-        </div>
+
+            {/* DEDICATED DUPLEX ALIGNED PRINT SHEETS (Page 1 = Fronts, Page 2 = Aligned Backs) */}
+            {cardSideView === 'duplex_aligned' && (
+              <div className="hidden print:block w-full">
+                {displayCards.map((cust) => (
+                  <React.Fragment key={`duplex_${cust.id}`}>
+                    {/* PAGE 1: FRONT SIDE (85.60mm x 53.98mm) */}
+                    <div className="print-page-break flex flex-col items-center justify-center py-4">
+                      <div className="text-[8pt] font-mono text-slate-500 mb-2">
+                        CR80 DUPLEX SIDE A (FRONT) — #{cust.memberNo} · 85.60mm × 53.98mm
+                      </div>
+                      <CardFrontView
+                        customer={cust}
+                        restaurantName={restaurant?.name || 'Kigali Independent University Canteen'}
+                        isOnboarding={cust.name.startsWith('Onboarding Patron')}
+                      />
+                    </div>
+
+                    {/* PAGE 2: ALIGNED BACK SIDE (85.60mm x 53.98mm) */}
+                    <div className="print-page-break flex flex-col items-center justify-center py-4">
+                      <div className="text-[8pt] font-mono text-slate-500 mb-2">
+                        CR80 DUPLEX SIDE B (BACK) — #{cust.memberNo} · 85.60mm × 53.98mm
+                      </div>
+                      <CardBackView
+                        customer={cust}
+                        restaurantName={restaurant?.name || 'Kigali Independent University Canteen'}
+                      />
+                    </div>
+                  </React.Fragment>
+                ))}
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );
 };
 
 // --------------------------------------------------------------------------------
-// FRONT SIDE CARD COMPONENT (Matching User Mockup)
+// FRONT SIDE CARD COMPONENT (ISO/IEC 7810 ID-1 CR80: 85.60 × 53.98 mm)
 // --------------------------------------------------------------------------------
 export const CardFrontView: React.FC<{
   customer: Customer;
@@ -472,12 +552,13 @@ export const CardFrontView: React.FC<{
 }> = ({ customer, restaurantName, isOnboarding }) => {
   const cardToken = restoStore.getCustomerCardQr(customer);
   const serialNo = `RP2026${customer.memberNo}`;
-  const studentNo = customer.studentProfile?.registrationNumber || (customer.isStudent ? '20251123' : null);
+  // Never fall back to hardcoded sample student registration number
+  const studentNo = customer.studentProfile?.registrationNumber?.trim() || null;
 
   return (
     <div
-      className="w-[350px] h-[218px] bg-white text-slate-900 rounded-[20px] border border-slate-300 shadow-xl relative overflow-hidden flex flex-col justify-between font-sans select-none break-inside-avoid print:shadow-none print:border-slate-400"
-      style={{ aspectRatio: '85.6 / 54' }}
+      className="cr80-card w-[350px] h-[218px] bg-white text-slate-900 rounded-[20px] border border-slate-300 shadow-xl relative overflow-hidden flex flex-col justify-between font-sans select-none break-inside-avoid print:shadow-none print:border-slate-400"
+      style={{ aspectRatio: '85.60 / 53.98' }}
     >
       {/* Dynamic Blue Curved Swoosh at Bottom & Right */}
       <svg
@@ -551,7 +632,7 @@ export const CardFrontView: React.FC<{
               </div>
               {studentNo ? (
                 <div className="text-[9px] text-slate-700 font-medium truncate">
-                  Student No: {studentNo} (Optional)
+                  Student ID: {studentNo}
                 </div>
               ) : (
                 <div className="text-[9px] text-slate-700 font-medium truncate">
@@ -568,7 +649,7 @@ export const CardFrontView: React.FC<{
         {/* Right Column: Real Scannable QR Code & Serial */}
         <div className="col-span-5 flex flex-col items-center justify-center">
           <div className="p-1.5 bg-white rounded-xl border border-slate-300 shadow-md">
-            <QrCanvas value={cardToken} size={74} />
+            <QrCanvas value={cardToken} size={82} />
           </div>
           <div className="text-[10px] font-mono font-black text-slate-900 tracking-wider text-center mt-1">
             {serialNo}
@@ -609,8 +690,8 @@ export const CardBackView: React.FC<{
 }> = ({ customer, restaurantName }) => {
   return (
     <div
-      className="w-[350px] h-[218px] bg-white text-slate-900 rounded-[20px] border border-slate-300 shadow-xl relative overflow-hidden flex flex-col justify-between font-sans select-none break-inside-avoid print:shadow-none print:border-slate-400"
-      style={{ aspectRatio: '85.6 / 54' }}
+      className="cr80-card w-[350px] h-[218px] bg-white text-slate-900 rounded-[20px] border border-slate-300 shadow-xl relative overflow-hidden flex flex-col justify-between font-sans select-none break-inside-avoid print:shadow-none print:border-slate-400"
+      style={{ aspectRatio: '85.60 / 53.98' }}
     >
       {/* Top Navy Header Stripe */}
       <div className="h-4 bg-slate-950 w-full" />

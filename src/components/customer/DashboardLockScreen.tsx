@@ -33,6 +33,10 @@ export const DashboardLockScreen: React.FC<DashboardLockScreenProps> = ({
     if (pin.length < 6) {
       const next = pin + digit;
       setPin(next);
+      if (!customer.hasCustomPin && next.length === 4 && restoStore.verifyCustomerPin(customer.id, next)) {
+        onUnlock();
+        return;
+      }
       if (next.length === 6) {
         // Verify PIN
         const isValid = restoStore.verifyCustomerPin(customer.id, next);
