@@ -275,7 +275,12 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
         <div className="space-y-4">
           {displayedList.map((appr) => {
             const customer = state.customers.find((c) => c.id === appr.customerId);
-            const graceConsumed = appr.gracePlatesConsumed || customer?.gracePlatesConsumed || 0;
+            const graceConsumed =
+              (appr.gracePlatesConsumed || 0) > 0
+                ? appr.gracePlatesConsumed
+                : appr.type === 'new_customer'
+                ? (customer?.gracePlatesConsumed || 0)
+                : 0;
             const isPending = appr.status === 'pending';
 
             return (
@@ -530,7 +535,12 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
 
             {/* Customer Summary Card & Net Balance Accounting */}
             {(() => {
-              const graceConsumed = whatsAppModalData.approval.gracePlatesConsumed || whatsAppModalData.customer.gracePlatesConsumed || 0;
+              const graceConsumed =
+                (whatsAppModalData.approval.gracePlatesConsumed || 0) > 0
+                  ? whatsAppModalData.approval.gracePlatesConsumed
+                  : whatsAppModalData.approval.type === 'new_customer'
+                  ? (whatsAppModalData.customer.gracePlatesConsumed || 0)
+                  : 0;
               const finalBal = restoStore.getCustomerBalance(whatsAppModalData.customer.id);
               return (
                 <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5">

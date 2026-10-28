@@ -30,13 +30,21 @@ import {
   KeyRound,
   Lock,
   Wifi,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 
 interface ScannerViewProps {
   language: Language;
+  operatorName?: string;
+  isDemoMode?: boolean;
 }
 
-export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
+export const ScannerView: React.FC<ScannerViewProps> = ({
+  language,
+  operatorName = 'Station Operator',
+  isDemoMode = false,
+}) => {
   const t = translations[language];
   const state = restoStore.getState();
   const currentRestaurant = restoStore.getCurrentRestaurant();
@@ -51,11 +59,34 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
 
   const [inputPayload, setInputPayload] = useState('');
   const [activeScan, setActiveScan] = useState<{
+    outcome?: 'ACCEPTED' | 'REJECTED';
+    message?: string;
+    rejectionReason?: string;
     event: ScanEvent;
     balanceAfter: number;
     error?: string;
     latencyMs?: number;
   } | null>(null);
+
+  // Scanner Sound Alert state (volume, mute, and browser autoplay unlock indicator)
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => sound.isSoundEnabled());
+  const [soundVolume, setSoundVolume] = useState<number>(() => sound.getVolume());
+  const [audioUnlocked, setAudioUnlocked] = useState<boolean>(() => sound.isAudioUnlocked());
+
+  useEffect(() => {
+    sound.preloadScannerSounds();
+    const handleUnlockGesture = () => {
+      sound.unlockAudio().then((ok) => {
+        if (ok) setAudioUnlocked(true);
+      });
+    };
+    window.addEventListener('pointerdown', handleUnlockGesture, { once: true });
+    window.addEventListener('keydown', handleUnlockGesture, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', handleUnlockGesture);
+      window.removeEventListener('keydown', handleUnlockGesture);
+    };
+  }, []);
 
   // Auto-advance configuration (0 = manual, 2 = 2s, 3 = 3s)
   const [autoAdvanceSeconds, setAutoAdvanceSeconds] = useState<number>(3);
@@ -67,6 +98,20 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isProvisionalModalOpen, setIsProvisionalModalOpen] = useState(false);
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
+  const [isPinDeskModalOpen, setIsPinDeskModalOpen] = useState(false);
+  const [pinDeskCustomerId, setPinDeskCustomerId] = useState<string>('');
+  const [pinDeskMode, setPinDeskMode] = useState<'activation' | 'recovery'>('activation');
+  const [pinDeskIdMethod, setPinDeskIdMethod] = useState<'student_id_check' | 'national_id_check' | 'photo_match' | 'manager_override'>('student_id_check');
+  const [pinDeskReason, setPinDeskReason] = useState('Verified patron ID at reception desk');
+  const [pinDeskResult, setPinDeskResult] = useState<{
+    type: 'activation' | 'recovery';
+    code?: string;
+    requestId?: string;
+    expiresAt?: string;
+    customerName: string;
+    memberNo: string;
+    error?: string;
+  } | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const keyboardInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -200,8 +245,14 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
 
   const handleExecuteScan = (payload: string) => {
     if (!payload.trim()) return;
+    sound.unlockAudio().then((ok) => {
+      if (ok) setAudioUnlocked(true);
+    });
     const result = restoStore.processScan(payload);
     setActiveScan({
+      outcome: result.outcome,
+      message: result.message,
+      rejectionReason: result.rejectionReason,
       event: result.scanEvent,
       balanceAfter: result.balanceAfter,
       error: result.error,
@@ -447,6 +498,22 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
 
           <button
             type="button"
+            onClick={() => {
+              const restoCusts = state.customers.filter((c) => c.restaurantCode === state.currentRestaurantCode);
+              setPinDeskCustomerId(restoCusts[0]?.id || '');
+              setPinDeskResult(null);
+              setIsPinDeskModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-400 hover:text-white transition-colors cursor-pointer shadow-sm"
+            title="Issue 15-minute non-SMS activation code or request PIN recovery for a patron"
+          >
+            <KeyRound className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="hidden sm:inline">PIN / Activation Desk</span>
+            <span className="sm:hidden">PIN Desk</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setIsShiftModalOpen(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-700 border border-slate-700 text-emerald-400 hover:text-white transition-colors cursor-pointer shadow-sm"
             title={t.shifts?.title || 'Cashier Shift Handover & Daily Reconciliation'}
@@ -481,9 +548,78 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
             <span className="hidden sm:inline">Ready</span>
           </div>
 
+          {/* Scanner Audio Control & Volume */}
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-xs">
+            <button
+              type="button"
+              onClick={() => {
+                const next = !soundEnabled;
+                sound.setSoundEnabled(next);
+                setSoundEnabled(next);
+                if (next) {
+                  sound.unlockAudio().then((ok) => {
+                    if (ok) setAudioUnlocked(true);
+                    sound.playSuccessSound(`vol_test_${Date.now()}`);
+                  });
+                }
+              }}
+              className={`flex items-center gap-1 font-semibold cursor-pointer ${
+                soundEnabled ? 'text-emerald-400 hover:text-emerald-300' : 'text-rose-400 hover:text-rose-300'
+              }`}
+              title={soundEnabled ? 'Scanner sound alerts ON (click to mute)' : 'Scanner sound alerts MUTED (click to enable)'}
+            >
+              {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+              <span className="hidden md:inline text-[11px]">{soundEnabled ? `${Math.round(soundVolume * 100)}%` : 'Muted'}</span>
+            </button>
+            {soundEnabled && (
+              <input
+                type="range"
+                min={0.1}
+                max={1}
+                step={0.05}
+                value={soundVolume}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  sound.setVolume(v);
+                  setSoundVolume(v);
+                }}
+                aria-label="Scanner alert volume"
+                className="w-14 accent-emerald-500 cursor-pointer"
+              />
+            )}
+          </div>
+
           <BatteryIndicator isStaffMode={true} />
         </div>
       </div>
+
+      {/* Browser Audio Muted / Blocked Warning Banner */}
+      {(!soundEnabled || !audioUnlocked) && (
+        <div className="p-3 rounded-2xl bg-amber-950/80 border border-amber-500/60 text-amber-100 flex items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2">
+            <VolumeX className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              {!soundEnabled
+                ? 'Scanner sound alerts are currently muted. Enable audio so the cashier hears Accepted and Rejected scan tones.'
+                : 'Browser audio is awaiting first interaction. Click Enable Audio to activate loud scan confirmation & warning sounds.'}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              sound.setSoundEnabled(true);
+              setSoundEnabled(true);
+              sound.unlockAudio().then((ok) => {
+                setAudioUnlocked(ok);
+                sound.playSuccessSound(`unlock_test_${Date.now()}`);
+              });
+            }}
+            className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shrink-0 cursor-pointer"
+          >
+            Enable Audio
+          </button>
+        </div>
+      )}
 
       {/* 2. Camera Live Viewfinder if activated */}
       {isCameraActive && (
@@ -536,41 +672,46 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
         </div>
       </form>
 
-      {/* 4. Quick Simulation Pills (Sleek & Minimal) */}
-      <div className="flex items-center gap-2 overflow-x-auto py-1 text-xs">
-        <button
-          onClick={() => handleExecuteScan(demoTokens.jpCard)}
-          className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/50 font-semibold text-emerald-400 transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
-        >
-          <span>💳 Card Tap</span>
-        </button>
+      {/* 4. Quick Simulation Pills (Visible when Demo Mode is active) */}
+      {isDemoMode && (
+        <div className="flex items-center gap-2 overflow-x-auto py-1 text-xs">
+          <span className="text-[10px] font-mono uppercase tracking-wider text-amber-400 px-2 py-1 rounded bg-amber-500/10 border border-amber-500/20 shrink-0">
+            Demo Taps:
+          </span>
+          <button
+            onClick={() => handleExecuteScan(demoTokens.jpCard)}
+            className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/50 font-semibold text-emerald-400 transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
+          >
+            <span>💳 Card Tap</span>
+          </button>
 
-        <button
-          onClick={() => handleExecuteScan(demoTokens.jpPhone)}
-          className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-cyan-500/50 font-semibold text-cyan-400 transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
-        >
-          <span>📱 Phone QR</span>
-        </button>
+          <button
+            onClick={() => handleExecuteScan(demoTokens.jpPhone)}
+            className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-cyan-500/50 font-semibold text-cyan-400 transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
+          >
+            <span>📱 Phone QR</span>
+          </button>
 
-        <button
-          onClick={() => handleExecuteScan(demoTokens.kezaLowBalance)}
-          className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-amber-500/50 font-semibold text-amber-400 transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
-        >
-          <span>⚠️ Low Balance</span>
-        </button>
+          <button
+            onClick={() => handleExecuteScan(demoTokens.kezaLowBalance)}
+            className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-amber-500/50 font-semibold text-amber-400 transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
+          >
+            <span>⚠️ Low Balance</span>
+          </button>
 
-        <button
-          onClick={() => handleExecuteScan(demoTokens.wrongResto)}
-          className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-rose-500/50 font-semibold text-rose-400 transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
-        >
-          <span>⛔ Other Resto Card</span>
-        </button>
-      </div>
+          <button
+            onClick={() => handleExecuteScan(demoTokens.wrongResto)}
+            className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-rose-500/50 font-semibold text-rose-400 transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
+          >
+            <span>⛔ Other Resto Card</span>
+          </button>
+        </div>
+      )}
 
       {/* 5. ACTIVE SCAN RESULT DISPLAY */}
       {activeScan && (
         <div className="animate-in fade-in zoom-in-95 duration-150">
-          {/* 5A. BLOCKED SCREEN */}
+          {/* 5A. REJECTED / BLOCKED SCREEN */}
           {activeScan.event.status === 'blocked' ? (
             <div className="p-6 rounded-3xl bg-rose-950/90 border-2 border-rose-500 text-white shadow-2xl space-y-4">
               <div className="flex items-start justify-between gap-4">
@@ -579,11 +720,14 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
                     <ShieldAlert className="w-8 h-8" />
                   </div>
                   <div>
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-rose-500/30 border border-rose-400/50 text-[10px] font-black uppercase tracking-wider text-rose-100 mb-1">
+                      REJECTED · NO MEAL DEDUCTED
+                    </div>
                     <h2 className="text-2xl font-black text-rose-100 tracking-tight">
-                      MEAL BLOCKED
+                      MEAL REJECTED
                     </h2>
-                    <p className="text-sm text-rose-200 mt-1 font-medium">
-                      {activeScan.event.blockedReason}
+                    <p className="text-sm text-rose-100 mt-1 font-bold">
+                      {activeScan.rejectionReason || activeScan.event.blockedReason}
                     </p>
                   </div>
                 </div>
@@ -595,6 +739,18 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
                   Dismiss
                 </button>
               </div>
+
+              {activeScan.event.customerId && (
+                <div className="flex items-center justify-between gap-3 bg-black/30 p-3 rounded-2xl border border-rose-500/30 text-xs">
+                  <div>
+                    <span className="font-bold text-white">{activeScan.event.customerName}</span>
+                    <span className="text-rose-200 font-mono ml-2">#{activeScan.event.memberNo}</span>
+                  </div>
+                  <div className="font-mono font-bold text-rose-200">
+                    Approved Balance: {activeScan.balanceAfter} meal(s)
+                  </div>
+                </div>
+              )}
 
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-rose-800/80">
                 {activeScan.event.customerId && (
@@ -661,6 +817,9 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
                     <CheckCircle2 className="w-6 h-6" />
                   </div>
                   <div>
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/30 border border-emerald-400/50 text-[10px] font-black uppercase tracking-wider text-emerald-100 mb-1">
+                      ACCEPTED · {activeScan.message || 'Meal accepted — 1 meal recorded.'}
+                    </div>
                     <h2 className="text-2xl font-black tracking-tight">
                       {activeScan.event.platesDeducted === 2 ? '2 PLATES SERVED' : '1 PLATE SERVED'}
                     </h2>
@@ -885,6 +1044,205 @@ export const ScannerView: React.FC<ScannerViewProps> = ({ language }) => {
             setRefreshCount((c) => c + 1);
           }}
         />
+      )}
+
+      {/* CUSTOMER NON-SMS ACTIVATION & PIN RECOVERY DESK MODAL */}
+      {isPinDeskModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
+                  <KeyRound className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Customer PIN &amp; Activation Desk</h3>
+                  <p className="text-xs text-slate-400">In-person identity check (No SMS required)</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPinDeskModalOpen(false)}
+                className="text-slate-400 hover:text-white text-xs font-semibold cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+
+            {/* Mode Switcher */}
+            <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-950 border border-slate-800 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  setPinDeskMode('activation');
+                  setPinDeskResult(null);
+                }}
+                className={`py-2 rounded-lg font-bold transition-colors cursor-pointer ${
+                  pinDeskMode === 'activation' ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                1. First-Time Activation
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPinDeskMode('recovery');
+                  setPinDeskResult(null);
+                }}
+                className={`py-2 rounded-lg font-bold transition-colors cursor-pointer ${
+                  pinDeskMode === 'recovery' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                2. Forgot PIN Recovery
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Select Verified Patron</label>
+                <select
+                  value={pinDeskCustomerId}
+                  onChange={(e) => {
+                    setPinDeskCustomerId(e.target.value);
+                    setPinDeskResult(null);
+                  }}
+                  className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white outline-hidden focus:border-cyan-500"
+                >
+                  {state.customers
+                    .filter((c) => c.restaurantCode === state.currentRestaurantCode)
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        #{c.memberNo} — {c.name} ({c.phone}) [{c.activationStatus || c.provisionalStatus}]
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              {pinDeskMode === 'recovery' && (
+                <>
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">Physical ID Verified</label>
+                    <select
+                      value={pinDeskIdMethod}
+                      onChange={(e) => setPinDeskIdMethod(e.target.value as any)}
+                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white outline-hidden"
+                    >
+                      <option value="student_id_check">University Student ID Card</option>
+                      <option value="national_id_check">National ID / Passport</option>
+                      <option value="photo_match">Live Photo Match</option>
+                      <option value="manager_override">In-Person Manager Verification</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">Audit Reason</label>
+                    <input
+                      type="text"
+                      value={pinDeskReason}
+                      onChange={(e) => setPinDeskReason(e.target.value)}
+                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white outline-hidden"
+                    />
+                  </div>
+                </>
+              )}
+
+              {pinDeskResult && (
+                <div
+                  className={`p-4 rounded-2xl border space-y-2 ${
+                    pinDeskResult.error
+                      ? 'bg-rose-950/80 border-rose-700 text-rose-200'
+                      : 'bg-emerald-950/80 border-emerald-600 text-emerald-200'
+                  }`}
+                >
+                  {pinDeskResult.error ? (
+                    <div className="font-semibold">{pinDeskResult.error}</div>
+                  ) : (
+                    <>
+                      <div className="text-[11px] uppercase tracking-wider font-bold text-emerald-400">
+                        {pinDeskResult.type === 'activation'
+                          ? '15-Minute Single-Use Activation Code'
+                          : 'PIN Recovery Request Logged'}
+                      </div>
+                      {pinDeskResult.code && (
+                        <div className="text-3xl font-black font-mono tracking-widest text-white bg-slate-950/90 py-3 px-4 rounded-xl text-center border border-emerald-500/40">
+                          {pinDeskResult.code}
+                        </div>
+                      )}
+                      {pinDeskResult.requestId && (
+                        <div className="text-xs font-mono text-amber-300">
+                          Request ID: <strong>{pinDeskResult.requestId}</strong>
+                        </div>
+                      )}
+                      <p className="text-[11px] text-slate-300">
+                        Have <strong>{pinDeskResult.customerName} (#{pinDeskResult.memberNo})</strong> enter this code on the Customer Portal login screen to privately set their new 6-digit PIN.
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  const cust = state.customers.find((c) => c.id === pinDeskCustomerId);
+                  if (!cust) return;
+                  if (pinDeskMode === 'activation') {
+                    const res = restoStore.requestCustomerActivation({
+                      customerId: cust.id,
+                      authorizingStaffId: state.currentStationId || 'staff_pos',
+                      authorizingStaffName: operatorName,
+                      restaurantCode: state.currentRestaurantCode,
+                    });
+                    setPinDeskResult({
+                      type: 'activation',
+                      code: res.activationCode,
+                      expiresAt: res.expiresAt,
+                      customerName: cust.name,
+                      memberNo: cust.memberNo,
+                      error: res.error,
+                    });
+                  } else {
+                    const reqRes = restoStore.requestCustomerPinRecovery({
+                      customerId: cust.id,
+                      reason: pinDeskReason,
+                      idVerificationMethod: pinDeskIdMethod,
+                      restaurantCode: state.currentRestaurantCode,
+                      staffId: state.currentStationId || 'staff_pos',
+                      staffName: operatorName,
+                    });
+                    if (reqRes.success && reqRes.requestId) {
+                      const apprRes = restoStore.approveCustomerPinRecovery({
+                        requestId: reqRes.requestId,
+                        authorizingStaffId: state.currentStationId || 'staff_pos',
+                        authorizingStaffName: operatorName,
+                      });
+                      setPinDeskResult({
+                        type: 'recovery',
+                        code: apprRes.recoveryCode,
+                        requestId: reqRes.requestId,
+                        expiresAt: apprRes.expiresAt,
+                        customerName: cust.name,
+                        memberNo: cust.memberNo,
+                        error: apprRes.error,
+                      });
+                    } else {
+                      setPinDeskResult({
+                        type: 'recovery',
+                        customerName: cust.name,
+                        memberNo: cust.memberNo,
+                        error: reqRes.error || 'Failed to create recovery request',
+                      });
+                    }
+                  }
+                }}
+                className="w-full py-3 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs shadow-md transition-colors cursor-pointer"
+              >
+                {pinDeskMode === 'activation'
+                  ? 'Generate 15-Minute Activation Code'
+                  : 'Verify ID & Issue PIN Reset Code'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

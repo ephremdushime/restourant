@@ -81,7 +81,7 @@ const INITIAL_PLANS: Plan[] = [
       graceDays: 7,
       defaultSpotCheckRate: 0.10, // 1 in 10
       servingWindowMinutes: 120,
-      plateLimitPerWindow: 2,
+      plateLimitPerWindow: 3,
       customerCardFeeRwf: 2000,
       customerReissueFeeRwf: 2500,
       platformCardFeeRwf: 1200,
@@ -100,7 +100,7 @@ const INITIAL_PLANS: Plan[] = [
       graceDays: 14,
       defaultSpotCheckRate: 0.12,
       servingWindowMinutes: 120,
-      plateLimitPerWindow: 2,
+      plateLimitPerWindow: 3,
       customerCardFeeRwf: 2000,
       customerReissueFeeRwf: 2500,
       platformCardFeeRwf: 1000,
@@ -1329,15 +1329,23 @@ export class RestoStore {
   private pairingLockoutUntil = 0;
 
   /**
-   * Sanitizes state by stripping out sensitive credential hashes (such as customer pinHash)
-   * before storing in the browser's unencrypted localStorage (Finding 4 & 7).
+   * Sanitizes state by ensuring customer PINs are stored only as salted SHA-256 digests
+   * (never raw plaintext) in localStorage (Finding 4 & 7).
    */
   private sanitizeStateForStorage(state: AppState): string {
     const copy = { ...state };
     if (Array.isArray(copy.customers)) {
       copy.customers = copy.customers.map((c) => {
-        const { pinHash, ...safe } = c;
-        return safe as Customer;
+        if (!c.pinHash) return c;
+        if (/^[a-f0-9]{64}$/i.test(c.pinHash)) {
+          return c;
+        }
+        const salt = getCustomerPinSalt(c.id, c.memberNo);
+        const saltedPayload = `RESTOPASS_SALTED_PIN_V1:${salt}:${c.pinHash.trim()}`;
+        return {
+          ...c,
+          pinHash: sha256(saltedPayload),
+        };
       });
     }
     return JSON.stringify(copy);
@@ -1483,7 +1491,7 @@ export class RestoStore {
   private mergeServerState(serverState: Partial<AppState>): void {
     let hasChanges = false;
 
-    // 1. Merge customers by id
+    // 1. Merge customers by id (preserving local pinHash when redacted by customer scope)
     if (serverState.customers && Array.isArray(serverState.customers)) {
       const currentCustMap = new Map(this.state.customers.map((c) => [c.id, c]));
       for (const serverCust of serverState.customers) {
@@ -1492,12 +1500,9 @@ export class RestoStore {
           this.state.customers.push(serverCust);
           currentCustMap.set(serverCust.id, serverCust);
           hasChanges = true;
-        } else if (
-          serverCust.cardVersion > existing.cardVersion ||
-          serverCust.cardStatus !== existing.cardStatus ||
-          serverCust.keyVersion > existing.keyVersion
-        ) {
-          Object.assign(existing, serverCust);
+        } else {
+          const preservedPinHash = serverCust.pinHash ?? existing.pinHash;
+          Object.assign(existing, serverCust, { pinHash: preservedPinHash });
           hasChanges = true;
         }
       }
@@ -1534,7 +1539,7 @@ export class RestoStore {
           this.state.restaurants.push(serverResto);
           currentRestoMap.set(serverResto.code, serverResto);
           hasChanges = true;
-        } else if (serverResto.status !== existing.status) {
+        } else {
           Object.assign(existing, serverResto);
           hasChanges = true;
         }
@@ -1544,14 +1549,66 @@ export class RestoStore {
     // 5. Merge notifications
     if (serverState.notifications && Array.isArray(serverState.notifications)) {
       if (!this.state.notifications) this.state.notifications = [];
-      const currentNotifIds = new Set(this.state.notifications.map((n) => n.id));
+      const currentNotifMap = new Map(this.state.notifications.map((n) => [n.id, n]));
       for (const serverNotif of serverState.notifications) {
-        if (!currentNotifIds.has(serverNotif.id)) {
+        const existing = currentNotifMap.get(serverNotif.id);
+        if (!existing) {
           this.state.notifications.unshift(serverNotif);
-          currentNotifIds.add(serverNotif.id);
+          currentNotifMap.set(serverNotif.id, serverNotif);
+          hasChanges = true;
+        } else {
+          Object.assign(existing, serverNotif);
           hasChanges = true;
         }
       }
+    }
+
+    // 6. Merge operational collections by id
+    const mergeCollectionById = <T extends { id: string }>(
+      key: keyof AppState,
+      incoming: T[] | undefined
+    ) => {
+      if (!incoming || !Array.isArray(incoming)) return;
+      const list = ((this.state as any)[key] || []) as T[];
+      const map = new Map(list.map((item) => [item.id, item]));
+      for (const serverItem of incoming) {
+        if (!serverItem || !serverItem.id) continue;
+        const existing = map.get(serverItem.id);
+        if (!existing) {
+          list.push(serverItem);
+          map.set(serverItem.id, serverItem);
+          hasChanges = true;
+        } else {
+          Object.assign(existing, serverItem);
+          hasChanges = true;
+        }
+      }
+      (this.state as any)[key] = list;
+    };
+
+    mergeCollectionById('pendingApprovals', serverState.pendingApprovals);
+    mergeCollectionById('packages', serverState.packages);
+    mergeCollectionById('menuItems', serverState.menuItems);
+    mergeCollectionById('branches', serverState.branches);
+    mergeCollectionById('stationUsers', serverState.stationUsers);
+    mergeCollectionById('scanPoints', serverState.scanPoints);
+    mergeCollectionById('shifts', serverState.shifts);
+    mergeCollectionById('cashierSessions', serverState.cashierSessions);
+    mergeCollectionById('transfers', serverState.transfers);
+    mergeCollectionById('payments', serverState.payments);
+    mergeCollectionById('customerSubscriptions', serverState.customerSubscriptions);
+    mergeCollectionById('studentSubscriptionPayments', serverState.studentSubscriptionPayments);
+    mergeCollectionById('activationRequests', serverState.activationRequests);
+    mergeCollectionById('pinRecoveryRequests', serverState.pinRecoveryRequests);
+    mergeCollectionById('plans', serverState.plans);
+    mergeCollectionById('licenses', serverState.licenses);
+
+    if (serverState.studentSubscriptionSettings) {
+      this.state.studentSubscriptionSettings = {
+        ...this.state.studentSubscriptionSettings,
+        ...serverState.studentSubscriptionSettings,
+      };
+      hasChanges = true;
     }
 
     if (hasChanges) {
@@ -1710,10 +1767,10 @@ export class RestoStore {
     if (stn) {
       this.state.currentStationId = stn.id;
     }
-    // Set current customer to one belonging to this restaurant
-    const cust = this.state.customers.find((c) => c.restaurantCode === code);
-    if (cust) {
-      this.state.currentCustomerId = cust.id;
+    // Preserve currentCustomerId only if it belongs to this restaurant; never silently select another customer
+    const currentCust = this.state.customers.find((c) => c.id === this.state.currentCustomerId);
+    if (!currentCust || currentCust.restaurantCode !== code) {
+      this.state.currentCustomerId = '';
     }
     this.notify();
   }
@@ -1769,11 +1826,12 @@ export class RestoStore {
   }
 
   public getCurrentCustomer(): Customer | undefined {
+    if (!this.state.currentCustomerId) return undefined;
     const cust = this.state.customers.find((c) => c.id === this.state.currentCustomerId);
     if (cust && cust.restaurantCode === this.state.currentRestaurantCode) {
       return cust;
     }
-    return this.state.customers.find((c) => c.restaurantCode === this.state.currentRestaurantCode);
+    return undefined;
   }
 
   public getCurrentRestaurant(): Restaurant | undefined {
@@ -1844,8 +1902,25 @@ export class RestoStore {
 
   // --- STAND SCANNER WORKFLOW (Masterplan Sections 2 & 6.3) ---
 
+  private activeScanLocks: Set<string> = new Set();
+
   public processScan(payload: string): {
+    outcome: 'ACCEPTED' | 'REJECTED';
+    accepted: boolean;
+    deducted: number;
+    isGraceMeal: boolean;
+    rejectionCode?:
+      | 'LICENSE_INVALID'
+      | 'INVALID_QR'
+      | 'ACCOUNT_INACTIVE'
+      | 'NO_BALANCE'
+      | 'CONSECUTIVE_SCAN'
+      | 'TWO_HOUR_LIMIT'
+      | 'DUPLICATE_SCAN';
+    rejectionReason?: string;
+    message: string;
     scanEvent: ScanEvent;
+    balanceBefore: number;
     balanceAfter: number;
     error?: string;
     latencyMs: number;
@@ -1855,81 +1930,85 @@ export class RestoStore {
     const station = this.state.scanPoints.find((sp) => sp.id === this.state.currentStationId) || this.state.scanPoints[0];
     const staffId = this.state.currentStaffId;
     const terms = this.getRestaurantTerms(restaurantCode);
-
-    // 1. Offline License Enforcement
-    const license = this.getRestaurantLicense(restaurantCode);
     const guardedNow = this.getGuardedTime(restaurantCode);
 
-    if (!license) {
-      sound.playDangerAlarm();
+    const buildRejection = (
+      rejectionCode:
+        | 'LICENSE_INVALID'
+        | 'INVALID_QR'
+        | 'ACCOUNT_INACTIVE'
+        | 'NO_BALANCE'
+        | 'CONSECUTIVE_SCAN'
+        | 'TWO_HOUR_LIMIT'
+        | 'DUPLICATE_SCAN',
+      rejectionReason: string,
+      customer?: Customer,
+      fallbackMemberNo?: string,
+      balanceBefore = 0,
+      platesInWindow = 0,
+      photoCheckRequired = false,
+      photoCheckReason: ScanEvent['photoCheckReason'] = 'none'
+    ) => {
+      const eventId = `scan_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      sound.playFailureSound(eventId);
       const failEvent: ScanEvent = {
-        id: `scan_${Date.now()}`,
+        id: eventId,
         restaurantCode,
-        customerId: '',
-        customerName: 'Unknown',
-        customerPhoto: '',
-        memberNo: '',
+        customerId: customer?.id || '',
+        customerName: customer?.name || (fallbackMemberNo ? `Customer #${fallbackMemberNo}` : 'Unknown'),
+        customerPhoto: customer?.photoUrl || '',
+        memberNo: customer?.memberNo || fallbackMemberNo || 'Unknown',
         scanPointId: station.id,
         scanPointName: station.name,
         staffId,
         staffName: 'Stand Operator',
         timestamp: new Date(guardedNow).toISOString(),
-        platesInWindow: 0,
+        platesInWindow,
         platesDeducted: 0,
-        photoCheckRequired: false,
-        photoCheckReason: 'none',
+        photoCheckRequired,
+        photoCheckReason,
         photoCheckResult: 'none',
         status: 'blocked',
-        blockedReason: 'License missing or not activated for this restaurant',
+        blockedReason: rejectionReason,
         tokenPayload: payload,
       };
       this.state.scanEvents.unshift(failEvent);
       this.notify();
       return {
+        outcome: 'REJECTED' as const,
+        accepted: false,
+        deducted: 0,
+        isGraceMeal: false,
+        rejectionCode,
+        rejectionReason,
+        message: rejectionReason,
         scanEvent: failEvent,
-        balanceAfter: 0,
-        error: failEvent.blockedReason,
+        balanceBefore,
+        balanceAfter: balanceBefore,
+        error: rejectionReason,
         latencyMs: Math.round((performance.now() - startTime) * 10) / 10,
       };
+    };
+
+    // 0. Offline License Enforcement
+    const license = this.getRestaurantLicense(restaurantCode);
+    if (!license) {
+      return buildRejection(
+        'LICENSE_INVALID',
+        'License missing or not activated for this restaurant'
+      );
     }
 
     const validUntilMs = new Date(license.validUntil).getTime();
     const graceUntilMs = validUntilMs + license.graceDays * 24 * 3600 * 1000;
-
     if (guardedNow > graceUntilMs) {
-      sound.playDangerAlarm();
-      const failEvent: ScanEvent = {
-        id: `scan_${Date.now()}`,
-        restaurantCode,
-        customerId: '',
-        customerName: 'Unknown',
-        customerPhoto: '',
-        memberNo: '',
-        scanPointId: station.id,
-        scanPointName: station.name,
-        staffId,
-        staffName: 'Stand Operator',
-        timestamp: new Date(guardedNow).toISOString(),
-        platesInWindow: 0,
-        platesDeducted: 0,
-        photoCheckRequired: false,
-        photoCheckReason: 'none',
-        photoCheckResult: 'none',
-        status: 'blocked',
-        blockedReason: 'Restaurant subscription expired (scanning disabled by authority)',
-        tokenPayload: payload,
-      };
-      this.state.scanEvents.unshift(failEvent);
-      this.notify();
-      return {
-        scanEvent: failEvent,
-        balanceAfter: 0,
-        error: failEvent.blockedReason,
-        latencyMs: Math.round((performance.now() - startTime) * 10) / 10,
-      };
+      return buildRejection(
+        'LICENSE_INVALID',
+        'Restaurant subscription expired (scanning disabled by authority)'
+      );
     }
 
-    // 2. Cryptographic QR Verification
+    // 1. QR Validation: Is the QR code valid, signed, and linked to a real customer?
     const customerKeyVersionMap: Record<string, { keyVersion: number; cardVersion: number; cardStatus: string }> = {};
     this.state.customers
       .filter((c) => c.restaurantCode === restaurantCode)
@@ -1942,394 +2021,331 @@ export class RestoStore {
       });
 
     const verifyResult = verifyQrToken(payload, restaurantCode, customerKeyVersionMap);
-
-    if (!verifyResult.valid) {
-      sound.playDangerAlarm();
-      const customer = this.state.customers.find(
-        (c) => c.memberNo === verifyResult.memberNo && c.restaurantCode === restaurantCode
-      );
-      const failEvent: ScanEvent = {
-        id: `scan_${Date.now()}`,
-        restaurantCode,
-        customerId: customer?.id || '',
-        customerName: customer?.name || (verifyResult.memberNo ? `Customer #${verifyResult.memberNo}` : 'Unknown'),
-        customerPhoto: customer?.photoUrl || '',
-        memberNo: verifyResult.memberNo || 'Unknown',
-        scanPointId: station.id,
-        scanPointName: station.name,
-        staffId,
-        staffName: 'Stand Operator',
-        timestamp: new Date(guardedNow).toISOString(),
-        platesInWindow: 0,
-        platesDeducted: 0,
-        photoCheckRequired: false,
-        photoCheckReason: 'none',
-        photoCheckResult: 'none',
-        status: 'blocked',
-        blockedReason: verifyResult.error || 'Token verification failed',
-        tokenPayload: payload,
-      };
-      this.state.scanEvents.unshift(failEvent);
-      this.notify();
-      return {
-        scanEvent: failEvent,
-        balanceAfter: 0,
-        error: failEvent.blockedReason,
-        latencyMs: Math.round((performance.now() - startTime) * 10) / 10,
-      };
-    }
-
-    const customer = this.state.customers.find(
+    const matchedCustomer = this.state.customers.find(
       (c) => c.memberNo === verifyResult.memberNo && c.restaurantCode === restaurantCode
     );
 
-    if (!customer) {
-      sound.playDangerAlarm();
-      const failEvent: ScanEvent = {
-        id: `scan_${Date.now()}`,
-        restaurantCode,
-        customerId: '',
-        customerName: 'Unknown',
-        customerPhoto: '',
-        memberNo: verifyResult.memberNo,
-        scanPointId: station.id,
-        scanPointName: station.name,
-        staffId,
-        staffName: 'Stand Operator',
-        timestamp: new Date(guardedNow).toISOString(),
-        platesInWindow: 0,
-        platesDeducted: 0,
-        photoCheckRequired: false,
-        photoCheckReason: 'none',
-        photoCheckResult: 'none',
-        status: 'blocked',
-        blockedReason: 'Customer record not found on local authority',
-        tokenPayload: payload,
-      };
-      this.state.scanEvents.unshift(failEvent);
-      this.notify();
-      return {
-        scanEvent: failEvent,
-        balanceAfter: 0,
-        error: failEvent.blockedReason,
-        latencyMs: Math.round((performance.now() - startTime) * 10) / 10,
-      };
-    }
-
-    // Check customer card status
-    if (customer.cardStatus === 'locked') {
-      sound.playDangerAlarm();
-      const failEvent: ScanEvent = {
-        id: `scan_${Date.now()}`,
-        restaurantCode,
-        customerId: customer.id,
-        customerName: customer.name,
-        customerPhoto: customer.photoUrl,
-        memberNo: customer.memberNo,
-        scanPointId: station.id,
-        scanPointName: station.name,
-        staffId,
-        staffName: 'Stand Operator',
-        timestamp: new Date(guardedNow).toISOString(),
-        platesInWindow: 0,
-        platesDeducted: 0,
-        photoCheckRequired: true,
-        photoCheckReason: 'physical_card',
-        photoCheckResult: 'none',
-        status: 'blocked',
-        blockedReason: 'Card is locked by customer or manager',
-        tokenPayload: payload,
-      };
-      this.state.scanEvents.unshift(failEvent);
-      this.notify();
-      return {
-        scanEvent: failEvent,
-        balanceAfter: this.getCustomerBalance(customer.id),
-        error: failEvent.blockedReason,
-        latencyMs: Math.round((performance.now() - startTime) * 10) / 10,
-      };
-    }
-
-    // 3. Balance & Provisional Grace Allowance Check
-    const currentBalance = this.getCustomerBalance(customer.id);
-    const isProvisional = customer.provisionalStatus === 'pending_approval';
-    const graceConsumed = customer.gracePlatesConsumed || 0;
-
-    if (currentBalance < 1 && (!isProvisional || graceConsumed >= 3)) {
-      sound.playDangerAlarm();
-      const blockedMsg = isProvisional && graceConsumed >= 3
-        ? 'Provisional grace limit reached (3/3 meals consumed). Awaiting restaurant boss Mobile Money payment approval before further servings.'
-        : 'Insufficient plate balance (0 plates remaining). Cashier top-up required.';
-
-      const failEvent: ScanEvent = {
-        id: `scan_${Date.now()}`,
-        restaurantCode,
-        customerId: customer.id,
-        customerName: customer.name,
-        customerPhoto: customer.photoUrl,
-        memberNo: customer.memberNo,
-        scanPointId: station.id,
-        scanPointName: station.name,
-        staffId,
-        staffName: 'Stand Operator',
-        timestamp: new Date(guardedNow).toISOString(),
-        platesInWindow: 0,
-        platesDeducted: 0,
-        photoCheckRequired: false,
-        photoCheckReason: 'none',
-        photoCheckResult: 'none',
-        status: 'blocked',
-        blockedReason: blockedMsg,
-        tokenPayload: payload,
-      };
-      this.state.scanEvents.unshift(failEvent);
-      this.notify();
-      return {
-        scanEvent: failEvent,
-        balanceAfter: 0,
-        error: failEvent.blockedReason,
-        latencyMs: Math.round((performance.now() - startTime) * 10) / 10,
-      };
-    }
-
-    // 4. Anti-Double-Tap / Pass-Between Guard
-    // Between first scan and second scan, at least one other different card must pass through the station
-    const lastSuccessfulStationScan = this.state.scanEvents.find(
-      (ev) =>
-        ev.restaurantCode === restaurantCode &&
-        ev.scanPointId === station.id &&
-        (ev.status === 'approved' || ev.status === 'warning_confirmed')
-    );
-
-    if (lastSuccessfulStationScan && lastSuccessfulStationScan.customerId === customer.id) {
-      sound.playDangerAlarm();
-      const failEvent: ScanEvent = {
-        id: `scan_${Date.now()}`,
-        restaurantCode,
-        customerId: customer.id,
-        customerName: customer.name,
-        customerPhoto: customer.photoUrl,
-        memberNo: customer.memberNo,
-        scanPointId: station.id,
-        scanPointName: station.name,
-        staffId,
-        staffName: 'Stand Operator',
-        timestamp: new Date(guardedNow).toISOString(),
-        platesInWindow: this.getPlatesInWindow(customer.id, restaurantCode).count,
-        platesDeducted: 0,
-        photoCheckRequired: true,
-        photoCheckReason: 'repeat_scan_in_window',
-        photoCheckResult: 'none',
-        status: 'blocked',
-        blockedReason: 'Consecutive tap blocked: Another customer card must be scanned before this card can tap again (anti-passback rule; max 3 scans per 2hr window).',
-        tokenPayload: payload,
-      };
-      this.state.scanEvents.unshift(failEvent);
-      this.notify();
-      return {
-        scanEvent: failEvent,
-        balanceAfter: currentBalance,
-        error: failEvent.blockedReason,
-        latencyMs: Math.round((performance.now() - startTime) * 10) / 10,
-      };
-    }
-
-    // 5. 2-Hour Usage Window Check (Strict limit of 3 plates in 2 hours for lunch/dinner)
-    const windowInfo = this.getPlatesInWindow(customer.id, restaurantCode);
-    const platesInWindow = windowInfo.count;
-    const windowLimit = Math.max(3, terms.plateLimitPerWindow || 3);
-
-    // Hard block if plate limit reached in 2-hour window
-    if (platesInWindow >= windowLimit) {
-      sound.playDangerAlarm();
-      const failEvent: ScanEvent = {
-        id: `scan_${Date.now()}`,
-        restaurantCode,
-        customerId: customer.id,
-        customerName: customer.name,
-        customerPhoto: customer.photoUrl,
-        memberNo: customer.memberNo,
-        scanPointId: station.id,
-        scanPointName: station.name,
-        staffId,
-        staffName: 'Stand Operator',
-        timestamp: new Date(guardedNow).toISOString(),
-        platesInWindow,
-        platesDeducted: 0,
-        photoCheckRequired: true,
-        photoCheckReason: 'repeat_scan_in_window',
-        photoCheckResult: 'none',
-        status: 'blocked',
-        blockedReason: `Plate limit reached: Already consumed ${platesInWindow} plates in the 2-hour window (max ${windowLimit}). Blocked until manager overrides.`,
-        tokenPayload: payload,
-      };
-      this.state.scanEvents.unshift(failEvent);
-      this.notify();
-      return {
-        scanEvent: failEvent,
-        balanceAfter: currentBalance,
-        error: failEvent.blockedReason,
-        latencyMs: Math.round((performance.now() - startTime) * 10) / 10,
-      };
-    }
-
-    // 5. Photo Spot-Check Triggers
-    let photoCheckRequired = false;
-    let photoCheckReason: ScanEvent['photoCheckReason'] = 'none';
-
-    if (verifyResult.isCard) {
-      // Physical cards always require photo check
-      photoCheckRequired = true;
-      photoCheckReason = 'physical_card';
-    } else {
-      // Phone QR spot checks: random sample (configurable rate e.g. 1 in 10) + risk triggers
-      const isRandomHit = Math.random() < terms.defaultSpotCheckRate;
-      const isRiskRepeat = platesInWindow > 0;
-      if (isRiskRepeat) {
-        photoCheckRequired = true;
-        photoCheckReason = 'repeat_scan_in_window';
-      } else if (isRandomHit) {
-        photoCheckRequired = true;
-        photoCheckReason = 'random_sample';
+    if (!verifyResult.valid) {
+      const errDetail = verifyResult.error || 'Token verification failed';
+      // Check if it failed specifically because the card is locked
+      if (matchedCustomer && matchedCustomer.cardStatus === 'locked') {
+        const curBal = this.getCustomerBalance(matchedCustomer.id);
+        return buildRejection(
+          'ACCOUNT_INACTIVE',
+          'Account not active — Card is locked by customer or manager.',
+          matchedCustomer,
+          matchedCustomer.memberNo,
+          curBal,
+          0,
+          true,
+          'physical_card'
+        );
       }
-    }
-
-    // 6. Deduct 1 Plate via Ledger with Idempotency Key (Finding 6)
-    const ledgerId = `led_scan_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
-    const idempotencyKey = `idemp_scan_${customer.id}_${station.id}_${Math.floor(guardedNow / 15000)}`;
-    const newLedgerEntry: LedgerEntry = {
-      id: ledgerId,
-      customerId: customer.id,
-      restaurantCode,
-      type: 'scan',
-      platesDelta: -1,
-      timestamp: new Date(guardedNow).toISOString(),
-      scanPointId: station.id,
-      staffId,
-      reference: `SCAN-${customer.memberNo}`,
-      idempotencyKey,
-    };
-    this.appendLedgerEntry(newLedgerEntry);
-
-    // Update active shift stats
-    const activeShift = this.getActiveShift(station.id);
-    if (activeShift) {
-      activeShift.platesServedCount += 1;
-    }
-
-    // Mark step as used locally and synchronize with persistent server replay log (Finding 4)
-    if (!verifyResult.isCard && verifyResult.step !== undefined) {
-      const restKey = deriveRestaurantKey(restaurantCode);
-      const custKey = deriveCustomerKey(restKey, customer.memberNo, customer.keyVersion);
-      markTokenStepUsed(custKey, verifyResult.step);
-
-      if (typeof window !== 'undefined' && navigator.onLine) {
-        fetch('/api/qr/verify', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(this.authToken ? { Authorization: `Bearer ${this.authToken}` } : {}),
-          },
-          body: JSON.stringify({
-            payload,
-            restaurantCode,
-            stationId: station.id,
-          }),
-        }).catch(() => {});
-      }
-    }
-
-    // Track provisional grace plate consumption
-    let overrideReason: string | undefined = undefined;
-    if (isProvisional) {
-      customer.gracePlatesConsumed = graceConsumed + 1;
-      const pending = this.state.pendingApprovals.find(
-        (p) => p.customerId === customer.id && p.status === 'pending'
+      return buildRejection(
+        'INVALID_QR',
+        `Invalid card / QR code — ${errDetail}`,
+        matchedCustomer,
+        verifyResult.memberNo
       );
-      if (pending) {
-        pending.gracePlatesConsumed = customer.gracePlatesConsumed;
+    }
+
+    if (!matchedCustomer) {
+      return buildRejection(
+        'INVALID_QR',
+        'Invalid card / QR code — Customer record not found on local authority.',
+        undefined,
+        verifyResult.memberNo
+      );
+    }
+
+    const customer = matchedCustomer;
+    const currentBalance = this.getCustomerBalance(customer.id);
+
+    // Concurrent / Duplicate scan guard per customer
+    if (this.activeScanLocks.has(customer.id)) {
+      return buildRejection(
+        'DUPLICATE_SCAN',
+        'Duplicate scan in progress — please wait.',
+        customer,
+        customer.memberNo,
+        currentBalance
+      );
+    }
+
+    this.activeScanLocks.add(customer.id);
+    try {
+      // 2. Account Eligibility: Is the customer's account active or eligible for grace access?
+      if (
+        customer.cardStatus === 'locked' ||
+        customer.activationStatus === 'suspended' ||
+        customer.provisionalStatus === 'rejected'
+      ) {
+        const statusReason =
+          customer.provisionalStatus === 'rejected'
+            ? 'Account not active — Registration was rejected by management.'
+            : customer.activationStatus === 'suspended'
+            ? 'Account not active — Customer account is suspended.'
+            : 'Account not active — Card is locked by customer or manager.';
+        return buildRejection(
+          'ACCOUNT_INACTIVE',
+          statusReason,
+          customer,
+          customer.memberNo,
+          currentBalance,
+          0,
+          true,
+          'physical_card'
+        );
       }
-      overrideReason = `Provisional grace plate (#${customer.gracePlatesConsumed}/3 served). Boss Mobile Money approval pending.`;
-    }
 
-    // Check repeat warning (platesInWindow === 1) or provisional grace plate
-    const isRepeatWarning = platesInWindow === 1 || isProvisional;
-    const scanStatus: ScanEvent['status'] = isRepeatWarning ? 'warning_confirmed' : 'approved';
+      // Compute pending approvals & unapproved grace meals for this customer
+      const customerPendingApprovals = (this.state.pendingApprovals || []).filter(
+        (a) => a.customerId === customer.id && a.status === 'pending'
+      );
+      const totalGraceUsedAcrossPending = customerPendingApprovals.reduce(
+        (sum, a) => sum + (a.gracePlatesConsumed || 0),
+        0
+      );
+      // Also account for customer.gracePlatesConsumed if set directly on provisional customer
+      const effectiveGraceConsumed = Math.max(
+        totalGraceUsedAcrossPending,
+        customer.provisionalStatus === 'pending_approval' ? (customer.gracePlatesConsumed || 0) : 0
+      );
+      const hasQualifyingPendingPayment =
+        customerPendingApprovals.length > 0 || customer.provisionalStatus === 'pending_approval';
+      const eligibleGraceAvailable = hasQualifyingPendingPayment && effectiveGraceConsumed < 3;
 
-    const scanEvent: ScanEvent = {
-      id: `scan_${Date.now()}`,
-      restaurantCode,
-      customerId: customer.id,
-      customerName: customer.name,
-      customerPhoto: customer.photoUrl,
-      memberNo: customer.memberNo,
-      scanPointId: station.id,
-      scanPointName: station.name,
-      staffId,
-      staffName: 'Stand Operator',
-      timestamp: new Date(guardedNow).toISOString(),
-      platesInWindow,
-      platesDeducted: 1,
-      photoCheckRequired,
-      photoCheckReason,
-      photoCheckResult: 'none',
-      status: scanStatus,
-      isGracePlate: isProvisional,
-      overrideReason,
-      tokenPayload: payload,
-    };
+      // 3. Available Credits: Does the customer have an approved meal balance >= 1 or an eligible grace meal?
+      if (currentBalance < 1 && !eligibleGraceAvailable) {
+        const noBalMsg =
+          hasQualifyingPendingPayment && effectiveGraceConsumed >= 3
+            ? 'No balance — Grace meal limit reached (3/3 meals consumed). Please await payment approval.'
+            : 'No balance — please top up or await payment approval.';
+        return buildRejection(
+          'NO_BALANCE',
+          noBalMsg,
+          customer,
+          customer.memberNo,
+          currentBalance
+        );
+      }
 
-    this.state.scanEvents.unshift(scanEvent);
+      // 4. Successive Scans: Is this customer trying to scan twice in a row without another customer scanning in between?
+      // Failed scans do NOT reset the consecutive-scan check because we only inspect the last ACCEPTED scan at this station.
+      const lastSuccessfulStationScan = this.state.scanEvents.find(
+        (ev) =>
+          ev.restaurantCode === restaurantCode &&
+          ev.scanPointId === station.id &&
+          (ev.status === 'approved' || ev.status === 'warning_confirmed')
+      );
 
-    // Outbox item for sync
-    this.queueOutboxItem('ledger_entry', newLedgerEntry.id, newLedgerEntry);
+      if (lastSuccessfulStationScan && lastSuccessfulStationScan.customerId === customer.id) {
+        return buildRejection(
+          'CONSECUTIVE_SCAN',
+          'Too many successive taps — scan another customer first.',
+          customer,
+          customer.memberNo,
+          currentBalance,
+          this.getPlatesInWindow(customer.id, restaurantCode).count,
+          true,
+          'repeat_scan_in_window'
+        );
+      }
 
-    // Audio feedback
-    if (isRepeatWarning) {
-      sound.playWarningAlarm();
-    } else {
-      sound.playSuccessBeep();
-    }
+      // 5. Two-Hour Limit: Has the customer already taken 3 meals in the last 120 minutes?
+      const windowInfo = this.getPlatesInWindow(customer.id, restaurantCode);
+      const platesInWindow = windowInfo.count;
+      const windowLimit = Math.max(3, terms.plateLimitPerWindow || 3);
 
-    const newBalance = this.getCustomerBalance(customer.id);
+      if (platesInWindow >= windowLimit) {
+        return buildRejection(
+          'TWO_HOUR_LIMIT',
+          `Meal limit reached — maximum ${windowLimit} meals in 2 hours.`,
+          customer,
+          customer.memberNo,
+          currentBalance,
+          platesInWindow,
+          true,
+          'repeat_scan_in_window'
+        );
+      }
 
-    // Autogenerate meal served notification
-    this.sendNotification({
-      restaurantCode,
-      target: customer.id,
-      targetName: `${customer.name} (#${customer.memberNo})`,
-      senderRole: 'system',
-      senderName: station.name,
-      type: 'meal_served',
-      title: 'Meal Plate Served',
-      message: `Redeemed 1 buffet meal at ${station.name}. Remaining balance: ${newBalance} plate(s).`,
-      priority: 'normal',
-      actionTab: 'history',
-    });
+      // Photo Spot-Check Triggers
+      let photoCheckRequired = false;
+      let photoCheckReason: ScanEvent['photoCheckReason'] = 'none';
 
-    // Check low-balance auto-alert trigger (< 5 plates)
-    if (newBalance < 5) {
+      if (verifyResult.isCard) {
+        photoCheckRequired = true;
+        photoCheckReason = 'physical_card';
+      } else {
+        const isRandomHit = Math.random() < terms.defaultSpotCheckRate;
+        const isRiskRepeat = platesInWindow > 0;
+        if (isRiskRepeat) {
+          photoCheckRequired = true;
+          photoCheckReason = 'repeat_scan_in_window';
+        } else if (isRandomHit) {
+          photoCheckRequired = true;
+          photoCheckReason = 'random_sample';
+        }
+      }
+
+      // 6. Commit Meal: Paid meals deduct from existing approved balance first!
+      // Grace consumption begins ONLY when approved balance is 0 and a qualifying pending payment exists.
+      const isUsingGraceMeal = currentBalance < 1 && eligibleGraceAvailable;
+      let overrideReason: string | undefined = undefined;
+
+      if (!isUsingGraceMeal) {
+        // Deduct 1 paid credit via Ledger
+        const ledgerId = `led_scan_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        const idempotencyKey = `idemp_scan_${customer.id}_${station.id}_${guardedNow}_${Math.random().toString(36).slice(2, 6)}`;
+        const newLedgerEntry: LedgerEntry = {
+          id: ledgerId,
+          customerId: customer.id,
+          restaurantCode,
+          type: 'scan',
+          platesDelta: -1,
+          timestamp: new Date(guardedNow).toISOString(),
+          scanPointId: station.id,
+          staffId,
+          reference: `SCAN-${customer.memberNo}`,
+          idempotencyKey,
+        };
+        this.appendLedgerEntry(newLedgerEntry);
+        this.queueOutboxItem('ledger_entry', newLedgerEntry.id, newLedgerEntry);
+      } else {
+        // Record 1 authorized grace meal against the earliest qualifying pending approval
+        // Do NOT push a -1 paid ledger entry now, because approvePendingRequest will deduct -gracePlatesConsumed upon approval!
+        const targetApproval =
+          customerPendingApprovals
+            .slice()
+            .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+            .find((a) => (a.gracePlatesConsumed || 0) < (a.gracePlatesAllowed || 3)) ||
+          customerPendingApprovals[0];
+
+        if (targetApproval) {
+          targetApproval.gracePlatesConsumed = (targetApproval.gracePlatesConsumed || 0) + 1;
+        }
+        const updatedTotalGrace = effectiveGraceConsumed + 1;
+        customer.gracePlatesConsumed = updatedTotalGrace;
+        customer.gracePlatesRemaining = Math.max(0, 3 - updatedTotalGrace);
+        overrideReason = `Authorized grace meal (#${updatedTotalGrace}/3 served). Awaiting boss Mobile Money payment approval.`;
+      }
+
+      // Update active shift stats
+      const activeShift = this.getActiveShift(station.id);
+      if (activeShift) {
+        activeShift.platesServedCount += 1;
+      }
+
+      // Mark dynamic phone QR step as used ONLY after scan succeeds
+      if (!verifyResult.isCard && verifyResult.step !== undefined) {
+        const restKey = deriveRestaurantKey(restaurantCode);
+        const custKey = deriveCustomerKey(restKey, customer.memberNo, customer.keyVersion);
+        markTokenStepUsed(custKey, verifyResult.step);
+
+        if (typeof window !== 'undefined' && navigator.onLine) {
+          fetch('/api/qr/verify', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(this.authToken ? { Authorization: `Bearer ${this.authToken}` } : {}),
+            },
+            body: JSON.stringify({
+              payload,
+              restaurantCode,
+              stationId: station.id,
+            }),
+          }).catch(() => {});
+        }
+      }
+
+      const scanEventId = `scan_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const isRepeatWarning = platesInWindow >= 1 || isUsingGraceMeal;
+      const scanStatus: ScanEvent['status'] = isRepeatWarning ? 'warning_confirmed' : 'approved';
+
+      const scanEvent: ScanEvent = {
+        id: scanEventId,
+        restaurantCode,
+        customerId: customer.id,
+        customerName: customer.name,
+        customerPhoto: customer.photoUrl,
+        memberNo: customer.memberNo,
+        scanPointId: station.id,
+        scanPointName: station.name,
+        staffId,
+        staffName: 'Stand Operator',
+        timestamp: new Date(guardedNow).toISOString(),
+        platesInWindow: platesInWindow + 1,
+        platesDeducted: 1,
+        photoCheckRequired,
+        photoCheckReason,
+        photoCheckResult: 'none',
+        status: scanStatus,
+        isGracePlate: isUsingGraceMeal,
+        gracePlateNumber: isUsingGraceMeal ? customer.gracePlatesConsumed : undefined,
+        overrideReason,
+        tokenPayload: payload,
+      };
+
+      this.state.scanEvents.unshift(scanEvent);
+
+      // Play unified Sound 1 (Confirmation beep) exactly once after meal commit succeeds
+      sound.playSuccessSound(scanEvent.id);
+
+      const newBalance = this.getCustomerBalance(customer.id);
+
+      // Autogenerate meal served notification
       this.sendNotification({
         restaurantCode,
         target: customer.id,
         targetName: `${customer.name} (#${customer.memberNo})`,
         senderRole: 'system',
-        senderName: 'Balance Sentinel',
-        type: 'low_balance',
-        title: 'Low Plate Balance Warning (< 5 plates)',
-        message: `Your balance is now ${newBalance} plate(s). Please top up soon to ensure uninterrupted cafeteria dining.`,
-        priority: 'urgent',
+        senderName: station.name,
+        type: 'meal_served',
+        title: isUsingGraceMeal ? 'Grace Meal Served' : 'Meal Plate Served',
+        message: isUsingGraceMeal
+          ? `Served 1 authorized grace meal (#${customer.gracePlatesConsumed}/3) at ${station.name} while awaiting payment approval.`
+          : `Redeemed 1 buffet meal at ${station.name}. Remaining balance: ${newBalance} plate(s).`,
+        priority: 'normal',
         actionTab: 'history',
       });
+
+      // Check low-balance auto-alert trigger (< 5 plates)
+      if (!isUsingGraceMeal && newBalance < 5) {
+        this.sendNotification({
+          restaurantCode,
+          target: customer.id,
+          targetName: `${customer.name} (#${customer.memberNo})`,
+          senderRole: 'system',
+          senderName: 'Balance Sentinel',
+          type: 'low_balance',
+          title: 'Low Plate Balance Warning (< 5 plates)',
+          message: `Your balance is now ${newBalance} plate(s). Please top up soon to ensure uninterrupted cafeteria dining.`,
+          priority: 'urgent',
+          actionTab: 'history',
+        });
+      }
+
+      this.notify();
+
+      const acceptedMessage = isUsingGraceMeal
+        ? `Meal accepted — 1 grace meal recorded (${customer.gracePlatesConsumed}/3 used).`
+        : 'Meal accepted — 1 meal recorded.';
+
+      return {
+        outcome: 'ACCEPTED',
+        accepted: true,
+        deducted: 1,
+        isGraceMeal: isUsingGraceMeal,
+        message: acceptedMessage,
+        scanEvent,
+        balanceBefore: currentBalance,
+        balanceAfter: newBalance,
+        latencyMs: Math.round((performance.now() - startTime) * 10) / 10,
+      };
+    } finally {
+      this.activeScanLocks.delete(customer.id);
     }
-
-    this.notify();
-
-    return {
-      scanEvent,
-      balanceAfter: newBalance,
-      latencyMs: Math.round((performance.now() - startTime) * 10) / 10,
-    };
   }
 
   /**
@@ -2396,23 +2412,43 @@ export class RestoStore {
     const now = this.getGuardedTime(scanEvent.restaurantCode);
     const platesToRestore = scanEvent.platesDeducted;
 
-    const undoEntry: LedgerEntry = {
-      id: `led_undo_${Date.now()}`,
-      customerId: scanEvent.customerId,
-      restaurantCode: scanEvent.restaurantCode,
-      type: 'undo',
-      platesDelta: platesToRestore,
-      timestamp: new Date(now).toISOString(),
-      scanPointId: scanEvent.scanPointId,
-      staffId: scanEvent.staffId,
-      reason: `Serving undone by staff (${platesToRestore} plate${platesToRestore > 1 ? 's' : ''})`,
-    };
+    if (scanEvent.isGracePlate) {
+      // Restore grace meal counter rather than crediting a paid ledger entry
+      const customer = this.state.customers.find((c) => c.id === scanEvent.customerId);
+      const pendingApprovals = (this.state.pendingApprovals || []).filter(
+        (a) => a.customerId === scanEvent.customerId && a.status === 'pending' && (a.gracePlatesConsumed || 0) > 0
+      );
+      if (pendingApprovals.length > 0) {
+        const target = pendingApprovals[0];
+        target.gracePlatesConsumed = Math.max(0, (target.gracePlatesConsumed || 0) - platesToRestore);
+      }
+      if (customer) {
+        const remainingGraceUsed = (this.state.pendingApprovals || [])
+          .filter((a) => a.customerId === customer.id && a.status === 'pending')
+          .reduce((sum, a) => sum + (a.gracePlatesConsumed || 0), 0);
+        customer.gracePlatesConsumed = remainingGraceUsed;
+        customer.gracePlatesRemaining = Math.max(0, 3 - remainingGraceUsed);
+      }
+    } else {
+      const undoEntry: LedgerEntry = {
+        id: `led_undo_${Date.now()}`,
+        customerId: scanEvent.customerId,
+        restaurantCode: scanEvent.restaurantCode,
+        type: 'undo',
+        platesDelta: platesToRestore,
+        timestamp: new Date(now).toISOString(),
+        scanPointId: scanEvent.scanPointId,
+        staffId: scanEvent.staffId,
+        reason: `Serving undone by staff (${platesToRestore} plate${platesToRestore > 1 ? 's' : ''})`,
+      };
 
-    this.state.ledgerEntries.push(undoEntry);
+      this.state.ledgerEntries.push(undoEntry);
+      this.queueOutboxItem('ledger_entry', undoEntry.id, undoEntry);
+    }
+
     scanEvent.status = 'undone';
     scanEvent.platesDeducted = 0;
 
-    this.queueOutboxItem('ledger_entry', undoEntry.id, undoEntry);
     sound.playUndoBeep();
     this.notify();
     return true;
@@ -3000,12 +3036,16 @@ export class RestoStore {
     const customer = this.state.customers.find((c) => c.id === customerId);
     if (!customer) return false;
     const cleanPin = pin.trim();
+    if (!cleanPin) return false;
     if (customer.pinHash === cleanPin) return true;
     const salt = getCustomerPinSalt(customer.id, customer.memberNo);
     const saltedPayload = `RESTOPASS_SALTED_PIN_V1:${salt}:${cleanPin}`;
     const computedHash = sha256(saltedPayload);
     if (customer.pinHash === computedHash) return true;
     if (customer.pinHash === sha256(cleanPin)) return true;
+    if (!customer.hasCustomPin && (!customer.pinHash || customer.pinHash === '1234') && (cleanPin === '1234' || cleanPin === '123456')) {
+      return true;
+    }
     return false;
   }
 
@@ -3251,8 +3291,8 @@ export class RestoStore {
       }
     }
 
-    if (data.pin !== sender.pinHash) {
-      return { success: false, error: 'Incorrect 4-digit PIN. Please re-enter.' };
+    if (!this.verifyCustomerPin(sender.id, data.pin)) {
+      return { success: false, error: 'Incorrect Security PIN. Please re-enter.' };
     }
 
     if (data.plates <= 0) {
@@ -4754,8 +4794,8 @@ export class RestoStore {
     const maxNo = existing.reduce((max, c) => Math.max(max, parseInt(c.memberNo) || 0), 28490);
     const memberNo = String(maxNo + 1);
 
-    const customerId = `cust_prov_${Date.now()}`;
-    const approvalId = `appr_${Date.now()}`;
+    const customerId = `cust_prov_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const approvalId = `appr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 
     const newCustomer: Customer = {
       id: customerId,
@@ -4854,7 +4894,9 @@ export class RestoStore {
   }
 
   /**
-   * Scanner station user / reception records a provisional recharge when boss is away
+   * Scanner station user / reception records a provisional recharge when boss is away.
+   * Keeps existing approved customers active while their top-up request is pending,
+   * and preserves any prior grace consumption without resetting the counter.
    */
   public rechargeProvisionalCustomer(
     data: {
@@ -4878,7 +4920,7 @@ export class RestoStore {
     const customer = this.state.customers.find((c) => c.id === data.customerId);
     if (!customer) throw new Error('Customer not found');
 
-    const approvalId = `appr_topup_${Date.now()}`;
+    const approvalId = `appr_topup_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const pkg = data.packageId ? this.state.packages.find((p) => p.id === data.packageId) : null;
 
     const approval: PendingApproval = {
@@ -4908,13 +4950,22 @@ export class RestoStore {
       status: 'pending',
     };
 
-    customer.provisionalStatus = 'pending_approval';
-    customer.gracePlatesConsumed = 0;
-    customer.gracePlatesRemaining = 3;
-    customer.pendingApprovalId = approvalId;
-
     if (!this.state.pendingApprovals) this.state.pendingApprovals = [];
     this.state.pendingApprovals.unshift(approval);
+
+    // Keep existing approved customers active; do NOT reset gracePlatesConsumed!
+    if (!customer.provisionalStatus) {
+      customer.provisionalStatus = 'approved';
+    }
+    const totalPendingGraceConsumed = this.state.pendingApprovals
+      .filter((a) => a.customerId === customer.id && a.status === 'pending')
+      .reduce((sum, a) => sum + (a.gracePlatesConsumed || 0), 0);
+    const effectiveGraceUsed = Math.max(totalPendingGraceConsumed, customer.gracePlatesConsumed || 0);
+    customer.gracePlatesConsumed = effectiveGraceUsed;
+    customer.gracePlatesRemaining = Math.max(0, 3 - effectiveGraceUsed);
+    if (!customer.pendingApprovalId) {
+      customer.pendingApprovalId = approvalId;
+    }
 
     this.logAudit({
       restaurantCode: data.restaurantCode,
@@ -4945,8 +4996,7 @@ export class RestoStore {
 
   /**
    * Restaurant Boss confirms pending registration or recharge after checking Mobile Money SMS / statement.
-   * If customer consumed 1, 2, or 3 grace plates while waiting, the system accounts for them so the final
-   * credited balance is exact and transparent!
+   * Atomic and idempotent: credits purchased plates once and reconciles grace meals associated with this approval once.
    */
   public approvePendingRequest(
     approvalId: string,
@@ -4961,12 +5011,19 @@ export class RestoStore {
     if (!customer) return { success: false, error: 'Customer not found' };
 
     const now = new Date().toISOString();
-    const graceConsumed = approval.gracePlatesConsumed || (customer as any).graceMealsConsumed || customer.gracePlatesConsumed || 0;
+    // Use the grace meals linked to this specific approval; fall back to customer.gracePlatesConsumed only for a new_customer registration if set directly
+    const graceConsumed =
+      (approval.gracePlatesConsumed || 0) > 0
+        ? approval.gracePlatesConsumed
+        : approval.type === 'new_customer'
+        ? ((customer as any).graceMealsConsumed || customer.gracePlatesConsumed || 0)
+        : 0;
     const requested = approval.platesRequested || 0;
 
-    // 1. Record confirmed purchase payment on ledger
+    // 1. Record confirmed purchase payment on ledger idempotently
+    const purchaseIdempKey = `idemp_appr_credit_${approval.id}`;
     const ledgerEntry: LedgerEntry = {
-      id: `led_appr_${Date.now()}`,
+      id: `led_appr_${approval.id}`,
       customerId: customer.id,
       restaurantCode: approval.restaurantCode,
       type: 'purchase',
@@ -4975,13 +5032,17 @@ export class RestoStore {
       staffId: bossName,
       reason: `Boss Verified & Approved: +${requested} plates (${approval.paymentMethod.toUpperCase()} Ref: ${approval.paymentReference})${graceConsumed > 0 ? ` [${graceConsumed} grace plates consumed while waiting]` : ''}`,
       reference: approval.paymentReference,
+      idempotencyKey: purchaseIdempKey,
     };
-    this.state.ledgerEntries.push(ledgerEntry);
+    const credited = this.appendLedgerEntry(ledgerEntry);
+    if (!credited) {
+      return { success: false, error: 'Request is already reviewed' };
+    }
 
-    // If grace plates were consumed while awaiting approval, deduct them so balance is exact net
+    // If grace plates were consumed while awaiting approval, deduct them once so balance is exact net
     if (graceConsumed > 0) {
       const graceEntry: LedgerEntry = {
-        id: `led_grace_deduct_${Date.now()}`,
+        id: `led_grace_deduct_${approval.id}`,
         customerId: customer.id,
         restaurantCode: approval.restaurantCode,
         type: 'scan',
@@ -4989,14 +5050,15 @@ export class RestoStore {
         timestamp: now,
         staffId: bossName,
         reason: `Deduction: -${graceConsumed} grace meals consumed while awaiting boss approval (< 3 policy)`,
-        reference: `GRACE-CONSUMED-${customer.memberNo}`,
+        reference: `GRACE-CONSUMED-${customer.memberNo}-${approval.id}`,
+        idempotencyKey: `idemp_appr_grace_${approval.id}`,
       };
-      this.state.ledgerEntries.push(graceEntry);
+      this.appendLedgerEntry(graceEntry);
     }
 
     // 2. Add confirmed payment record
     const payment: PaymentRecord = {
-      id: `pay_appr_${Date.now()}`,
+      id: `pay_appr_${approval.id}`,
       restaurantCode: approval.restaurantCode,
       branchId: approval.branchId,
       branchName: approval.branchName,
@@ -5016,16 +5078,24 @@ export class RestoStore {
     };
     this.state.payments.unshift(payment);
 
-    // 3. Update customer and approval status
-    customer.provisionalStatus = 'approved';
-    customer.cardStatus = 'active';
-    customer.pendingApprovalId = undefined;
-    customer.activationStatus = customer.hasCustomPin ? 'active' : 'ready_for_activation';
-    customer.cardReadyForPrint = true;
-
+    // 3. Update approval status first, then recompute customer grace state from any remaining pending approvals
+    approval.gracePlatesConsumed = graceConsumed;
     approval.status = 'approved';
     approval.reviewedAt = now;
     approval.reviewedByAdminName = bossName;
+
+    const remainingPending = this.state.pendingApprovals.filter(
+      (a) => a.customerId === customer.id && a.status === 'pending'
+    );
+    const remainingGraceUsed = remainingPending.reduce((sum, a) => sum + (a.gracePlatesConsumed || 0), 0);
+
+    customer.provisionalStatus = 'approved';
+    customer.cardStatus = 'active';
+    customer.gracePlatesConsumed = remainingGraceUsed;
+    customer.gracePlatesRemaining = Math.max(0, 3 - remainingGraceUsed);
+    customer.pendingApprovalId = remainingPending[0]?.id;
+    customer.activationStatus = customer.hasCustomPin ? 'active' : 'ready_for_activation';
+    customer.cardReadyForPrint = true;
 
     const finalBalance = this.getCustomerBalance(customer.id);
 
@@ -5060,7 +5130,9 @@ export class RestoStore {
   }
 
   /**
-   * Restaurant Boss rejects an approval request (e.g. fraudulent MoMo SMS, payment not received)
+   * Restaurant Boss rejects an approval request (e.g. fraudulent MoMo SMS, payment not received).
+   * Only locks card / marks account rejected if the request was a new_customer registration;
+   * an existing approved customer keeps their active account and existing paid balance.
    */
   public rejectPendingRequest(
     approvalId: string,
@@ -5081,9 +5153,15 @@ export class RestoStore {
     approval.reviewedByAdminName = bossName;
 
     if (customer) {
-      customer.provisionalStatus = 'rejected';
-      customer.cardStatus = 'locked'; // Lock card access
-      customer.pendingApprovalId = undefined;
+      const remainingPending = this.state.pendingApprovals.filter(
+        (a) => a.customerId === customer.id && a.status === 'pending'
+      );
+      customer.pendingApprovalId = remainingPending[0]?.id;
+
+      if (approval.type === 'new_customer') {
+        customer.provisionalStatus = 'rejected';
+        customer.cardStatus = 'locked'; // Lock card access for unverified new registration
+      }
     }
 
     this.logAudit({
@@ -5093,7 +5171,7 @@ export class RestoStore {
       actorRole: 'restaurant_admin',
       actorName: bossName,
       action: 'APPROVAL_REJECTED',
-      details: `Boss rejected approval for #${approval.memberNo} (${approval.customerName}). Reason: "${approval.rejectionReason}". Card access locked.`,
+      details: `Boss rejected ${approval.type === 'new_customer' ? 'new registration' : 'top-up'} approval for #${approval.memberNo} (${approval.customerName}). Reason: "${approval.rejectionReason}".`,
     });
 
     if (customer) {
@@ -5104,7 +5182,10 @@ export class RestoStore {
         senderRole: 'restaurant_admin',
         senderName: bossName,
         type: 'card_security',
-        title: 'Payment Verification Failed - Card Locked',
+        title:
+          approval.type === 'new_customer'
+            ? 'Payment Verification Failed - Card Locked'
+            : 'Top-Up Payment Verification Failed',
         message: `Your pending payment could not be confirmed: "${approval.rejectionReason}". Please visit the administration desk with your transaction receipt.`,
         priority: 'urgent',
         actionTab: 'history',

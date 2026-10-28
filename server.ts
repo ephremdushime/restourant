@@ -2058,23 +2058,39 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 // ----------------------------------------------------
 async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
+  let viteLoaded = false;
 
   if (!isProduction) {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    app.use(express.static(path.resolve(process.cwd(), 'dist')));
+    try {
+      const { createServer: createViteServer } = await import('vite');
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+      viteLoaded = true;
+      console.log('[Server Authority] Vite development middleware active');
+    } catch (viteErr: any) {
+      console.warn('[Server Authority] Vite middleware unavailable, activating resilient static SPA server:', viteErr?.message || viteErr);
+    }
+  }
+
+  if (isProduction || !viteLoaded) {
+    const staticDir = fs.existsSync(path.resolve(process.cwd(), 'dist'))
+      ? path.resolve(process.cwd(), 'dist')
+      : process.cwd();
+    app.use(express.static(staticDir));
     app.get('*', (_req, res) => {
-      res.sendFile(path.resolve(process.cwd(), 'dist', 'index.html'));
+      const htmlFile = fs.existsSync(path.join(staticDir, 'index.html'))
+        ? path.join(staticDir, 'index.html')
+        : path.resolve(process.cwd(), 'index.html');
+      res.sendFile(htmlFile);
     });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[RestoPass Authority] Hardened Full-Stack Server listening on port ${PORT}`);
+    console.log(`[RestoPass Authority] Access the application in browser at: http://localhost:${PORT}`);
   });
 }
 
