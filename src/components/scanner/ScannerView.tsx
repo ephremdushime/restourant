@@ -483,20 +483,42 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
               <span>{soundEnabled ? `${Math.round(soundVolume * 100)}%` : 'Muted'}</span>
             </button>
             {soundEnabled && (
-              <input
-                type="range"
-                min={0.1}
-                max={1}
-                step={0.05}
-                value={soundVolume}
-                onChange={(e) => {
-                  const v = parseFloat(e.target.value);
-                  sound.setVolume(v);
-                  setSoundVolume(v);
-                }}
-                aria-label="Scanner alert volume"
-                className="w-16 accent-emerald-500 cursor-pointer"
-              />
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="range"
+                  min={0.1}
+                  max={1}
+                  step={0.05}
+                  value={soundVolume}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    sound.setVolume(v);
+                    setSoundVolume(v);
+                  }}
+                  onMouseUp={() => sound.playSuccessSound(`preview_${Date.now()}`)}
+                  onTouchEnd={() => sound.playSuccessSound(`preview_${Date.now()}`)}
+                  aria-label="Scanner alert volume"
+                  className="w-14 accent-emerald-500 cursor-pointer"
+                />
+                <div className="flex items-center gap-1 bg-slate-950 p-0.5 rounded-lg border border-slate-800 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => sound.playSuccessSound(`manual_test_ok_${Date.now()}`)}
+                    className="px-1.5 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 text-[10px] font-bold border border-emerald-700/60 transition-colors cursor-pointer"
+                    title="Test Loud Success Chime (1760Hz -> 2637Hz)"
+                  >
+                    ✓ Chime
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => sound.playFailureSound(`manual_test_fail_${Date.now()}`)}
+                    className="px-1.5 py-0.5 rounded bg-rose-950/80 hover:bg-rose-900 text-rose-300 text-[10px] font-bold border border-rose-700/60 transition-colors cursor-pointer"
+                    title="Test Loud Rejection Alarm (BUZZ-BUZZ)"
+                  >
+                    ✕ Buzz
+                  </button>
+                </div>
+              </div>
             )}
           </div>
 

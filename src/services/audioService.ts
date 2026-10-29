@@ -1,18 +1,21 @@
 /**
  * RestoPass Central Scanner & POS Sound Service (Web Audio API)
- * Provides two distinct, unmistakable scanner station sounds:
- *  - Sound 1: playSuccessSound() — Short, bright confirmation tone after a meal deduction succeeds.
- *  - Sound 2: playFailureSound() — Distinct, lower-pitched warning tone whenever a scan is rejected.
- * Includes volume control, preloading, browser autoplay unlock detection, and event deduplication.
+ * Provides two distinct, loud, unmistakable scanner station sounds:
+ *  - Sound 1: playSuccessSound() — Loud, bright, ascending dual-tone confirmation chime (1760Hz -> 2637Hz)
+ *              played after a meal deduction succeeds. Cuts cleanly through noisy cafeteria crowds.
+ *  - Sound 2: playFailureSound() — Loud, deep, abrasive dual-pulse rejection alarm ("BUZZ-BUZZ", 160Hz+180Hz)
+ *              played whenever a scan is denied, expired, or invalid.
+ * Includes dynamics compression/limiting, volume control (default 100%), preloading, and event deduplication.
  */
 
 class AudioService {
   private ctx: AudioContext | null = null;
   private soundEnabled = true;
-  private volume = 0.85; // 0.0 to 1.0 (default 85% for busy canteen environments)
+  private volume = 1.0; // 0.0 to 1.0 (default 100% full volume for busy restaurant/canteen dining halls)
   private audioUnlocked = false;
   private lastPlayedEventKey: string | null = null;
   private lastPlayedTimestamp = 0;
+  private masterCompressor: DynamicsCompressorNode | null = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -55,6 +58,28 @@ class AudioService {
       }
     }
     return this.ctx;
+  }
+
+  /**
+   * Routes all sounds through a dedicated dynamics compressor / limiter.
+   * Allows sounds to play at maximum acoustic punch and volume without digital clipping or distortion.
+   */
+  private getMasterOutput(ctx: AudioContext): AudioNode {
+    if (!this.masterCompressor || this.masterCompressor.context !== ctx) {
+      try {
+        const comp = ctx.createDynamicsCompressor();
+        comp.threshold.setValueAtTime(-6, ctx.currentTime);
+        comp.knee.setValueAtTime(6, ctx.currentTime);
+        comp.ratio.setValueAtTime(12, ctx.currentTime);
+        comp.attack.setValueAtTime(0.002, ctx.currentTime);
+        comp.release.setValueAtTime(0.12, ctx.currentTime);
+        comp.connect(ctx.destination);
+        this.masterCompressor = comp;
+      } catch {
+        return ctx.destination;
+      }
+    }
+    return this.masterCompressor || ctx.destination;
   }
 
   /**
@@ -130,7 +155,7 @@ class AudioService {
   private shouldSuppressDuplicate(eventKey?: string): boolean {
     const now = Date.now();
     if (eventKey) {
-      if (this.lastPlayedEventKey === eventKey) {
+      if (this.lastPlayedEventKey === eventKey && now - this.lastPlayedTimestamp < 400) {
         return true;
       }
       this.lastPlayedEventKey = eventKey;
@@ -142,8 +167,8 @@ class AudioService {
 
   /**
    * Sound 1 — Successful scan (ACCEPTED)
-   * One short, bright, clearly audible confirmation tone played ONLY after meal deduction succeeds.
-   * Identical for both physical card and dashboard QR scans.
+   * Loud, bright, crystal-clear commercial POS confirmation chime.
+   * Dual ascending note (1760Hz -> 2637Hz) with rich harmonic overtone and acoustic presence.
    */
   public playSuccessSound(eventKey?: string): boolean {
     if (!this.soundEnabled || this.volume <= 0) return false;
@@ -153,24 +178,62 @@ class AudioService {
       const ctx = this.getContext();
       if (!ctx) return false;
       const now = ctx.currentTime;
-      const peakGain = Math.max(0.05, 0.38 * this.volume);
+      const out = this.getMasterOutput(ctx);
 
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
+      const masterGain = ctx.createGain();
+      const peak = Math.max(0.1, 0.92 * this.volume);
+      masterGain.gain.setValueAtTime(peak, now);
+      masterGain.connect(out);
 
-      osc.type = 'sine';
-      // Bright, unmistakable high-clarity acceptance tone (1850Hz -> 2150Hz)
-      osc.frequency.setValueAtTime(1850, now);
-      osc.frequency.setValueAtTime(2150, now + 0.045);
+      // --- Note 1: First bright chime (1760 Hz / A6) ---
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = 'triangle'; // Richer presence than pure sine on mobile/laptop speakers
+      osc1.frequency.setValueAtTime(1760, now);
+      gain1.gain.setValueAtTime(0.75, now);
+      gain1.gain.exponentialRampToValueAtTime(0.01, now + 0.08);
+      osc1.connect(gain1);
+      gain1.connect(masterGain);
+      osc1.start(now);
+      osc1.stop(now + 0.085);
 
-      gain.gain.setValueAtTime(peakGain, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.13);
+      // Sub-harmonic warmth for speaker cone punch
+      const sub1 = ctx.createOscillator();
+      const subGain1 = ctx.createGain();
+      sub1.type = 'sine';
+      sub1.frequency.setValueAtTime(880, now);
+      subGain1.gain.setValueAtTime(0.45, now);
+      subGain1.gain.exponentialRampToValueAtTime(0.01, now + 0.08);
+      sub1.connect(subGain1);
+      subGain1.connect(masterGain);
+      sub1.start(now);
+      sub1.stop(now + 0.085);
 
-      osc.connect(gain);
-      gain.connect(ctx.destination);
+      // --- Note 2: Higher celebratory resolution chime (2637 Hz / E7) ---
+      const note2Start = now + 0.065;
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.type = 'triangle';
+      osc2.frequency.setValueAtTime(2637, note2Start);
+      gain2.gain.setValueAtTime(0.85, note2Start);
+      gain2.gain.exponentialRampToValueAtTime(0.001, note2Start + 0.16);
+      osc2.connect(gain2);
+      gain2.connect(masterGain);
+      osc2.start(note2Start);
+      osc2.stop(note2Start + 0.17);
 
-      osc.start(now);
-      osc.stop(now + 0.13);
+      // Crystal shimmer layer on Note 2
+      const shimmer = ctx.createOscillator();
+      const shimmerGain = ctx.createGain();
+      shimmer.type = 'sine';
+      shimmer.frequency.setValueAtTime(3520, note2Start);
+      shimmerGain.gain.setValueAtTime(0.35, note2Start);
+      shimmerGain.gain.exponentialRampToValueAtTime(0.001, note2Start + 0.14);
+      shimmer.connect(shimmerGain);
+      shimmerGain.connect(masterGain);
+      shimmer.start(note2Start);
+      shimmer.stop(note2Start + 0.15);
+
       return true;
     } catch {
       return false;
@@ -179,7 +242,9 @@ class AudioService {
 
   /**
    * Sound 2 — Failed or rejected scan (REJECTED)
-   * One distinct, lower-pitched, unmistakable warning tone played once whenever a scan is rejected.
+   * Loud, urgent, unmistakably distinct dual-pulse rejection buzzer ("BUZZ-BUZZ").
+   * Detuned discordant sawtooth waves (160Hz + 178Hz) with sharp descending pitch that
+   * contrast completely with the high melodic chime.
    */
   public playFailureSound(eventKey?: string): boolean {
     if (!this.soundEnabled || this.volume <= 0) return false;
@@ -189,21 +254,65 @@ class AudioService {
       const ctx = this.getContext();
       if (!ctx) return false;
       const now = ctx.currentTime;
-      const peakGain = Math.max(0.05, 0.42 * this.volume);
+      const out = this.getMasterOutput(ctx);
 
-      // Low-pitched sawtooth warning buzzer (260Hz -> 195Hz)
-      [0, 0.15].forEach((delay, idx) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(idx === 0 ? 260 : 195, now + delay);
-        gain.gain.setValueAtTime(peakGain, now + delay);
-        gain.gain.exponentialRampToValueAtTime(0.008, now + delay + 0.12);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(now + delay);
-        osc.stop(now + delay + 0.12);
+      const masterGain = ctx.createGain();
+      const peak = Math.max(0.1, 0.95 * this.volume);
+      masterGain.gain.setValueAtTime(peak, now);
+      masterGain.connect(out);
+
+      // Two assertive, dissonant reject pulses: Pulse 1 at t=0, Pulse 2 at t=0.12s
+      const pulses = [0, 0.12];
+      pulses.forEach((pulseOffset) => {
+        const pulseStart = now + pulseOffset;
+        const pulseDuration = 0.095;
+
+        // Primary harsh buzzer oscillator (sawtooth at 160Hz sliding down)
+        const oscA = ctx.createOscillator();
+        const gainA = ctx.createGain();
+        oscA.type = 'sawtooth';
+        oscA.frequency.setValueAtTime(160, pulseStart);
+        oscA.frequency.linearRampToValueAtTime(130, pulseStart + pulseDuration);
+
+        // Secondary detuned oscillator creating abrasive dissonance (178Hz sliding down)
+        const oscB = ctx.createOscillator();
+        const gainB = ctx.createGain();
+        oscB.type = 'sawtooth';
+        oscB.frequency.setValueAtTime(178, pulseStart);
+        oscB.frequency.linearRampToValueAtTime(145, pulseStart + pulseDuration);
+
+        // Low rumble for acoustic weight on speakers
+        const subRumble = ctx.createOscillator();
+        const subGain = ctx.createGain();
+        subRumble.type = 'square';
+        subRumble.frequency.setValueAtTime(95, pulseStart);
+
+        gainA.gain.setValueAtTime(0.55, pulseStart);
+        gainA.gain.exponentialRampToValueAtTime(0.01, pulseStart + pulseDuration);
+
+        gainB.gain.setValueAtTime(0.45, pulseStart);
+        gainB.gain.exponentialRampToValueAtTime(0.01, pulseStart + pulseDuration);
+
+        subGain.gain.setValueAtTime(0.3, pulseStart);
+        subGain.gain.exponentialRampToValueAtTime(0.01, pulseStart + pulseDuration);
+
+        oscA.connect(gainA);
+        oscB.connect(gainB);
+        subRumble.connect(subGain);
+
+        gainA.connect(masterGain);
+        gainB.connect(masterGain);
+        subGain.connect(masterGain);
+
+        oscA.start(pulseStart);
+        oscB.start(pulseStart);
+        subRumble.start(pulseStart);
+
+        oscA.stop(pulseStart + pulseDuration);
+        oscB.stop(pulseStart + pulseDuration);
+        subRumble.stop(pulseStart + pulseDuration);
       });
+
       return true;
     } catch {
       return false;
@@ -225,7 +334,7 @@ class AudioService {
   }
 
   /**
-   * Ascending quick double beep - Second plate added
+   * Ascending quick triple beep - Second plate added (1760Hz -> 2200Hz -> 2793Hz)
    */
   public playSecondPlateBeep() {
     if (!this.soundEnabled || this.volume <= 0) return;
@@ -234,32 +343,28 @@ class AudioService {
       if (!ctx) return;
 
       const now = ctx.currentTime;
-      const peakGain = Math.max(0.05, 0.32 * this.volume);
+      const out = this.getMasterOutput(ctx);
+      const peak = Math.max(0.1, 0.85 * this.volume);
 
-      const osc1 = ctx.createOscillator();
-      const gain1 = ctx.createGain();
-      osc1.frequency.setValueAtTime(1700, now);
-      gain1.gain.setValueAtTime(peakGain, now);
-      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
-      osc1.connect(gain1);
-      gain1.connect(ctx.destination);
-      osc1.start(now);
-      osc1.stop(now + 0.06);
-
-      const osc2 = ctx.createOscillator();
-      const gain2 = ctx.createGain();
-      osc2.frequency.setValueAtTime(2300, now + 0.08);
-      gain2.gain.setValueAtTime(peakGain, now + 0.08);
-      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
-      osc2.connect(gain2);
-      gain2.connect(ctx.destination);
-      osc2.start(now + 0.08);
-      osc2.stop(now + 0.16);
+      const notes = [1760, 2200, 2793];
+      notes.forEach((freq, idx) => {
+        const start = now + idx * 0.055;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, start);
+        gain.gain.setValueAtTime(peak, start);
+        gain.gain.exponentialRampToValueAtTime(0.01, start + 0.05);
+        osc.connect(gain);
+        gain.connect(out);
+        osc.start(start);
+        osc.stop(start + 0.055);
+      });
     } catch {}
   }
 
   /**
-   * Descending double tone - Undo scan
+   * Descending double tone - Undo scan (1050Hz -> 580Hz)
    */
   public playUndoBeep() {
     if (!this.soundEnabled || this.volume <= 0) return;
@@ -267,27 +372,30 @@ class AudioService {
       const ctx = this.getContext();
       if (!ctx) return;
       const now = ctx.currentTime;
-      const peakGain = Math.max(0.05, 0.28 * this.volume);
+      const out = this.getMasterOutput(ctx);
+      const peak = Math.max(0.1, 0.80 * this.volume);
 
       const osc1 = ctx.createOscillator();
       const gain1 = ctx.createGain();
-      osc1.frequency.setValueAtTime(1200, now);
-      gain1.gain.setValueAtTime(peakGain, now);
-      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+      osc1.type = 'triangle';
+      osc1.frequency.setValueAtTime(1050, now);
+      gain1.gain.setValueAtTime(peak, now);
+      gain1.gain.exponentialRampToValueAtTime(0.01, now + 0.07);
       osc1.connect(gain1);
-      gain1.connect(ctx.destination);
+      gain1.connect(out);
       osc1.start(now);
-      osc1.stop(now + 0.08);
+      osc1.stop(now + 0.075);
 
       const osc2 = ctx.createOscillator();
       const gain2 = ctx.createGain();
-      osc2.frequency.setValueAtTime(750, now + 0.09);
-      gain2.gain.setValueAtTime(peakGain, now + 0.09);
-      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+      osc2.type = 'sawtooth';
+      osc2.frequency.setValueAtTime(580, now + 0.075);
+      gain2.gain.setValueAtTime(peak * 0.9, now + 0.075);
+      gain2.gain.exponentialRampToValueAtTime(0.01, now + 0.16);
       osc2.connect(gain2);
-      gain2.connect(ctx.destination);
-      osc2.start(now + 0.09);
-      osc2.stop(now + 0.18);
+      gain2.connect(out);
+      osc2.start(now + 0.075);
+      osc2.stop(now + 0.165);
     } catch {}
   }
 
@@ -307,7 +415,8 @@ class AudioService {
       const ctx = this.getContext();
       if (!ctx) return;
       const now = ctx.currentTime;
-      const peakGain = Math.max(0.05, 0.25 * this.volume);
+      const out = this.getMasterOutput(ctx);
+      const peak = Math.max(0.05, 0.45 * this.volume);
 
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -316,11 +425,11 @@ class AudioService {
       osc.frequency.setValueAtTime(523.25, now); // C5
       osc.frequency.setValueAtTime(783.99, now + 0.08); // G5
 
-      gain.gain.setValueAtTime(peakGain, now);
+      gain.gain.setValueAtTime(peak, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
 
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(out);
 
       osc.start(now);
       osc.stop(now + 0.28);

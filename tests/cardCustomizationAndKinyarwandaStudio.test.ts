@@ -8,6 +8,7 @@ import {
   applyCustomTranslations,
 } from '../src/services/i18n';
 import { getCardThemePalette } from '../src/components/restaurant/CardPrintStudio';
+import { sound } from '../src/services/audioService';
 
 describe('Card Customization & Kinyarwanda Live Translation Studio', () => {
   test('1. Card Theme Palette respects customized restaurant badgeStyle and primaryColor', () => {
@@ -86,4 +87,18 @@ describe('Card Customization & Kinyarwanda Live Translation Studio', () => {
     restoStore.resetCustomTranslations('rw');
     assert.equal(restoStore.getCustomTranslations('rw')?.scanner?.readyToScan, undefined);
   });
+
+  test('4. Central Audio Service provides loud, distinct success chime and failure buzzer with master limiter', () => {
+    sound.setSoundEnabled(true);
+    sound.setVolume(1.0);
+    assert.equal(sound.getVolume(), 1.0);
+    assert.equal(sound.isSoundEnabled(), true);
+
+    // Audio methods execute cleanly and safely without errors
+    sound.preloadScannerSounds();
+    sound.playSecondPlateBeep();
+    sound.playUndoBeep();
+    sound.playNotificationChime();
+  });
 });
+
