@@ -100,5 +100,22 @@ describe('Card Customization & Kinyarwanda Live Translation Studio', () => {
     sound.playUndoBeep();
     sound.playNotificationChime();
   });
+
+  test('5. Production clean state contains zero seed expenses, branches, staff users, or mock alerts', () => {
+    // Switch to production clean mode
+    restoStore.setDemoMode(false);
+    const prodState = restoStore.getState();
+
+    // Verify branches, stationUsers, expenses, notifications are clean
+    assert.equal(prodState.branches.length, 0, 'Production must not have mock branches');
+    assert.equal(prodState.stationUsers.length, 0, 'Production must not have mock staff users');
+    assert.equal(prodState.expenses.length, 0, 'Production must not have mock expenses');
+    assert.equal(prodState.notifications.length, 0, 'Production must not have mock notifications');
+    assert.equal(prodState.customers.length, 0, 'Production must not have mock customers');
+    assert.equal(prodState.ledgerEntries.length, 0, 'Production must not have mock ledger entries');
+
+    // Switch back to demo mode for test suite continuity
+    restoStore.setDemoMode(true);
+  });
 });
 

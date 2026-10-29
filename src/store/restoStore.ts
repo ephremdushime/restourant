@@ -96,6 +96,20 @@ const DEMO_SEED_SCAN_IDS = new Set(['scan_grace_init_1']);
 const DEMO_SEED_APPROVAL_IDS = new Set(['appr_init_1', 'appr_init_2']);
 const DEMO_SEED_SHIFT_IDS = new Set(['shift_rw01_morning_1']);
 const DEMO_SEED_SESSION_IDS = new Set(['sess_rw01_sp1', 'sess_rw01_sp2']);
+const DEMO_SEED_EXPENSE_IDS = new Set(['exp_rw01_1', 'exp_rw01_2']);
+const DEMO_SEED_BRANCH_IDS = new Set([
+  'br_rw01_main',
+  'br_rw01_east',
+  'br_rw01_huye',
+  'br_rw02_main',
+  'br_rw02_heights',
+]);
+const DEMO_SEED_USER_IDS = new Set([
+  'usr_rw01_1',
+  'usr_rw01_2',
+  'usr_rw01_3',
+  'usr_rw02_1',
+]);
 
 // Initial plan templates
 const INITIAL_PLANS: Plan[] = [
@@ -1402,8 +1416,8 @@ function getProductionCleanState(): AppState {
     packages: demo.packages.filter((p) => p.restaurantCode === 'RW01'),
     menuItems: demo.menuItems.filter((m) => m.restaurantCode === 'RW01'),
     payments: [],
-    branches: demo.branches.filter((b) => b.restaurantCode === 'RW01'),
-    stationUsers: demo.stationUsers.filter((u) => u.restaurantCode === 'RW01'),
+    branches: [],
+    stationUsers: [],
     pendingApprovals: [],
     shifts: [],
     cashierSessions: [],
@@ -1782,12 +1796,12 @@ export class RestoStore {
     mergeCollectionById(
       'branches',
       serverState.branches,
-      (item) => isProdClean && DEMO_SEED_RESTO_CODES.has(item.restaurantCode)
+      (item) => isProdClean && (DEMO_SEED_BRANCH_IDS.has(item.id) || DEMO_SEED_RESTO_CODES.has(item.restaurantCode))
     );
     mergeCollectionById(
       'stationUsers',
       serverState.stationUsers,
-      (item) => isProdClean && DEMO_SEED_RESTO_CODES.has(item.restaurantCode)
+      (item) => isProdClean && (DEMO_SEED_USER_IDS.has(item.id) || DEMO_SEED_RESTO_CODES.has(item.restaurantCode))
     );
     mergeCollectionById(
       'scanPoints',
@@ -1812,7 +1826,11 @@ export class RestoStore {
     );
     mergeCollectionById('customerSubscriptions', serverState.customerSubscriptions);
     mergeCollectionById('studentSubscriptionPayments', serverState.studentSubscriptionPayments);
-    mergeCollectionById('expenses', serverState.expenses);
+    mergeCollectionById(
+      'expenses',
+      serverState.expenses,
+      (item) => isProdClean && (DEMO_SEED_EXPENSE_IDS.has(item.id) || DEMO_SEED_RESTO_CODES.has(item.restaurantCode))
+    );
     mergeCollectionById('activationRequests', serverState.activationRequests);
     mergeCollectionById('pinRecoveryRequests', serverState.pinRecoveryRequests);
     mergeCollectionById('plans', serverState.plans);
@@ -1902,10 +1920,10 @@ export class RestoStore {
             ? parsed.menuItems
             : baseState.menuItems,
           branches: Array.isArray(parsed.branches) && parsed.branches.length > 0
-            ? parsed.branches
+            ? (isDemo ? parsed.branches : parsed.branches.filter((b: any) => !DEMO_SEED_BRANCH_IDS.has(b.id) && !DEMO_SEED_RESTO_CODES.has(b.restaurantCode)))
             : baseState.branches,
           stationUsers: Array.isArray(parsed.stationUsers) && parsed.stationUsers.length > 0
-            ? parsed.stationUsers
+            ? (isDemo ? parsed.stationUsers : parsed.stationUsers.filter((u: any) => !DEMO_SEED_USER_IDS.has(u.id) && !DEMO_SEED_RESTO_CODES.has(u.restaurantCode)))
             : baseState.stationUsers,
           pendingApprovals: Array.isArray(parsed.pendingApprovals)
             ? (isDemo
@@ -1944,7 +1962,7 @@ export class RestoStore {
                   ))
             : baseState.notifications,
           expenses: Array.isArray(parsed.expenses)
-            ? (isDemo ? parsed.expenses : parsed.expenses.filter((e: any) => !DEMO_SEED_RESTO_CODES.has(e.restaurantCode)))
+            ? (isDemo ? parsed.expenses : parsed.expenses.filter((e: any) => !DEMO_SEED_EXPENSE_IDS.has(e.id) && !DEMO_SEED_RESTO_CODES.has(e.restaurantCode)))
             : baseState.expenses,
           studentSubscriptionSettings: parsed.studentSubscriptionSettings
             ? { ...baseState.studentSubscriptionSettings, ...parsed.studentSubscriptionSettings }
