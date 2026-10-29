@@ -747,6 +747,11 @@ export const CardFrontView: React.FC<CardFrontViewProps> = ({
                   ID: <span className="font-mono">{studentNo}</span>
                 </div>
               )}
+              {customer.studentProfile?.programme && (
+                <div className="text-[10.5px] text-slate-800 font-bold truncate">
+                  Class: <span className="font-semibold">{customer.studentProfile.programme}{customer.studentProfile.year ? ` (Yr ${customer.studentProfile.year})` : ''}</span>
+                </div>
+              )}
               <div className="text-[11px] text-slate-700 font-bold font-mono truncate">
                 Tel: {customer.phone}
               </div>

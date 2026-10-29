@@ -549,12 +549,12 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                       </div>
                       <div>
                         <label htmlFor="reg-programme" className="text-slate-200 font-semibold block mb-1 text-xs sm:text-sm">
-                          Programme / Faculty
+                          Class / Programme / Faculty
                         </label>
                         <input
                           id="reg-programme"
                           type="text"
-                          placeholder="e.g. Computer Science"
+                          placeholder="e.g. Class 3B or Computer Science (Yr 2)"
                           value={programme}
                           onChange={(e) => setProgramme(e.target.value)}
                           className="w-full py-2.5 px-3 rounded-xl bg-slate-900 border-2 border-slate-700 text-white text-sm placeholder-slate-500 focus:border-emerald-400 outline-hidden"
