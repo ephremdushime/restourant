@@ -398,23 +398,40 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
                     </div>
 
                     <div className="flex items-center gap-2 w-full sm:w-auto">
-                      <button
-                        onClick={() => {
-                          setSelectedApprovalToReject(appr);
-                          setRejectReason('Payment deposit not verified on Mobile Money statement');
-                        }}
-                        className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-rose-950 hover:text-rose-300 border border-slate-700 text-slate-300 font-semibold text-xs transition-colors cursor-pointer"
-                      >
-                        Reject
-                      </button>
+                      {appr.coSignStatus === 'pending_super_admin' ? (
+                        <div className="flex items-center gap-2 p-2.5 rounded-xl bg-indigo-950/90 border border-indigo-500/80 text-indigo-200 text-xs">
+                          <span className="font-bold text-amber-300">🛡️ Dual-Control Active:</span>
+                          <span>Boss approved. Forwarded to Super Admin for co-signing ({appr.platesRequested} plates).</span>
+                        </div>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => {
+                              setSelectedApprovalToReject(appr);
+                              setRejectReason('Payment deposit not verified on Mobile Money statement');
+                            }}
+                            className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-rose-950 hover:text-rose-300 border border-slate-700 text-slate-300 font-semibold text-xs transition-colors cursor-pointer"
+                          >
+                            Reject
+                          </button>
 
-                      <button
-                        onClick={() => handleConfirmApproval(appr)}
-                        className="flex-1 sm:flex-initial px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md transition-colors cursor-pointer flex items-center justify-center gap-2"
-                      >
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>Verify MoMo &amp; Confirm (+{appr.platesRequested} Plates)</span>
-                      </button>
+                          <button
+                            onClick={() => handleConfirmApproval(appr)}
+                            className={`flex-1 sm:flex-initial px-6 py-2.5 rounded-xl text-white font-bold text-xs shadow-md transition-colors cursor-pointer flex items-center justify-center gap-2 ${
+                              appr.platesRequested > 120
+                                ? 'bg-indigo-600 hover:bg-indigo-500'
+                                : 'bg-emerald-600 hover:bg-emerald-500'
+                            }`}
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                            <span>
+                              {appr.platesRequested > 120
+                                ? `Verify & Forward for Co-Sign (+${appr.platesRequested}p)`
+                                : `Verify MoMo & Confirm (+${appr.platesRequested} Plates)`}
+                            </span>
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 ) : (

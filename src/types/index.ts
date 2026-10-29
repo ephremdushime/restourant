@@ -33,6 +33,13 @@ export interface RestaurantTermsOverride extends Partial<PlanTerms> {
   effectiveFrom: string;
 }
 
+export interface PlateBundlePricing {
+  singlePlatePriceRwf: number; // e.g. 1,200 RWF (default standard single plate)
+  bundle15PlatesPriceRwf?: number; // e.g. 17,500 RWF (~1,166 RWF/plate)
+  bundle30PlatesPriceRwf?: number; // e.g. 33,000 RWF (1,100 RWF/plate)
+  bundle60PlatesPriceRwf?: number; // e.g. 60,000 RWF (1,000 RWF/plate - monthly standard)
+}
+
 export interface Restaurant {
   code: string; // e.g. RW01
   name: string;
@@ -46,6 +53,7 @@ export interface Restaurant {
   status: RestaurantStatus;
   planId: string;
   defaultPlatePriceRwf?: number;
+  bundlePricing?: PlateBundlePricing;
   welcomeMessage?: string;
   badgeStyle?: 'gold' | 'emerald' | 'blue' | 'dark';
   termsOverride?: RestaurantTermsOverride;
@@ -267,6 +275,11 @@ export interface PendingApproval {
   gracePlatesConsumed: number; // plates consumed before boss approved
   createdAt: string;
   status: ApprovalStatus;
+  requiresSuperAdminCoSign?: boolean; // Required for high-value liability (> 120 plates / 2 months)
+  coSignStatus?: 'not_required' | 'pending_super_admin' | 'co_signed' | 'rejected_super_admin';
+  coSignedAt?: string;
+  coSignedBySuperAdminName?: string;
+  coSignature?: string;
   reviewedAt?: string;
   reviewedByAdminName?: string;
   rejectionReason?: string;
@@ -352,6 +365,28 @@ export interface PaymentRecord {
   isProvisional?: boolean;
   approvalId?: string;
   timestamp: string;
+}
+
+export type ExpenseCategory =
+  | 'food_supplies'
+  | 'fuel_gas_charcoal'
+  | 'staff_wages'
+  | 'rent_utilities'
+  | 'packaging_logistics'
+  | 'other';
+
+export interface RestaurantExpense {
+  id: string;
+  restaurantCode: string;
+  category: ExpenseCategory;
+  categoryLabel?: string;
+  amountRwf: number;
+  description: string;
+  supplierName?: string;
+  receiptNumber?: string;
+  recordedByRole: string;
+  recordedByName: string;
+  recordedAt: string; // ISO date
 }
 
 export interface SubscriptionPayment {

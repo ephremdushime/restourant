@@ -38,6 +38,8 @@ interface AuthPortalViewProps {
   language: Language;
   onLoginSuccess: (role: UserRole, userLabel: string) => void;
   onRoleSelect: (role: UserRole) => void;
+  isDemoMode?: boolean;
+  onToggleDemoMode?: () => void;
 }
 
 export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
@@ -45,6 +47,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   language,
   onLoginSuccess,
   onRoleSelect,
+  isDemoMode = false,
 }) => {
   const t = translations[language] || translations.en;
   const state = restoStore.getState();
@@ -58,7 +61,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   const [username, setUsername] = useState('boss@example.local');
   const [password, setPassword] = useState('');
   const [pin, setPin] = useState('');
-  const [phoneOrMember, setPhoneOrMember] = useState('28491');
+  const [phoneOrMember, setPhoneOrMember] = useState(isDemoMode ? '28491' : '');
   const [showPassword, setShowPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -102,13 +105,13 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
         setSelectedBranchId(branches[0].id);
       }
     } else if (activeRole === 'customer') {
-      setPhoneOrMember('+250 788 123 456');
+      setPhoneOrMember(isDemoMode ? '+250 788 123 456' : '');
       setPin('');
     } else if (activeRole === 'super_admin') {
       setUsername('superadmin@example.local');
       setPassword('');
     }
-  }, [activeRole, selectedRestoCode]);
+  }, [activeRole, selectedRestoCode, isDemoMode]);
 
   // Non-SMS Customer Activation & Recovery Modal States
   const [showActivationModal, setShowActivationModal] = useState(false);
@@ -437,60 +440,62 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           </p>
         </div>
 
-        {/* Portal Role Switcher Tabs */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1 bg-slate-950 rounded-2xl border border-slate-800 text-xs font-semibold">
-          <button
-            type="button"
-            onClick={() => handleRoleTabClick('restaurant_admin')}
-            className={`p-2.5 rounded-xl flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
-              activeRole === 'restaurant_admin'
-                ? 'bg-emerald-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-            }`}
-          >
-            <Server className="w-4 h-4" />
-            <span className="text-[11px] leading-tight text-center">Boss Admin</span>
-          </button>
+        {/* Portal Role Switcher Tabs (Only visible in Demo Mode; in Production each portal is strictly isolated to its role) */}
+        {isDemoMode && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1 bg-slate-950 rounded-2xl border border-slate-800 text-xs font-semibold">
+            <button
+              type="button"
+              onClick={() => handleRoleTabClick('restaurant_admin')}
+              className={`p-2.5 rounded-xl flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
+                activeRole === 'restaurant_admin'
+                  ? 'bg-emerald-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+              }`}
+            >
+              <Server className="w-4 h-4" />
+              <span className="text-[11px] leading-tight text-center">Boss Admin</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => handleRoleTabClick('stand_staff')}
-            className={`p-2.5 rounded-xl flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
-              activeRole === 'stand_staff'
-                ? 'bg-emerald-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-            }`}
-          >
-            <QrCode className="w-4 h-4" />
-            <span className="text-[11px] leading-tight text-center">Stand POS</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => handleRoleTabClick('stand_staff')}
+              className={`p-2.5 rounded-xl flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
+                activeRole === 'stand_staff'
+                  ? 'bg-emerald-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+              }`}
+            >
+              <QrCode className="w-4 h-4" />
+              <span className="text-[11px] leading-tight text-center">Stand POS</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => handleRoleTabClick('customer')}
-            className={`p-2.5 rounded-xl flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
-              activeRole === 'customer'
-                ? 'bg-emerald-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-            }`}
-          >
-            <Smartphone className="w-4 h-4" />
-            <span className="text-[11px] leading-tight text-center">Customer</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => handleRoleTabClick('customer')}
+              className={`p-2.5 rounded-xl flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
+                activeRole === 'customer'
+                  ? 'bg-emerald-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+              }`}
+            >
+              <Smartphone className="w-4 h-4" />
+              <span className="text-[11px] leading-tight text-center">Customer</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => handleRoleTabClick('super_admin')}
-            className={`p-2.5 rounded-xl flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
-              activeRole === 'super_admin'
-                ? 'bg-amber-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-            }`}
-          >
-            <ShieldCheck className="w-4 h-4" />
-            <span className="text-[11px] leading-tight text-center">Super Admin</span>
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={() => handleRoleTabClick('super_admin')}
+              className={`p-2.5 rounded-xl flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
+                activeRole === 'super_admin'
+                  ? 'bg-amber-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+              }`}
+            >
+              <ShieldCheck className="w-4 h-4" />
+              <span className="text-[11px] leading-tight text-center">Super Admin</span>
+            </button>
+          </div>
+        )}
 
         {/* Portal Context Banner */}
         <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 text-xs flex items-start gap-3">
@@ -526,24 +531,33 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
 
         {/* Authentication Form */}
         <form onSubmit={handleLoginSubmit} className="space-y-4 text-xs">
-          {/* Restaurant Selector (For Boss, Stand, and Customer) */}
+          {/* Active Restaurant Facility (Locked in Production Mode so Restaurant A cannot drop down to Restaurant B) */}
           {activeRole !== 'super_admin' && (
             <div className="space-y-1">
               <label className="font-semibold text-slate-300 flex items-center gap-1.5">
                 <Building2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Restaurant Location / Authority</span>
+                <span>Active Restaurant Facility</span>
               </label>
-              <select
-                value={selectedRestoCode}
-                onChange={(e) => setSelectedRestoCode(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-white font-medium outline-hidden"
-              >
-                {state.restaurants.map((r) => (
-                  <option key={r.code} value={r.code}>
-                    {r.code} · {r.name} ({r.address})
-                  </option>
-                ))}
-              </select>
+              {isDemoMode ? (
+                <select
+                  value={selectedRestoCode}
+                  onChange={(e) => setSelectedRestoCode(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-white font-medium outline-hidden"
+                >
+                  {state.restaurants.map((r) => (
+                    <option key={r.code} value={r.code}>
+                      {r.code} · {r.name} ({r.address})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white font-bold flex items-center justify-between">
+                  <span>{currentResto?.name || 'Kigali Campus Resto'}</span>
+                  <span className="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-mono text-[11px]">
+                    {selectedRestoCode}
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
@@ -837,54 +851,49 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           </button>
         </form>
 
-        {/* 1-Click Demo Evaluation Shortcut Banner */}
-        <div className="pt-4 border-t border-slate-800 space-y-3">
-          <div className="flex items-center justify-between text-[11px] text-slate-400 font-semibold">
-            <span className="flex items-center gap-1.5 text-amber-400">
-              <Zap className="w-3.5 h-3.5" />
-              <span>Instant Evaluation Sign-In</span>
-            </span>
-            <span className="text-[10px] text-slate-500">1-Click Auto Authenticate</span>
-          </div>
+        {/* 1-Click Demo Evaluation Shortcut Banner (Only shown when Demo Mode is explicitly ON) */}
+        {isDemoMode && (
+          <div className="pt-4 border-t border-slate-800 space-y-3">
+            <div className="flex items-center justify-between text-[11px] text-slate-400 font-semibold">
+              <span className="flex items-center gap-1.5 text-amber-400">
+                <Zap className="w-3.5 h-3.5" />
+                <span>Instant Evaluation Sign-In (Demo Mode)</span>
+              </span>
+              <span className="text-[10px] text-slate-500">1-Click Auto Authenticate</span>
+            </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <button
-              type="button"
-              onClick={() => handleDemoFillAndSubmit('restaurant_admin')}
-              className="px-2.5 py-2 rounded-xl bg-slate-950 hover:bg-emerald-950/60 border border-slate-800 hover:border-emerald-600/60 text-slate-300 hover:text-emerald-400 text-[11px] font-semibold transition-all cursor-pointer text-center"
-            >
-              Demo Boss
-            </button>
-            <button
-              type="button"
-              onClick={() => handleDemoFillAndSubmit('stand_staff')}
-              className="px-2.5 py-2 rounded-xl bg-slate-950 hover:bg-emerald-950/60 border border-slate-800 hover:border-emerald-600/60 text-slate-300 hover:text-emerald-400 text-[11px] font-semibold transition-all cursor-pointer text-center"
-            >
-              Demo Stand
-            </button>
-            <button
-              type="button"
-              onClick={() => handleDemoFillAndSubmit('customer')}
-              className="px-2.5 py-2 rounded-xl bg-slate-950 hover:bg-emerald-950/60 border border-slate-800 hover:border-emerald-600/60 text-slate-300 hover:text-emerald-400 text-[11px] font-semibold transition-all cursor-pointer text-center"
-            >
-              Demo Patron
-            </button>
-            <button
-              type="button"
-              onClick={() => handleDemoFillAndSubmit('super_admin')}
-              className="px-2.5 py-2 rounded-xl bg-slate-950 hover:bg-amber-950/60 border border-slate-800 hover:border-amber-600/60 text-slate-300 hover:text-amber-400 text-[11px] font-semibold transition-all cursor-pointer text-center"
-            >
-              Demo Super
-            </button>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <button
+                type="button"
+                onClick={() => handleDemoFillAndSubmit('restaurant_admin')}
+                className="px-2.5 py-2 rounded-xl bg-slate-950 hover:bg-emerald-950/60 border border-slate-800 hover:border-emerald-600/60 text-slate-300 hover:text-emerald-400 text-[11px] font-semibold transition-all cursor-pointer text-center"
+              >
+                Demo Boss
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDemoFillAndSubmit('stand_staff')}
+                className="px-2.5 py-2 rounded-xl bg-slate-950 hover:bg-emerald-950/60 border border-slate-800 hover:border-emerald-600/60 text-slate-300 hover:text-emerald-400 text-[11px] font-semibold transition-all cursor-pointer text-center"
+              >
+                Demo Stand
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDemoFillAndSubmit('customer')}
+                className="px-2.5 py-2 rounded-xl bg-slate-950 hover:bg-emerald-950/60 border border-slate-800 hover:border-emerald-600/60 text-slate-300 hover:text-emerald-400 text-[11px] font-semibold transition-all cursor-pointer text-center"
+              >
+                Demo Patron
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDemoFillAndSubmit('super_admin')}
+                className="px-2.5 py-2 rounded-xl bg-slate-950 hover:bg-amber-950/60 border border-slate-800 hover:border-amber-600/60 text-slate-300 hover:text-amber-400 text-[11px] font-semibold transition-all cursor-pointer text-center"
+              >
+                Demo Super
+              </button>
+            </div>
           </div>
-
-          <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80 text-[11px] text-slate-400 flex items-center justify-between">
-            <span className="font-mono text-[10px] text-slate-500">
-              Routes: #/scanner · #/boss · #/customer · #/superadmin
-            </span>
-            <span className="text-[10px] text-emerald-400 font-semibold">Unified Deployment</span>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* FIRST-TIME PIN SETUP & ACCOUNT ACTIVATION MODAL */}

@@ -42,7 +42,7 @@ interface HeaderProps {
   onToggleSound: () => void;
   restaurantName: string;
   restaurantCode: string;
-  onOpenSyncDrawer: () => void;
+  onOpenSyncDrawer?: () => void;
   onOpenNotifications?: () => void;
   activeTab?: string;
   onTabChange?: (tab: string) => void;
@@ -271,48 +271,25 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Trustworthy Offline & Outbox Status Indicator (Only when authenticated) */}
+          {/* Clean Online / Offline Indicator (No Topology Drawer) */}
           {isSessionActive && (
-            <button
-              type="button"
-              onClick={onOpenSyncDrawer}
-              title={
-                networkStatus === 'online'
-                  ? pendingOutboxCount > 0
-                    ? `Online — ${pendingOutboxCount} transaction(s) awaiting server synchronization`
-                    : 'Online — All transactions synchronized with server'
-                  : `Offline — ${pendingOutboxCount} transaction(s) queued in local outbox`
-              }
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
+            <div
+              title={networkStatus === 'online' ? 'Online' : 'Offline'}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-bold select-none ${
                 networkStatus !== 'online'
-                  ? 'bg-rose-950/40 border-rose-800/60 text-rose-400 hover:border-rose-600'
-                  : pendingOutboxCount > 0
-                  ? 'bg-amber-950/40 border-amber-700/60 text-amber-300 hover:border-amber-500'
-                  : 'bg-emerald-950/40 border-emerald-800/60 text-emerald-400 hover:border-emerald-600'
+                  ? 'bg-rose-950/40 border-rose-800/60 text-rose-400'
+                  : 'bg-emerald-950/40 border-emerald-800/60 text-emerald-400'
               }`}
             >
               <span
                 className={`w-2 h-2 rounded-full ${
                   networkStatus !== 'online'
                     ? 'bg-rose-400 animate-pulse'
-                    : pendingOutboxCount > 0
-                    ? 'bg-amber-400 animate-pulse'
                     : 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]'
                 }`}
               />
-              <span className="hidden sm:inline">
-                {networkStatus !== 'online'
-                  ? `Offline · ${pendingOutboxCount} Queued`
-                  : pendingOutboxCount > 0
-                  ? `Needs Sync (${pendingOutboxCount})`
-                  : 'Online · Synced'}
-              </span>
-              {pendingOutboxCount > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 text-[10px] font-bold font-mono">
-                  {pendingOutboxCount}
-                </span>
-              )}
-            </button>
+              <span>{networkStatus !== 'online' ? 'Offline' : 'Online'}</span>
+            </div>
           )}
 
           {/* Notifications Trigger (Only when authenticated and not gated on customer dashboard) */}
@@ -443,45 +420,49 @@ export const Header: React.FC<HeaderProps> = ({
                       </div>
                     )}
 
-                    {/* Workspace / Role Switcher Section */}
-                    <div className="px-3 pt-2.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                      Switch Portal
-                    </div>
-                    <div className="space-y-0.5">
-                      {[
-                        { role: 'restaurant_admin' as UserRole, label: 'Restaurant Boss Admin', icon: Server, desc: 'Full cafeteria management' },
-                        { role: 'stand_staff' as UserRole, label: 'Scanner Operator POS', icon: QrCode, desc: 'High-speed meal pass reader' },
-                        { role: 'customer' as UserRole, label: 'Customer Dining Pass', icon: Smartphone, desc: 'Mobile pass & plate balance' },
-                        { role: 'super_admin' as UserRole, label: 'Super Admin Console', icon: ShieldCheck, desc: 'Platform authority & licenses' },
-                      ].map((item) => {
-                        const isSelected = currentRole === item.role;
-                        const ItemIcon = item.icon;
-                        return (
-                          <button
-                            key={item.role}
-                            type="button"
-                            onClick={() => {
-                              onRoleChange(item.role);
-                              setIsProfileDropdownOpen(false);
-                            }}
-                            className={`w-full text-left px-3 py-2 rounded-xl text-xs flex items-center justify-between transition-colors cursor-pointer ${
-                              isSelected
-                                ? 'bg-emerald-600/20 border border-emerald-500/40 text-emerald-300 font-bold'
-                                : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2.5">
-                              <ItemIcon className={`w-4 h-4 ${isSelected ? 'text-emerald-400' : 'text-slate-400'}`} />
-                              <div className="flex flex-col">
-                                <span>{item.label}</span>
-                                <span className="text-[10px] text-slate-400 font-normal">{item.desc}</span>
-                              </div>
-                            </div>
-                            {isSelected && <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    {/* Workspace / Role Switcher Section (Hidden in Production for Non-Super-Admin to preserve strict role isolation) */}
+                    {(isDemoMode || currentRole === 'super_admin') && (
+                      <>
+                        <div className="px-3 pt-2.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          Switch Portal
+                        </div>
+                        <div className="space-y-0.5">
+                          {[
+                            { role: 'restaurant_admin' as UserRole, label: 'Restaurant Boss Admin', icon: Server, desc: 'Full cafeteria management' },
+                            { role: 'stand_staff' as UserRole, label: 'Scanner Operator POS', icon: QrCode, desc: 'High-speed meal pass reader' },
+                            { role: 'customer' as UserRole, label: 'Customer Dining Pass', icon: Smartphone, desc: 'Mobile pass & plate balance' },
+                            { role: 'super_admin' as UserRole, label: 'Super Admin Console', icon: ShieldCheck, desc: 'Platform authority & licenses' },
+                          ].map((item) => {
+                            const isSelected = currentRole === item.role;
+                            const ItemIcon = item.icon;
+                            return (
+                              <button
+                                key={item.role}
+                                type="button"
+                                onClick={() => {
+                                  onRoleChange(item.role);
+                                  setIsProfileDropdownOpen(false);
+                                }}
+                                className={`w-full text-left px-3 py-2 rounded-xl text-xs flex items-center justify-between transition-colors cursor-pointer ${
+                                  isSelected
+                                    ? 'bg-emerald-600/20 border border-emerald-500/40 text-emerald-300 font-bold'
+                                    : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2.5">
+                                  <ItemIcon className={`w-4 h-4 ${isSelected ? 'text-emerald-400' : 'text-slate-400'}`} />
+                                  <div className="flex flex-col">
+                                    <span>{item.label}</span>
+                                    <span className="text-[10px] text-slate-400 font-normal">{item.desc}</span>
+                                  </div>
+                                </div>
+                                {isSelected && <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
 
                     {/* Sign Out / Lock Session Action */}
                     {onLockSession && (

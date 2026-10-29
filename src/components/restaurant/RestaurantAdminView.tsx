@@ -11,6 +11,8 @@ import {
   Branch,
   StationUser,
   PendingApproval,
+  ExpenseCategory,
+  RestaurantExpense,
 } from '../../types';
 import { restoStore } from '../../store/restoStore';
 import { translations } from '../../services/i18n';
@@ -24,7 +26,6 @@ import { SecurityAndAuditLogsView } from './SecurityAndAuditLogsView';
 import { RestaurantSecurityCenter } from './RestaurantSecurityCenter';
 import { RestaurantAppearanceManager } from './RestaurantAppearanceManager';
 import { SummaryMetricCards } from './SummaryMetricCards';
-import { ShiftHandoverModal } from '../scanner/ShiftHandoverModal';
 import {
   exportTransactionsToCsv,
   exportTransactionsToJson,
@@ -70,6 +71,8 @@ import {
   Tag,
   Sparkles,
   Calculator,
+  Receipt,
+  ShoppingCart,
   TrendingUp,
   Coins,
   Building2,
@@ -132,7 +135,6 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
   const [filterMode, setFilterMode] = useState<'all' | 'active' | 'locked' | 'low_balance' | 'students'>('all');
   const [selectedCustomerForDetail, setSelectedCustomerForDetail] = useState<Customer | null>(null);
   const [userSection, setUserSection] = useState<'members' | 'staff' | 'approvals' | 'notifs'>('members');
-  const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
 
   // Full Member Management Modal State
   const [manageModalOpen, setManageModalOpen] = useState(false);
@@ -198,6 +200,14 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
   const [newPkgPrice, setNewPkgPrice] = useState<number>(24000);
   const [newPkgDescription, setNewPkgDescription] = useState('');
   const [newPkgError, setNewPkgError] = useState<string | null>(null);
+
+  // Expenses & P&L Co-Pilot State
+  const [expenseCategory, setExpenseCategory] = useState<ExpenseCategory>('food_supplies');
+  const [expenseAmount, setExpenseAmount] = useState<number>(50000);
+  const [expenseDesc, setExpenseDesc] = useState<string>('');
+  const [expenseSupplier, setExpenseSupplier] = useState<string>('');
+  const [expenseReceipt, setExpenseReceipt] = useState<string>('');
+  const [isRecordExpenseModalOpen, setIsRecordExpenseModalOpen] = useState(false);
 
   // Station Creation State
   const [newStationName, setNewStationName] = useState('');
@@ -896,12 +906,61 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
   const pendingCount = pendingApprovals.filter((p) => p.status === 'pending').length;
   const restoBranches = restoStore.getRestaurantBranches(state.currentRestaurantCode);
   const restoStationUsers = restoStore.getRestaurantStationUsers(state.currentRestaurantCode);
+  const licStatus = restoStore.getRestaurantLicenseStatus(state.currentRestaurantCode);
+
+  if (licStatus.isExpired) {
+    return (
+      <div className="max-w-xl mx-auto my-12 p-8 rounded-3xl bg-slate-900 border-2 border-rose-500/80 shadow-2xl text-center space-y-5">
+        <div className="w-16 h-16 mx-auto rounded-2xl bg-rose-500/20 border border-rose-500/50 text-rose-400 flex items-center justify-center">
+          <ShieldAlert className="w-9 h-9" />
+        </div>
+        <div className="space-y-2">
+          <span className="px-3 py-1 rounded-full bg-rose-950 border border-rose-700 text-rose-300 text-xs font-mono font-bold uppercase">
+            Monthly License Expired · Renewal Required
+          </span>
+          <h1 className="text-2xl font-black text-white tracking-tight">
+            Restaurant Subscription License Expired
+          </h1>
+          <p className="text-sm text-slate-300 leading-relaxed">
+            The monthly RestoPass operating license for <strong className="text-white">{restaurant?.name} ({state.currentRestaurantCode})</strong> has ended
+            {licStatus.validUntil ? ` on ${new Date(licStatus.validUntil).toLocaleDateString()}` : ''}. Boss dashboard and scanner operations are paused until your monthly subscription is renewed and reactivated by RestoPass Super Admin.
+          </p>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-300 space-y-1">
+          <div className="font-bold text-white">How to Restore Operations Immediately:</div>
+          <div>Contact RestoPass Platform Authority (Super Admin) to renew and activate your 30-day restaurant license. All patron plate balances and financial ledgers remain 100% preserved.</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-      {/* Unified Single-Row Boss Navigation Bar */}
+      {/* 7-Day License Expiry Warning Banner */}
+      {licStatus.isExpiringSoon && (
+        <div className="p-4 rounded-2xl bg-amber-950/90 border-2 border-amber-500/80 text-amber-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <div className="font-black text-white text-sm">
+                7-Day Subscription Expiry Warning — {licStatus.daysRemaining} Day{licStatus.daysRemaining === 1 ? '' : 's'} Remaining
+              </div>
+              <div className="text-xs text-amber-200 mt-0.5">
+                Your monthly RestoPass license ({licStatus.license?.id}) expires on{' '}
+                <strong>{licStatus.validUntil ? new Date(licStatus.validUntil).toLocaleDateString() : 'soon'}</strong>. Please renew with Super Admin before expiration so Boss and Scanner operations continue without interruption.
+              </div>
+            </div>
+          </div>
+          <span className="px-3 py-1 rounded-full bg-amber-500 text-slate-950 font-mono font-black text-xs shrink-0 self-start sm:self-center">
+            {licStatus.daysRemaining}d left
+          </span>
+        </div>
+      )}
+
+      {/* Unified Boss Navigation Bar (Wraps cleanly without horizontal scrollbar) */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-        <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-medium pb-1 lg:pb-0">
+        <div className="flex items-center flex-wrap gap-1.5 text-xs font-medium">
           {[
             {
               id: 'dashboard',
@@ -955,6 +1014,12 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
               label: 'Financial Reports',
               icon: FileSpreadsheet,
               match: activeSubTab === 'reports',
+            },
+            {
+              id: 'pnl_copilot',
+              label: 'Expenses & P&L Co-Pilot',
+              icon: Calculator,
+              match: activeSubTab === 'pnl_copilot',
             },
             {
               id: 'security',
@@ -3709,6 +3774,407 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                 </table>
               </div>
             </div>
+          </div>
+        );
+      })()}
+
+      {/* 7.5. RESTAURANT EXPENSES & PROFIT/LOSS (P&L) CO-PILOT */}
+      {activeSubTab === 'pnl_copilot' && (() => {
+        const currentResto = restoStore.getCurrentRestaurant();
+        const pnl = restoStore.getRestaurantProfitAndLoss(state.currentRestaurantCode);
+        const expenses = restoStore.getRestaurantExpenses(state.currentRestaurantCode);
+
+        const categoryIcons: Record<ExpenseCategory, any> = {
+          food_supplies: ShoppingCart,
+          fuel_gas_charcoal: Sparkles,
+          staff_wages: Users,
+          rent_utilities: Building2,
+          packaging_logistics: Layers,
+          other: Receipt,
+        };
+
+        const handleRecordExpenseSubmit = (e: React.FormEvent) => {
+          e.preventDefault();
+          if (!expenseDesc.trim() || expenseAmount <= 0) return;
+          restoStore.addRestaurantExpense({
+            restaurantCode: state.currentRestaurantCode,
+            category: expenseCategory,
+            amountRwf: expenseAmount,
+            description: expenseDesc.trim(),
+            supplierName: expenseSupplier.trim() || undefined,
+            receiptNumber: expenseReceipt.trim() || undefined,
+            recordedByRole: 'restaurant_admin',
+            recordedByName: 'Restaurant Boss',
+          });
+          setExpenseDesc('');
+          setExpenseSupplier('');
+          setExpenseReceipt('');
+          setIsRecordExpenseModalOpen(false);
+          setActionToast(`Recorded expense of ${expenseAmount.toLocaleString()} RWF successfully.`);
+        };
+
+        return (
+          <div className="space-y-6">
+            {/* Header & Co-Pilot Title */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-2xl bg-gradient-to-r from-emerald-950/40 via-slate-900 to-slate-900 border border-emerald-900/40 shadow-xl">
+              <div>
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                    <Calculator className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-white tracking-tight">
+                      Financial Co-Pilot: Profit &amp; Loss, Expenses &amp; Unit Economics
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Intake cash liability vs. realized dining revenue vs. operational food/energy costs for <strong>{currentResto?.name}</strong> ({pnl.monthLabel}).
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsRecordExpenseModalOpen(true)}
+                  className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 transition-all shadow-md cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Record Operating Expense</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Smart Business Health Diagnostic & Recommendation */}
+            <div
+              className={`p-4 rounded-2xl border flex items-start gap-3 text-xs leading-relaxed ${
+                pnl.healthStatus === 'loss_warning'
+                  ? 'bg-rose-950/80 border-rose-500/80 text-rose-100'
+                  : pnl.healthStatus === 'profitable'
+                  ? 'bg-emerald-950/60 border-emerald-500/60 text-emerald-100'
+                  : 'bg-slate-900 border-slate-800 text-slate-300'
+              }`}
+            >
+              <div className="mt-0.5 shrink-0">
+                {pnl.healthStatus === 'loss_warning' ? (
+                  <AlertTriangle className="w-5 h-5 text-rose-400" />
+                ) : (
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                )}
+              </div>
+              <div>
+                <div className="font-bold text-sm text-white mb-0.5">
+                  Business Health Diagnosis · {pnl.monthLabel}
+                </div>
+                <div>{pnl.healthRecommendation}</div>
+              </div>
+            </div>
+
+            {/* 4 Financial Position Cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800">
+                <div className="text-slate-400 font-semibold text-[11px] uppercase tracking-wider">
+                  Monthly Cash Intake
+                </div>
+                <div className="text-2xl font-black text-white font-mono mt-1">
+                  +{pnl.intakeCashRwf.toLocaleString()} <span className="text-xs font-normal text-slate-400">RWF</span>
+                </div>
+                <div className="text-[11px] text-emerald-400 mt-0.5">Cash collected upfront from patrons</div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800">
+                <div className="text-slate-400 font-semibold text-[11px] uppercase tracking-wider">
+                  Realized Dining Revenue
+                </div>
+                <div className="text-2xl font-black text-cyan-400 font-mono mt-1">
+                  {pnl.realizedRevenueRwf.toLocaleString()} <span className="text-xs font-normal text-slate-400">RWF</span>
+                </div>
+                <div className="text-[11px] text-slate-400 mt-0.5">Earned from {pnl.platesServedCount.toLocaleString()} buffet meals</div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800">
+                <div className="text-slate-400 font-semibold text-[11px] uppercase tracking-wider">
+                  Logged Operating Costs
+                </div>
+                <div className="text-2xl font-black text-rose-400 font-mono mt-1">
+                  -{pnl.totalExpensesRwf.toLocaleString()} <span className="text-xs font-normal text-slate-400">RWF</span>
+                </div>
+                <div className="text-[11px] text-slate-400 mt-0.5">Food, LPG gas, staff wages &amp; rent</div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800">
+                <div className="text-slate-400 font-semibold text-[11px] uppercase tracking-wider">
+                  Gross Operational P&amp;L
+                </div>
+                <div
+                  className={`text-2xl font-black font-mono mt-1 ${
+                    pnl.grossProfitRwf >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                  }`}
+                >
+                  {pnl.grossProfitRwf >= 0 ? '+' : ''}
+                  {pnl.grossProfitRwf.toLocaleString()} <span className="text-xs font-normal text-slate-400">RWF</span>
+                </div>
+                <div className="text-[11px] text-slate-400 mt-0.5">
+                  {pnl.grossProfitRwf >= 0 ? 'Net positive profit' : 'Operating at net deficit'}
+                </div>
+              </div>
+            </div>
+
+            {/* Unit Economics & Outstanding Liability */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-2">
+                <div className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                  Cost Per Meal Served
+                </div>
+                <div className="text-3xl font-black text-white font-mono">
+                  {pnl.costPerPlateServed.toLocaleString()} <span className="text-sm font-normal text-slate-400">RWF/plate</span>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Production cost per plate based on logged food supplies and energy costs.
+                </p>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-2">
+                <div className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                  Average Revenue Per Meal
+                </div>
+                <div className="text-3xl font-black text-emerald-400 font-mono">
+                  {pnl.avgRevenuePerPlate.toLocaleString()} <span className="text-sm font-normal text-slate-400">RWF/plate</span>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Effective weighted price received from student meal bundle purchases.
+                </p>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-2">
+                <div className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                  Outstanding Customer Liability
+                </div>
+                <div className="text-3xl font-black text-amber-400 font-mono">
+                  {pnl.outstandingLiabilityRwf.toLocaleString()} <span className="text-sm font-normal text-slate-400">RWF</span>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Prepaid meals still held on patron cards that haven't been redeemed yet.
+                </p>
+              </div>
+            </div>
+
+            {/* Expense Breakdown Categories */}
+            {pnl.expenseCategories.length > 0 && (
+              <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                  Expense Distribution by Category
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {pnl.expenseCategories.map((cat) => {
+                    const CatIcon = categoryIcons[cat.category] || Receipt;
+                    return (
+                      <div key={cat.category} className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="flex items-center gap-1.5 font-bold text-slate-200">
+                            <CatIcon className="w-3.5 h-3.5 text-emerald-400" />
+                            {cat.label}
+                          </span>
+                          <span className="font-mono text-emerald-400 font-bold">{cat.percentage}%</span>
+                        </div>
+                        <div className="text-base font-black text-white font-mono">
+                          {cat.amountRwf.toLocaleString()} RWF
+                        </div>
+                        <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                          <div
+                            className="bg-emerald-500 h-full rounded-full"
+                            style={{ width: `${cat.percentage}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Logged Expenses Audit Table */}
+            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                    Recent Operating Expenses &amp; Supplier Invoices
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Itemized food procurement, energy, staff, and logistics ledger.
+                  </p>
+                </div>
+                <span className="text-xs font-mono px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300">
+                  {expenses.length} records
+                </span>
+              </div>
+
+              {expenses.length === 0 ? (
+                <div className="text-center py-10 border border-dashed border-slate-800 rounded-xl space-y-2">
+                  <Receipt className="w-8 h-8 text-slate-600 mx-auto" />
+                  <div className="text-sm font-bold text-slate-400">No Expenses Recorded Yet</div>
+                  <div className="text-xs text-slate-500">
+                    Click "Record Operating Expense" above to begin tracking food procurement and operating costs.
+                  </div>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="border-b border-slate-800 text-slate-400 uppercase tracking-wider text-[10px]">
+                      <tr>
+                        <th className="py-2.5 px-3">Date</th>
+                        <th className="py-2.5 px-3">Category</th>
+                        <th className="py-2.5 px-3">Description</th>
+                        <th className="py-2.5 px-3">Supplier / Ref</th>
+                        <th className="py-2.5 px-3 text-right">Amount (RWF)</th>
+                        <th className="py-2.5 px-3 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 font-medium">
+                      {expenses.map((exp) => (
+                        <tr key={exp.id} className="hover:bg-slate-800/40 transition-colors">
+                          <td className="py-3 px-3 text-slate-400 font-mono whitespace-nowrap">
+                            {new Date(exp.recordedAt).toLocaleDateString()}
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-300 border border-slate-700">
+                              {exp.categoryLabel || exp.category}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-white font-semibold">{exp.description}</td>
+                          <td className="py-3 px-3 text-slate-400 text-xs">
+                            {exp.supplierName ? <span className="text-slate-300">{exp.supplierName}</span> : '—'}
+                            {exp.receiptNumber && (
+                              <span className="block text-[10px] text-slate-500 font-mono">Ref: {exp.receiptNumber}</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 text-right font-mono font-bold text-rose-300">
+                            -{exp.amountRwf.toLocaleString()} RWF
+                          </td>
+                          <td className="py-3 px-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (confirm(`Delete expense record "${exp.description}" (${exp.amountRwf.toLocaleString()} RWF)?`)) {
+                                  restoStore.deleteRestaurantExpense(exp.id, 'Restaurant Boss');
+                                  setActionToast('Deleted expense record.');
+                                }
+                              }}
+                              className="text-slate-500 hover:text-rose-400 font-semibold cursor-pointer"
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* RECORD EXPENSE MODAL */}
+            {isRecordExpenseModalOpen && (
+              <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+                <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <div className="flex items-center gap-2">
+                      <Receipt className="w-5 h-5 text-emerald-400" />
+                      <h3 className="text-base font-bold text-white">Record Cafeteria Operating Expense</h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsRecordExpenseModalOpen(false)}
+                      className="text-slate-400 hover:text-white text-xs cursor-pointer"
+                    >
+                      Close
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleRecordExpenseSubmit} className="space-y-3.5 text-xs">
+                    <div>
+                      <label className="text-slate-300 block mb-1 font-semibold">Expense Category</label>
+                      <select
+                        value={expenseCategory}
+                        onChange={(e) => setExpenseCategory(e.target.value as any)}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white"
+                      >
+                        <option value="food_supplies">Food Supplies &amp; Produce (Rice, Beans, Meat, Veg)</option>
+                        <option value="fuel_gas_charcoal">Cooking Fuel, LPG Cylinders &amp; Charcoal</option>
+                        <option value="staff_wages">Staff &amp; Kitchen Daily Wages</option>
+                        <option value="rent_utilities">Rent, Tap Water &amp; Electricity</option>
+                        <option value="packaging_logistics">Packaging, Sanitation &amp; Market Logistics</option>
+                        <option value="other">Other Incidentals &amp; Repairs</option>
+                      </select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-slate-300 block mb-1 font-semibold">Amount (RWF)</label>
+                        <input
+                          type="number"
+                          required
+                          min={100}
+                          step={100}
+                          value={expenseAmount}
+                          onChange={(e) => setExpenseAmount(Math.max(100, parseInt(e.target.value) || 0))}
+                          className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-emerald-400 font-mono font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-300 block mb-1 font-semibold">Receipt / Invoice #</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. REC-8831"
+                          value={expenseReceipt}
+                          onChange={(e) => setExpenseReceipt(e.target.value)}
+                          className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-slate-300 block mb-1 font-semibold">Description / Food Quantity</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. 50kg Long-Grain Rice + 25kg Dry Beans (Nyabugogo)"
+                        value={expenseDesc}
+                        onChange={(e) => setExpenseDesc(e.target.value)}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-slate-300 block mb-1 font-semibold">Supplier / Merchant Name (Optional)</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Kigali Wholesale Produce Co."
+                        value={expenseSupplier}
+                        onChange={(e) => setExpenseSupplier(e.target.value)}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white"
+                      />
+                    </div>
+
+                    <div className="pt-2 flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsRecordExpenseModalOpen(false)}
+                        className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 hover:text-white font-semibold cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold shadow-md cursor-pointer"
+                      >
+                        Save Expense Record
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
           </div>
         );
       })()}

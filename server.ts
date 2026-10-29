@@ -1900,6 +1900,7 @@ function scopeStateForUser(state: any, user: UserSession): any {
       shifts: (state.shifts || []).filter((sh: any) => sh.restaurantCode === rCode),
       cashierSessions: (state.cashierSessions || []).filter((cs: any) => cs.restaurantCode === rCode),
       auditLogs: (state.auditLogs || []).filter((a: any) => a.restaurantCode === rCode),
+      expenses: (state.expenses || []).filter((e: any) => e.restaurantCode === rCode),
       notifications: (state.notifications || []).filter(
         (n: any) => !n.restaurantCode || n.restaurantCode === rCode
       ),
@@ -1940,6 +1941,8 @@ function scopeStateForUser(state: any, user: UserSession): any {
       notifications: (state.notifications || []).filter(
         (n: any) => !n.restaurantCode || n.restaurantCode === rCode
       ),
+      plans: state.plans || [],
+      licenses: (state.licenses || []).filter((lic: any) => lic.restaurantCode === rCode),
       studentSubscriptionSettings: state.studentSubscriptionSettings || {
         enabled: false,
         priceRwf: 500,
@@ -2193,6 +2196,7 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         mergeScopedCollection('stationUsers', true);
         mergeScopedCollection('scanPoints', true);
         mergeScopedCollection('cashierSessions', true);
+        mergeScopedCollection('expenses', true);
 
         // Allow restaurant admin to update their own restaurant branding/policies
         if (Array.isArray(fullState.restaurants)) {

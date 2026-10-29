@@ -623,39 +623,51 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                       </select>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label htmlFor="reg-custom-plates" className="text-slate-200 font-semibold block mb-1 text-sm">
-                          Number of Plates
-                        </label>
-                        <input
-                          id="reg-custom-plates"
-                          type="number"
-                          min={1}
-                          max={365}
-                          value={customPlates}
-                          onChange={(e) => {
-                            const p = Math.max(1, parseInt(e.target.value) || 1);
-                            const rate = restoStore.getRestaurantDefaultPlatePrice(restoCode);
-                            setCustomPlates(p);
-                            setCustomPrice(p * rate);
-                          }}
-                          className="w-full py-2.5 px-3 rounded-xl bg-slate-900 border-2 border-slate-700 text-white font-mono text-sm"
-                        />
+                    <>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label htmlFor="reg-custom-plates" className="text-slate-200 font-semibold block mb-1 text-sm">
+                            Number of Plates
+                          </label>
+                          <input
+                            id="reg-custom-plates"
+                            type="number"
+                            min={1}
+                            max={365}
+                            value={customPlates}
+                            onChange={(e) => {
+                              const p = Math.max(1, parseInt(e.target.value) || 1);
+                              const calc = restoStore.calculatePlatesPrice(restoCode, p);
+                              setCustomPlates(p);
+                              setCustomPrice(calc.amountRwf);
+                            }}
+                            className="w-full py-2.5 px-3 rounded-xl bg-slate-900 border-2 border-slate-700 text-white font-mono text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="reg-custom-price" className="text-slate-200 font-semibold block mb-1 text-sm">
+                            Price (RWF)
+                          </label>
+                          <input
+                            id="reg-custom-price"
+                            type="number"
+                            value={customPrice}
+                            onChange={(e) => setCustomPrice(Math.max(100, parseInt(e.target.value) || 100))}
+                            className="w-full py-2.5 px-3 rounded-xl bg-slate-900 border-2 border-slate-700 text-emerald-400 font-mono font-bold text-sm"
+                          />
+                        </div>
                       </div>
-                      <div>
-                        <label htmlFor="reg-custom-price" className="text-slate-200 font-semibold block mb-1 text-sm">
-                          Price (RWF)
-                        </label>
-                        <input
-                          id="reg-custom-price"
-                          type="number"
-                          value={customPrice}
-                          onChange={(e) => setCustomPrice(Math.max(100, parseInt(e.target.value) || 100))}
-                          className="w-full py-2.5 px-3 rounded-xl bg-slate-900 border-2 border-slate-700 text-emerald-400 font-mono font-bold text-sm"
-                        />
+                      <div className="text-xs text-slate-400 font-mono flex items-center justify-between">
+                        <span>Rate: {restoStore.calculatePlatesPrice(restoCode, customPlates).appliedTier}</span>
+                        <span>{customPlates} × {(customPrice / customPlates).toFixed(0)} = {customPrice.toLocaleString()} RWF</span>
                       </div>
-                    </div>
+                      {customPlates > 120 && (
+                        <div className="p-2.5 rounded-xl bg-indigo-950/80 border border-indigo-500/80 text-indigo-200 text-xs flex items-center gap-2">
+                          <span className="font-bold text-amber-300">🛡️ Dual Control:</span>
+                          <span>Exceeds 120 plates (2+ months). Requires cryptographic co-signing from Super Admin.</span>
+                        </div>
+                      )}
+                    </>
                   )}
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">

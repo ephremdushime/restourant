@@ -7,7 +7,6 @@ import { RestaurantAdminView } from './components/restaurant/RestaurantAdminView
 import { CustomerView } from './components/customer/CustomerView';
 import { SuperAdminView } from './components/superadmin/SuperAdminView';
 import { AuthPortalView } from './components/common/AuthPortalView';
-import { SyncSimulationDrawer } from './components/sync/SyncSimulationDrawer';
 import { NotificationDrawer } from './components/common/NotificationDrawer';
 import { sound } from './services/audioService';
 import { validateCustomerMagicToken } from './services/magicAuthService';
@@ -17,7 +16,6 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>('scanner');
   const [restoAdminSubTab, setRestoAdminSubTab] = useState<string>('dashboard');
   const [superAdminSubTab, setSuperAdminSubTab] = useState<string>('restaurants');
-  const [isSyncDrawerOpen, setIsSyncDrawerOpen] = useState(false);
   const [isNotificationDrawerOpen, setIsNotificationDrawerOpen] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(sound.isSoundEnabled());
 
@@ -59,9 +57,7 @@ export default function App() {
   const handleToggleDemoMode = () => {
     setIsDemoMode((prev) => {
       const next = !prev;
-      try {
-        sessionStorage.setItem('restopass_demo_mode', String(next));
-      } catch {}
+      restoStore.setDemoMode(next);
       return next;
     });
   };
@@ -339,7 +335,6 @@ export default function App() {
         onToggleSound={handleToggleSound}
         restaurantName={currentRestaurant?.name || 'Kigali Campus Resto'}
         restaurantCode={state.currentRestaurantCode}
-        onOpenSyncDrawer={() => setIsSyncDrawerOpen(true)}
         onOpenNotifications={() => setIsNotificationDrawerOpen(true)}
         activeTab={activeTab}
         onTabChange={handleTabChange}
@@ -358,6 +353,8 @@ export default function App() {
             language={state.currentLanguage}
             onLoginSuccess={handleLoginSuccess}
             onRoleSelect={(role) => handleRoleChange(role)}
+            isDemoMode={isDemoMode}
+            onToggleDemoMode={handleToggleDemoMode}
           />
         ) : (
           <>
@@ -402,12 +399,6 @@ export default function App() {
           </>
         )}
       </main>
-
-      {/* Sync Engine & Local Authority Drawer */}
-      <SyncSimulationDrawer
-        isOpen={isSyncDrawerOpen}
-        onClose={() => setIsSyncDrawerOpen(false)}
-      />
 
       {/* In-App / System Notification Drawer */}
       <NotificationDrawer

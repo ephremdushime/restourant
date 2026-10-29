@@ -5,7 +5,6 @@ import { translations } from '../../services/i18n';
 import { sound } from '../../services/audioService';
 import { BatteryIndicator } from '../common/BatteryIndicator';
 import { ScannerProvisionalModal } from './ScannerProvisionalModal';
-import { ShiftHandoverModal } from './ShiftHandoverModal';
 import {
   Camera,
   Barcode,
@@ -16,10 +15,10 @@ import {
   UserPlus,
   History,
   ShieldCheck,
-  Coins,
   KeyRound,
   Volume2,
   VolumeX,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface ScannerViewProps {
@@ -81,7 +80,6 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [, setCameraError] = useState<string | null>(null);
   const [isProvisionalModalOpen, setIsProvisionalModalOpen] = useState(false);
-  const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
   const [isPinDeskModalOpen, setIsPinDeskModalOpen] = useState(false);
   const [pinDeskCustomerId, setPinDeskCustomerId] = useState<string>('');
   const [pinDeskMode, setPinDeskMode] = useState<'activation' | 'recovery'>('activation');
@@ -102,7 +100,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const keyboardInputRef = useRef<HTMLInputElement | null>(null);
 
   const isAnyModalOpen =
-    overrideModalOpen || isProvisionalModalOpen || isShiftModalOpen || isPinDeskModalOpen;
+    overrideModalOpen || isProvisionalModalOpen || isPinDeskModalOpen;
 
   // Auto-advance timer countdown
   useEffect(() => {
@@ -450,25 +448,6 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
           <button
             type="button"
-            onClick={() => setIsShiftModalOpen(true)}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold bg-slate-800 hover:bg-slate-700 border border-slate-600 text-emerald-300 hover:text-white transition-colors cursor-pointer shadow-sm"
-            title={t.shifts?.title || 'Cashier Shift Handover & Daily Reconciliation'}
-          >
-            <Coins className="w-4 h-4 text-emerald-400" />
-            <span className="hidden sm:inline">{t.shifts?.shiftHandoverButton || 'Shift Handover'}</span>
-            <span className="sm:hidden">Shift</span>
-            {(() => {
-              const activeShift = restoStore.getActiveShift(state.currentStationId);
-              return activeShift ? (
-                <span className="ml-1 px-2 py-0.5 rounded-full text-xs bg-emerald-950 text-emerald-200 font-mono">
-                  {activeShift.platesServedCount}p
-                </span>
-              ) : null;
-            })()}
-          </button>
-
-          <button
-            type="button"
             onClick={() => setIsCameraActive(!isCameraActive)}
             className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold border transition-colors cursor-pointer ${
               isCameraActive
@@ -524,6 +503,48 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           <BatteryIndicator isStaffMode={true} />
         </div>
       </div>
+
+      {/* 7-Day License Expiry Warning or Expired Gate on Scanner */}
+      {(() => {
+        const licStatus = restoStore.getRestaurantLicenseStatus(state.currentRestaurantCode);
+        if (licStatus.isExpired) {
+          return (
+            <div className="p-6 rounded-3xl bg-rose-950/95 border-2 border-rose-500 text-white shadow-2xl space-y-3 text-center">
+              <div className="w-12 h-12 mx-auto rounded-2xl bg-rose-600/30 border border-rose-400 text-rose-200 flex items-center justify-center">
+                <ShieldAlert className="w-7 h-7" />
+              </div>
+              <h2 className="text-xl font-black tracking-tight">
+                Restaurant Monthly License Expired — Renewal Required
+              </h2>
+              <p className="text-sm text-rose-100 max-w-md mx-auto leading-relaxed">
+                This cafeteria&apos;s monthly RestoPass license has expired
+                {licStatus.validUntil ? ` (${new Date(licStatus.validUntil).toLocaleDateString()})` : ''}. Meal scanning and new registrations are paused until the Restaurant Boss renews the subscription with RestoPass Super Admin.
+              </p>
+            </div>
+          );
+        }
+        if (licStatus.isExpiringSoon) {
+          return (
+            <div className="p-3.5 rounded-2xl bg-amber-950/90 border-2 border-amber-500/80 text-amber-100 flex items-center justify-between gap-3 text-sm">
+              <div className="flex items-center gap-2.5">
+                <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+                <div>
+                  <span className="font-black text-white">
+                    License Renewal Warning ({licStatus.daysRemaining}d left):{' '}
+                  </span>
+                  <span>
+                    Restaurant subscription expires on {licStatus.validUntil ? new Date(licStatus.validUntil).toLocaleDateString() : 'soon'}. Remind Boss to renew with Super Admin.
+                  </span>
+                </div>
+              </div>
+              <span className="px-2.5 py-1 rounded-full bg-amber-500 text-slate-950 font-mono font-black text-xs shrink-0">
+                {licStatus.daysRemaining}d left
+              </span>
+            </div>
+          );
+        }
+        return null;
+      })()}
 
       {/* Browser Audio Muted / Blocked Warning Banner */}
       {(!soundEnabled || !audioUnlocked) && (
@@ -985,14 +1006,6 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         isOpen={isProvisionalModalOpen}
         onClose={() => setIsProvisionalModalOpen(false)}
         onSuccessScan={(tok) => handleExecuteScan(tok)}
-      />
-
-      {/* CASHIER SHIFT HANDOVER & RECONCILIATION MODAL */}
-      <ShiftHandoverModal
-        isOpen={isShiftModalOpen}
-        onClose={() => setIsShiftModalOpen(false)}
-        language={language}
-        stationId={state.currentStationId}
       />
 
       {/* CUSTOMER NON-SMS ACTIVATION & PIN RECOVERY DESK MODAL */}

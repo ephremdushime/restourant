@@ -68,11 +68,7 @@ export const SummaryMetricCards: React.FC<SummaryMetricCardsProps> = ({
     (a) => a.restaurantCode === restaurantCode && a.status === 'pending'
   );
 
-  const activeShifts = (state.shifts || []).filter(
-    (s) => s.restaurantCode === restaurantCode && s.status === 'open'
-  );
-
-  const totalPendingActions = pendingApprovals.length + activeShifts.length;
+  const totalPendingActions = pendingApprovals.length;
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
@@ -231,9 +227,6 @@ export const SummaryMetricCards: React.FC<SummaryMetricCardsProps> = ({
             <div className="mt-3 flex items-center gap-2">
               <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-xs font-medium text-slate-300">
                 Deposits: <strong className="text-white font-mono">{pendingApprovals.length}</strong>
-              </span>
-              <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-xs font-medium text-slate-300">
-                Open Shifts: <strong className="text-white font-mono">{activeShifts.length}</strong>
               </span>
             </div>
           </div>

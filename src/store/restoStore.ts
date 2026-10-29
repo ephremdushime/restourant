@@ -40,6 +40,8 @@ import {
   StudentEntitlementResult,
   CustomerActivationRequest,
   CustomerPinRecoveryRequest,
+  RestaurantExpense,
+  ExpenseCategory,
 } from '../types';
 import {
   deriveRestaurantKey,
@@ -68,6 +70,31 @@ import {
 import { sound } from '../services/audioService';
 
 const STORAGE_KEY = 'RESTOPASS_STATE_V1.1';
+const STORAGE_KEY_PROD = 'RESTOPASS_PRODUCTION_CLEAN_V2';
+
+const DEMO_SEED_CUSTOMER_IDS = new Set([
+  'cust_28491',
+  'cust_28492',
+  'cust_28493',
+  'cust_28494',
+  'cust_28495',
+  'cust_pending_1',
+  'cust_rw02_1',
+  'cust_rw02_2',
+]);
+const DEMO_SEED_RESTO_CODES = new Set(['RW02', 'RW03']);
+const DEMO_SEED_NOTIF_IDS = new Set([
+  'notif_init_1',
+  'notif_init_2',
+  'notif_init_3',
+  'notif_init_4',
+  'notif_init_5',
+  'notif_init_rw02_1',
+]);
+const DEMO_SEED_SCAN_IDS = new Set(['scan_grace_init_1']);
+const DEMO_SEED_APPROVAL_IDS = new Set(['appr_init_1', 'appr_init_2']);
+const DEMO_SEED_SHIFT_IDS = new Set(['shift_rw01_morning_1']);
+const DEMO_SEED_SESSION_IDS = new Set(['sess_rw01_sp1', 'sess_rw01_sp2']);
 
 // Initial plan templates
 const INITIAL_PLANS: Plan[] = [
@@ -142,6 +169,7 @@ export interface AppState {
   pendingApprovals: PendingApproval[];
   shifts: ShiftRecord[];
   cashierSessions: CashierSession[];
+  expenses: RestaurantExpense[];
 
   syncOutbox: SyncOutboxItem[];
   syncCommands: SyncCommand[];
@@ -1318,8 +1346,85 @@ function getInitialState(): AppState {
       studentSubscriptionPayments: [],
       activationRequests: [],
       pinRecoveryRequests: [],
+      expenses: [
+        {
+          id: 'exp_rw01_1',
+          restaurantCode: 'RW01',
+          category: 'food_supplies',
+          categoryLabel: 'Food Supplies & Produce',
+          amountRwf: 145000,
+          description: '50kg Rice (Kigali Wholesale) + 30kg Dry Beans',
+          supplierName: 'Kigali Agribusiness Hub',
+          receiptNumber: 'REC-2026-991',
+          recordedByRole: 'restaurant_admin',
+          recordedByName: 'Manager Ephrem',
+          recordedAt: new Date(Date.now() - 4 * 24 * 3600 * 1000).toISOString(),
+        },
+        {
+          id: 'exp_rw01_2',
+          restaurantCode: 'RW01',
+          category: 'fuel_gas_charcoal',
+          categoryLabel: 'Cooking Gas & Charcoal',
+          amountRwf: 38000,
+          description: '2x 38kg Commercial LPG Cylinders Refill',
+          supplierName: 'Kobil Gas Rwanda',
+          receiptNumber: 'REC-2026-994',
+          recordedByRole: 'restaurant_admin',
+          recordedByName: 'Manager Ephrem',
+          recordedAt: new Date(Date.now() - 2 * 24 * 3600 * 1000).toISOString(),
+        },
+      ],
     };
   }
+
+function getProductionCleanState(): AppState {
+  const demo = getInitialState();
+  const now = new Date().toISOString();
+  return {
+    ...demo,
+    currentRole: 'stand_staff',
+    currentRestaurantCode: 'RW01',
+    currentCustomerId: '',
+    currentStationId: 'sp_1',
+    restaurants: demo.restaurants.filter((r) => r.code === 'RW01'),
+    licenses: demo.licenses.filter((l) => l.restaurantCode === 'RW01'),
+    activationCodes: [],
+    subscriptionPayments: demo.subscriptionPayments.filter((p) => p.restaurantCode === 'RW01'),
+    customers: [],
+    ledgerEntries: [],
+    checkpoints: [],
+    scanEvents: [],
+    scanPoints: demo.scanPoints.filter((sp) => sp.restaurantCode === 'RW01'),
+    transfers: [],
+    packages: demo.packages.filter((p) => p.restaurantCode === 'RW01'),
+    menuItems: demo.menuItems.filter((m) => m.restaurantCode === 'RW01'),
+    payments: [],
+    branches: demo.branches.filter((b) => b.restaurantCode === 'RW01'),
+    stationUsers: demo.stationUsers.filter((u) => u.restaurantCode === 'RW01'),
+    pendingApprovals: [],
+    shifts: [],
+    cashierSessions: [],
+    syncOutbox: [],
+    syncCommands: [],
+    auditLogs: [],
+    notifications: [],
+    expenses: [],
+    studentSubscriptionSettings: {
+      enabled: false, // Configurable via Super Admin portal toggle
+      priceRwf: 500,
+      currency: 'RWF',
+      period: 'monthly',
+      graceDays: 3,
+      requireForTransfers: true,
+      requireForDashboard: true,
+      updatedAt: now,
+    },
+    customerSubscriptions: [],
+    studentSubscriptionPayments: [],
+    activationRequests: [],
+    pinRecoveryRequests: [],
+  };
+}
 
 export class RestoStore {
   private state: AppState;
@@ -1538,11 +1643,13 @@ export class RestoStore {
 
   private mergeServerState(serverState: Partial<AppState>): void {
     let hasChanges = false;
+    const isProdClean = typeof window !== 'undefined' && !this.isDemoModeActive();
 
     // 1. Merge customers by id (preserving local pinHash when redacted by customer scope)
     if (serverState.customers && Array.isArray(serverState.customers)) {
       const currentCustMap = new Map(this.state.customers.map((c) => [c.id, c]));
       for (const serverCust of serverState.customers) {
+        if (isProdClean && DEMO_SEED_CUSTOMER_IDS.has(serverCust.id)) continue;
         const existing = currentCustMap.get(serverCust.id);
         if (!existing) {
           this.state.customers.push(serverCust);
@@ -1560,6 +1667,7 @@ export class RestoStore {
     if (serverState.ledgerEntries && Array.isArray(serverState.ledgerEntries)) {
       const currentLedgerIds = new Set(this.state.ledgerEntries.map((l) => l.id));
       for (const serverEntry of serverState.ledgerEntries) {
+        if (isProdClean && DEMO_SEED_CUSTOMER_IDS.has(serverEntry.customerId)) continue;
         if (!currentLedgerIds.has(serverEntry.id)) {
           this.state.ledgerEntries.push(serverEntry);
           currentLedgerIds.add(serverEntry.id);
@@ -1571,7 +1679,11 @@ export class RestoStore {
     // 3. Merge scan events
     if (serverState.scanEvents && Array.isArray(serverState.scanEvents)) {
       const currentScanIds = new Set(this.state.scanEvents.map((s) => s.id));
-      const incomingNewScans = serverState.scanEvents.filter((s) => !currentScanIds.has(s.id));
+      const incomingNewScans = serverState.scanEvents.filter(
+        (s) =>
+          !currentScanIds.has(s.id) &&
+          !(isProdClean && (DEMO_SEED_SCAN_IDS.has(s.id) || DEMO_SEED_CUSTOMER_IDS.has(s.customerId)))
+      );
       if (incomingNewScans.length > 0) {
         this.state.scanEvents = [...incomingNewScans, ...this.state.scanEvents];
         hasChanges = true;
@@ -1582,6 +1694,7 @@ export class RestoStore {
     if (serverState.restaurants && Array.isArray(serverState.restaurants)) {
       const currentRestoMap = new Map(this.state.restaurants.map((r) => [r.code, r]));
       for (const serverResto of serverState.restaurants) {
+        if (isProdClean && DEMO_SEED_RESTO_CODES.has(serverResto.code)) continue;
         const existing = currentRestoMap.get(serverResto.code);
         if (!existing) {
           this.state.restaurants.push(serverResto);
@@ -1599,6 +1712,14 @@ export class RestoStore {
       if (!this.state.notifications) this.state.notifications = [];
       const currentNotifMap = new Map(this.state.notifications.map((n) => [n.id, n]));
       for (const serverNotif of serverState.notifications) {
+        if (
+          isProdClean &&
+          (DEMO_SEED_NOTIF_IDS.has(serverNotif.id) ||
+            DEMO_SEED_CUSTOMER_IDS.has(serverNotif.target) ||
+            DEMO_SEED_RESTO_CODES.has(serverNotif.restaurantCode))
+        ) {
+          continue;
+        }
         const existing = currentNotifMap.get(serverNotif.id);
         if (!existing) {
           this.state.notifications.unshift(serverNotif);
@@ -1614,13 +1735,15 @@ export class RestoStore {
     // 6. Merge operational collections by id
     const mergeCollectionById = <T extends { id: string }>(
       key: keyof AppState,
-      incoming: T[] | undefined
+      incoming: T[] | undefined,
+      skipFilter?: (item: T) => boolean
     ) => {
       if (!incoming || !Array.isArray(incoming)) return;
       const list = ((this.state as any)[key] || []) as T[];
       const map = new Map(list.map((item) => [item.id, item]));
       for (const serverItem of incoming) {
         if (!serverItem || !serverItem.id) continue;
+        if (skipFilter && skipFilter(serverItem)) continue;
         const existing = map.get(serverItem.id);
         if (!existing) {
           list.push(serverItem);
@@ -1634,27 +1757,72 @@ export class RestoStore {
       (this.state as any)[key] = list;
     };
 
-    mergeCollectionById('pendingApprovals', serverState.pendingApprovals);
-    mergeCollectionById('packages', serverState.packages);
-    mergeCollectionById('menuItems', serverState.menuItems);
-    mergeCollectionById('branches', serverState.branches);
-    mergeCollectionById('stationUsers', serverState.stationUsers);
-    mergeCollectionById('scanPoints', serverState.scanPoints);
-    mergeCollectionById('shifts', serverState.shifts);
-    mergeCollectionById('cashierSessions', serverState.cashierSessions);
+    mergeCollectionById(
+      'pendingApprovals',
+      serverState.pendingApprovals,
+      (item) => isProdClean && (DEMO_SEED_APPROVAL_IDS.has(item.id) || DEMO_SEED_CUSTOMER_IDS.has(item.customerId))
+    );
+    mergeCollectionById(
+      'packages',
+      serverState.packages,
+      (item) => isProdClean && DEMO_SEED_RESTO_CODES.has(item.restaurantCode)
+    );
+    mergeCollectionById(
+      'menuItems',
+      serverState.menuItems,
+      (item) => isProdClean && DEMO_SEED_RESTO_CODES.has(item.restaurantCode)
+    );
+    mergeCollectionById(
+      'branches',
+      serverState.branches,
+      (item) => isProdClean && DEMO_SEED_RESTO_CODES.has(item.restaurantCode)
+    );
+    mergeCollectionById(
+      'stationUsers',
+      serverState.stationUsers,
+      (item) => isProdClean && DEMO_SEED_RESTO_CODES.has(item.restaurantCode)
+    );
+    mergeCollectionById(
+      'scanPoints',
+      serverState.scanPoints,
+      (item) => isProdClean && DEMO_SEED_RESTO_CODES.has(item.restaurantCode)
+    );
+    mergeCollectionById(
+      'shifts',
+      serverState.shifts,
+      (item) => isProdClean && DEMO_SEED_SHIFT_IDS.has(item.id)
+    );
+    mergeCollectionById(
+      'cashierSessions',
+      serverState.cashierSessions,
+      (item) => isProdClean && DEMO_SEED_SESSION_IDS.has(item.id)
+    );
     mergeCollectionById('transfers', serverState.transfers);
-    mergeCollectionById('payments', serverState.payments);
+    mergeCollectionById(
+      'payments',
+      serverState.payments,
+      (item) => isProdClean && DEMO_SEED_CUSTOMER_IDS.has(item.customerId)
+    );
     mergeCollectionById('customerSubscriptions', serverState.customerSubscriptions);
     mergeCollectionById('studentSubscriptionPayments', serverState.studentSubscriptionPayments);
+    mergeCollectionById('expenses', serverState.expenses);
     mergeCollectionById('activationRequests', serverState.activationRequests);
     mergeCollectionById('pinRecoveryRequests', serverState.pinRecoveryRequests);
     mergeCollectionById('plans', serverState.plans);
-    mergeCollectionById('licenses', serverState.licenses);
+    mergeCollectionById(
+      'licenses',
+      serverState.licenses,
+      (item) => isProdClean && DEMO_SEED_RESTO_CODES.has(item.restaurantCode)
+    );
 
     if (serverState.studentSubscriptionSettings) {
       this.state.studentSubscriptionSettings = {
         ...this.state.studentSubscriptionSettings,
         ...serverState.studentSubscriptionSettings,
+        enabled:
+          typeof serverState.studentSubscriptionSettings.enabled === 'boolean'
+            ? serverState.studentSubscriptionSettings.enabled
+            : (this.state.studentSubscriptionSettings?.enabled ?? false),
       };
       hasChanges = true;
     }
@@ -1662,92 +1830,115 @@ export class RestoStore {
     if (hasChanges) {
       if (typeof window !== 'undefined') {
         try {
-          localStorage.setItem(STORAGE_KEY, this.sanitizeStateForStorage(this.state));
+          const activeStorageKey = this.isDemoModeActive() ? STORAGE_KEY : STORAGE_KEY_PROD;
+          localStorage.setItem(activeStorageKey, this.sanitizeStateForStorage(this.state));
         } catch {}
       }
       this.listeners.forEach((cb) => cb());
     }
   }
 
+  public isDemoModeActive(): boolean {
+    if (typeof window === 'undefined') return true;
+    try {
+      return sessionStorage.getItem('restopass_demo_mode') === 'true';
+    } catch {
+      return false;
+    }
+  }
+
+  public setDemoMode(isDemo: boolean): void {
+    if (typeof window !== 'undefined') {
+      try {
+        sessionStorage.setItem('restopass_demo_mode', String(isDemo));
+      } catch {}
+    }
+    if (isDemo) {
+      this.state = getInitialState();
+    } else {
+      this.state = getProductionCleanState();
+    }
+    this.saveState();
+    this.listeners.forEach((cb) => cb());
+  }
+
   private loadState(): AppState {
     if (typeof window === 'undefined') return getInitialState();
+    const isDemo = this.isDemoModeActive();
+    const activeStorageKey = isDemo ? STORAGE_KEY : STORAGE_KEY_PROD;
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = localStorage.getItem(activeStorageKey);
       if (saved) {
         const parsed = JSON.parse(saved);
-        // Merge with initial state to guarantee schema consistency
-        const initial = getInitialState();
-        let loadedPackages = initial.packages;
-        if (Array.isArray(parsed.packages) && parsed.packages.length > 0) {
-          loadedPackages = parsed.packages.map((pkg: any) => ({
-            ...pkg,
-            restaurantCode: pkg.restaurantCode || 'RW01',
-          }));
-        }
-
-        let loadedMenuItems = initial.menuItems;
-        if (Array.isArray(parsed.menuItems) && parsed.menuItems.length > 0) {
-          loadedMenuItems = parsed.menuItems.map((item: any) => ({
-            ...item,
-            restaurantCode: item.restaurantCode || 'RW01',
-          }));
-        }
-
-        let loadedBranches = initial.branches;
-        if (Array.isArray(parsed.branches) && parsed.branches.length > 0) {
-          loadedBranches = parsed.branches;
-        }
-
-        let loadedStationUsers = initial.stationUsers;
-        if (Array.isArray(parsed.stationUsers) && parsed.stationUsers.length > 0) {
-          loadedStationUsers = parsed.stationUsers;
-        }
-
-        let loadedPendingApprovals = initial.pendingApprovals;
-        if (Array.isArray(parsed.pendingApprovals) && parsed.pendingApprovals.length > 0) {
-          loadedPendingApprovals = parsed.pendingApprovals;
-        }
-
-        let loadedShifts = initial.shifts;
-        if (Array.isArray(parsed.shifts) && parsed.shifts.length > 0) {
-          loadedShifts = parsed.shifts;
-        }
-
-        let loadedCashierSessions = initial.cashierSessions;
-        if (Array.isArray(parsed.cashierSessions) && parsed.cashierSessions.length > 0) {
-          loadedCashierSessions = parsed.cashierSessions;
-        }
-
-        // Ensure cust_pending_1 is present if not already in parsed customers
-        let loadedCustomers = initial.customers;
-        if (Array.isArray(parsed.customers) && parsed.customers.length > 0) {
-          const custIds = new Set(parsed.customers.map((c: any) => c.id));
-          const missingInitial = initial.customers.filter((c) => !custIds.has(c.id));
-          loadedCustomers = [...parsed.customers, ...missingInitial];
-        }
-
+        const baseState = isDemo ? getInitialState() : getProductionCleanState();
         return {
-          ...initial,
+          ...baseState,
           ...parsed,
-          theme: parsed.theme || initial.theme,
-          plans: initial.plans, // keep plan definitions fresh
-          packages: loadedPackages,
-          menuItems: loadedMenuItems,
-          branches: loadedBranches,
-          stationUsers: loadedStationUsers,
-          pendingApprovals: loadedPendingApprovals,
-          shifts: loadedShifts,
-          cashierSessions: loadedCashierSessions,
-          customers: loadedCustomers,
-          notifications: Array.isArray(parsed.notifications) && parsed.notifications.length > 0
-            ? parsed.notifications
-            : initial.notifications,
+          theme: parsed.theme || baseState.theme,
+          plans: baseState.plans,
+          restaurants: Array.isArray(parsed.restaurants) && parsed.restaurants.length > 0
+            ? (isDemo ? parsed.restaurants : parsed.restaurants.filter((r: any) => !DEMO_SEED_RESTO_CODES.has(r.code)))
+            : baseState.restaurants,
+          packages: Array.isArray(parsed.packages) && parsed.packages.length > 0
+            ? parsed.packages
+            : baseState.packages,
+          menuItems: Array.isArray(parsed.menuItems) && parsed.menuItems.length > 0
+            ? parsed.menuItems
+            : baseState.menuItems,
+          branches: Array.isArray(parsed.branches) && parsed.branches.length > 0
+            ? parsed.branches
+            : baseState.branches,
+          stationUsers: Array.isArray(parsed.stationUsers) && parsed.stationUsers.length > 0
+            ? parsed.stationUsers
+            : baseState.stationUsers,
+          pendingApprovals: Array.isArray(parsed.pendingApprovals)
+            ? (isDemo
+                ? parsed.pendingApprovals
+                : parsed.pendingApprovals.filter(
+                    (a: any) => !DEMO_SEED_APPROVAL_IDS.has(a.id) && !DEMO_SEED_CUSTOMER_IDS.has(a.customerId)
+                  ))
+            : baseState.pendingApprovals,
+          shifts: Array.isArray(parsed.shifts)
+            ? (isDemo ? parsed.shifts : parsed.shifts.filter((s: any) => !DEMO_SEED_SHIFT_IDS.has(s.id)))
+            : baseState.shifts,
+          cashierSessions: Array.isArray(parsed.cashierSessions)
+            ? (isDemo ? parsed.cashierSessions : parsed.cashierSessions.filter((s: any) => !DEMO_SEED_SESSION_IDS.has(s.id)))
+            : baseState.cashierSessions,
+          customers: Array.isArray(parsed.customers)
+            ? (isDemo ? parsed.customers : parsed.customers.filter((c: any) => !DEMO_SEED_CUSTOMER_IDS.has(c.id)))
+            : baseState.customers,
+          ledgerEntries: Array.isArray(parsed.ledgerEntries)
+            ? (isDemo ? parsed.ledgerEntries : parsed.ledgerEntries.filter((l: any) => !DEMO_SEED_CUSTOMER_IDS.has(l.customerId)))
+            : baseState.ledgerEntries,
+          scanEvents: Array.isArray(parsed.scanEvents)
+            ? (isDemo
+                ? parsed.scanEvents
+                : parsed.scanEvents.filter(
+                    (s: any) => !DEMO_SEED_SCAN_IDS.has(s.id) && !DEMO_SEED_CUSTOMER_IDS.has(s.customerId)
+                  ))
+            : baseState.scanEvents,
+          notifications: Array.isArray(parsed.notifications)
+            ? (isDemo
+                ? parsed.notifications
+                : parsed.notifications.filter(
+                    (n: any) =>
+                      !DEMO_SEED_NOTIF_IDS.has(n.id) &&
+                      !DEMO_SEED_CUSTOMER_IDS.has(n.target) &&
+                      !DEMO_SEED_RESTO_CODES.has(n.restaurantCode)
+                  ))
+            : baseState.notifications,
+          expenses: Array.isArray(parsed.expenses)
+            ? (isDemo ? parsed.expenses : parsed.expenses.filter((e: any) => !DEMO_SEED_RESTO_CODES.has(e.restaurantCode)))
+            : baseState.expenses,
+          studentSubscriptionSettings: parsed.studentSubscriptionSettings
+            ? { ...baseState.studentSubscriptionSettings, ...parsed.studentSubscriptionSettings }
+            : baseState.studentSubscriptionSettings,
         };
       }
     } catch (e) {
       console.error('Failed to load RestoPass state', e);
     }
-    return getInitialState();
+    return isDemo ? getInitialState() : getProductionCleanState();
   }
 
   private saveTimeout: any = null;
@@ -1755,7 +1946,8 @@ export class RestoStore {
   private saveState(): void {
     if (typeof window === 'undefined') return;
     try {
-      localStorage.setItem(STORAGE_KEY, this.sanitizeStateForStorage(this.state));
+      const activeStorageKey = this.isDemoModeActive() ? STORAGE_KEY : STORAGE_KEY_PROD;
+      localStorage.setItem(activeStorageKey, this.sanitizeStateForStorage(this.state));
     } catch (e) {
       console.error('Failed to save RestoPass state', e);
     }
@@ -1888,8 +2080,93 @@ export class RestoStore {
 
   public getRestaurantLicense(restaurantCode: string): License | undefined {
     const r = this.state.restaurants.find((res) => res.code === restaurantCode);
-    if (!r?.currentLicenseId) return undefined;
-    return this.state.licenses.find((l) => l.id === r.currentLicenseId);
+    if (r?.currentLicenseId) {
+      const match = this.state.licenses.find((l) => l.id === r.currentLicenseId);
+      if (match) return match;
+    }
+    const restoLicenses = (this.state.licenses || []).filter((l) => l.restaurantCode === restaurantCode);
+    if (restoLicenses.length > 0) {
+      return restoLicenses[restoLicenses.length - 1];
+    }
+    return undefined;
+  }
+
+  /**
+   * Time-dependent Restaurant License Status:
+   * - Automatically expires when validUntil passes (or if restaurant is suspended/unlicensed).
+   * - Warns restaurant 7 days before monthly subscription ends.
+   */
+  public getRestaurantLicenseStatus(restaurantCode?: string): {
+    status: 'active' | 'expiring_soon' | 'expired' | 'unlicensed';
+    isExpired: boolean;
+    isExpiringSoon: boolean;
+    daysRemaining: number;
+    hoursRemaining: number;
+    validUntil: string | null;
+    license?: License;
+    warningMessage?: string;
+  } {
+    const code = restaurantCode || this.state.currentRestaurantCode;
+    const restaurant = this.state.restaurants.find((r) => r.code === code);
+    const license = this.getRestaurantLicense(code);
+    const guardedNow = this.getGuardedTime(code);
+
+    if (!license) {
+      return {
+        status: 'unlicensed',
+        isExpired: true,
+        isExpiringSoon: false,
+        daysRemaining: 0,
+        hoursRemaining: 0,
+        validUntil: null,
+        warningMessage: 'No active license issued for this restaurant. Please activate a monthly subscription license in Super Admin.',
+      };
+    }
+
+    const validUntilMs = new Date(license.validUntil).getTime();
+    const msRemaining = validUntilMs - guardedNow;
+    const daysRemaining = Math.max(0, Math.ceil(msRemaining / (24 * 3600 * 1000)));
+    const hoursRemaining = Math.max(0, Math.ceil(msRemaining / (3600 * 1000)));
+
+    if (msRemaining <= 0 || restaurant?.status === 'suspended') {
+      if (restaurant && restaurant.status === 'active' && msRemaining <= 0) {
+        restaurant.status = 'suspended';
+      }
+      return {
+        status: 'expired',
+        isExpired: true,
+        isExpiringSoon: false,
+        daysRemaining: 0,
+        hoursRemaining: 0,
+        validUntil: license.validUntil,
+        license,
+        warningMessage:
+          'Monthly restaurant subscription license has expired. Boss and Scanner operations are locked until the license is renewed and reactivated by Super Admin.',
+      };
+    }
+
+    if (daysRemaining <= 7) {
+      return {
+        status: 'expiring_soon',
+        isExpired: false,
+        isExpiringSoon: true,
+        daysRemaining,
+        hoursRemaining,
+        validUntil: license.validUntil,
+        license,
+        warningMessage: `Subscription Renewal Warning: Your monthly restaurant license expires in ${daysRemaining} day${daysRemaining === 1 ? '' : 's'} (${new Date(license.validUntil).toLocaleDateString()}). Please renew with RestoPass Super Admin to avoid service interruption.`,
+      };
+    }
+
+    return {
+      status: 'active',
+      isExpired: false,
+      isExpiringSoon: false,
+      daysRemaining,
+      hoursRemaining,
+      validUntil: license.validUntil,
+      license,
+    };
   }
 
   public getRestaurantTerms(restaurantCode: string): PlanTerms {
@@ -2052,21 +2329,12 @@ export class RestoStore {
       };
     };
 
-    // 0. Offline License Enforcement
-    const license = this.getRestaurantLicense(restaurantCode);
-    if (!license) {
+    // 0. Time-Dependent Monthly License Enforcement
+    const licStatus = this.getRestaurantLicenseStatus(restaurantCode);
+    if (licStatus.isExpired) {
       return buildRejection(
         'LICENSE_INVALID',
-        'License missing or not activated for this restaurant'
-      );
-    }
-
-    const validUntilMs = new Date(license.validUntil).getTime();
-    const graceUntilMs = validUntilMs + license.graceDays * 24 * 3600 * 1000;
-    if (guardedNow > graceUntilMs) {
-      return buildRejection(
-        'LICENSE_INVALID',
-        'Restaurant subscription expired (scanning disabled by authority)'
+        licStatus.warningMessage || 'Restaurant monthly subscription license has expired (please renew to continue operation)'
       );
     }
 
@@ -3070,6 +3338,12 @@ export class RestoStore {
     const customer = this.state.customers.find((c) => c.id === customerId);
     if (!customer) return;
 
+    // When invoked from customer portal, enforce active student subscription if monetization is enabled
+    if (this.state.currentRole === 'customer') {
+      const ent = this.checkStudentEntitlement(customer.id, 'customer_dashboard');
+      if (!ent.allowed) return;
+    }
+
     customer.cardStatus = status;
 
     this.queueOutboxItem('card_update', customer.id, { cardStatus: status, cardVersion: customer.cardVersion });
@@ -3636,6 +3910,139 @@ export class RestoStore {
       details: `Issued signed Ed25519 license ${license.id} for ${data.restaurantCode} valid until ${validUntil}`,
     });
 
+    this.scheduleSaveState();
+    this.pushStateToServer();
+    this.notify();
+    return license;
+  }
+
+  /**
+   * Super Admin 1-Click Activate / Renew Monthly License for a Restaurant
+   */
+  public renewRestaurantLicense(params: {
+    restaurantCode: string;
+    validDays?: number;
+    maxScanPoints?: number;
+    recordPayment?: boolean;
+  }): License {
+    const restaurant = this.state.restaurants.find((r) => r.code === params.restaurantCode);
+    if (!restaurant) throw new Error('Restaurant not found');
+
+    const existingLic = this.getRestaurantLicense(params.restaurantCode);
+    const plan = this.state.plans.find((p) => p.id === restaurant.planId) || this.state.plans[0];
+    const validDays = params.validDays ?? 30;
+    const maxScanPoints = params.maxScanPoints ?? existingLic?.maxScanPoints ?? plan.terms.maxScanPointsIncluded ?? 4;
+
+    const newLic = this.issueLicense({
+      restaurantCode: params.restaurantCode,
+      planId: restaurant.planId,
+      maxScanPoints,
+      validDays,
+      graceDays: 0,
+      featureFlags: existingLic?.featureFlags || {
+        spotChecksEnabled: true,
+        multiStationEnabled: true,
+        secondPlateAllowed: true,
+        customerTransfersEnabled: true,
+      },
+    });
+
+    if (existingLic) {
+      existingLic.validUntil = newLic.validUntil;
+      existingLic.paidUntil = newLic.validUntil;
+      existingLic.graceDays = 0;
+    }
+    restaurant.status = 'active';
+    restaurant.currentLicenseId = newLic.id;
+    restaurant.highestTimeSeen = Date.now();
+
+    if (params.recordPayment !== false && validDays >= 28) {
+      const now = new Date();
+      this.recordSubscriptionPayment({
+        restaurantCode: restaurant.code,
+        restaurantName: restaurant.name,
+        amountRwf: plan.terms.basePriceRwf,
+        periodCovered: `${now.toLocaleString('en-US', { month: 'short', year: 'numeric' })} (${validDays}d Renewal)`,
+        paidAt: now.toISOString(),
+        paymentMethod: 'MOMO_B2B',
+        reference: `RENEW-${restaurant.code}-${Date.now().toString().slice(-5)}`,
+      });
+    }
+
+    this.sendNotification({
+      restaurantCode: restaurant.code,
+      target: 'all',
+      senderRole: 'system',
+      senderName: 'RestoPass Super Admin',
+      type: 'system_broadcast',
+      title: `Restaurant License Activated (${validDays} Days)`,
+      message: `License ${newLic.id} is active until ${new Date(newLic.validUntil).toLocaleDateString()}. All Boss and Scanner operations are unlocked.`,
+      priority: 'important',
+    });
+
+    this.scheduleSaveState();
+    this.pushStateToServer();
+    this.notify();
+    return newLic;
+  }
+
+  /**
+   * Super Admin action to immediately expire/suspend a restaurant's license (or set custom remaining days)
+   */
+  public setRestaurantLicenseRemainingDays(restaurantCode: string, remainingDays: number): License | undefined {
+    const restaurant = this.state.restaurants.find((r) => r.code === restaurantCode);
+    if (!restaurant) return undefined;
+
+    let license = this.getRestaurantLicense(restaurantCode);
+    if (!license) {
+      license = this.issueLicense({
+        restaurantCode,
+        planId: restaurant.planId,
+        maxScanPoints: 4,
+        validDays: Math.max(1, remainingDays),
+        graceDays: 0,
+        featureFlags: {
+          spotChecksEnabled: true,
+          multiStationEnabled: true,
+          secondPlateAllowed: true,
+          customerTransfersEnabled: true,
+        },
+      });
+    }
+
+    const targetTime = Date.now() + remainingDays * 24 * 3600 * 1000;
+    license.validUntil = new Date(targetTime).toISOString();
+    license.paidUntil = license.validUntil;
+    license.graceDays = 0;
+    restaurant.status = remainingDays <= 0 ? 'suspended' : 'active';
+    restaurant.highestTimeSeen = Date.now();
+
+    if (remainingDays > 0 && remainingDays <= 7) {
+      this.sendNotification({
+        restaurantCode: restaurant.code,
+        target: 'all',
+        senderRole: 'system',
+        senderName: 'RestoPass License Sentinel',
+        type: 'system_broadcast',
+        title: `7-Day License Expiry Warning (${remainingDays}d left)`,
+        message: `Your monthly RestoPass subscription expires in ${remainingDays} day(s) on ${new Date(license.validUntil).toLocaleDateString()}. Please renew with Super Admin before expiration to avoid interruption.`,
+        priority: 'urgent',
+      });
+    }
+
+    this.logAudit({
+      restaurantCode,
+      actorRole: 'super_admin',
+      actorName: 'Ephrem (Super Admin)',
+      action: remainingDays <= 0 ? 'LICENSE_EXPIRED_ENFORCED' : 'LICENSE_EXPIRY_UPDATED',
+      details:
+        remainingDays <= 0
+          ? `Restaurant ${restaurantCode} license expired. Boss and Scanner operations locked until renewal.`
+          : `Restaurant ${restaurantCode} license set to ${remainingDays} day(s) remaining (valid until ${license.validUntil}).`,
+    });
+
+    this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return license;
   }
@@ -3733,6 +4140,10 @@ export class RestoStore {
   }
 
   public getCustomerPhoneQr(customer: Customer): { token: string; step: number; secondsRemaining: number } {
+    const ent = this.checkStudentEntitlement(customer.id, 'digital_qr');
+    if (!ent.allowed) {
+      return { token: '', step: 0, secondsRemaining: 0 };
+    }
     return generatePhoneToken(customer.restaurantCode, customer.memberNo, customer.keyVersion);
   }
 
@@ -4027,6 +4438,35 @@ export class RestoStore {
   }
 
   /**
+   * Calculate price for any plate count based on restaurant single plate rate and bundles
+   */
+  public calculatePlatesPrice(restaurantCode?: string, plates = 1): { amountRwf: number; ratePerPlate: number; appliedTier: string } {
+    const code = restaurantCode || this.state.currentRestaurantCode;
+    const count = Math.max(1, Math.round(plates));
+    const pkgs = this.getRestaurantPackages(code);
+    const r = this.state.restaurants.find((res) => res.code === code);
+    const baseRate = r?.defaultPlatePriceRwf || 1200;
+
+    // Check exact bundle match (e.g. 60, 30, 15)
+    const exactPkg = pkgs.find((p) => p.platesCount === count);
+    if (exactPkg) {
+      return {
+        amountRwf: exactPkg.priceRwf,
+        ratePerPlate: Math.round(exactPkg.priceRwf / count),
+        appliedTier: `${exactPkg.name} Bundle (${count}p)`,
+      };
+    }
+
+    // Default to unit rate * plates
+    const amountRwf = count * baseRate;
+    return {
+      amountRwf,
+      ratePerPlate: baseRate,
+      appliedTier: `Unit Rate (${baseRate.toLocaleString()} RWF/plate)`,
+    };
+  }
+
+  /**
    * Update a restaurant's baseline single-plate price for custom top-ups
    */
   public updateRestaurantDefaultPlatePrice(restaurantCode: string, priceRwf: number, actorName = 'Restaurant Admin'): number {
@@ -4167,6 +4607,7 @@ export class RestoStore {
       details: `Added menu item "${newItem.name}" (${newItem.priceRwf.toLocaleString()} RWF in ${newItem.category})`,
     });
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return newItem;
   }
@@ -4205,6 +4646,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return item;
   }
@@ -4260,6 +4702,7 @@ export class RestoStore {
       details: `Created new branch "${newBranch.name}" (${newBranch.code}) at ${newBranch.address}. Manager: ${newBranch.managerName}`,
     });
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return newBranch;
   }
@@ -4286,6 +4729,7 @@ export class RestoStore {
       details: `Updated branch settings for "${branch.name}" (${branch.code})`,
     });
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return branch;
   }
@@ -4367,6 +4811,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return newUser;
   }
@@ -4403,6 +4848,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return user;
   }
@@ -4428,6 +4874,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return true;
   }
@@ -4456,6 +4903,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return true;
   }
@@ -4653,6 +5101,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return { success: true, station, session: newSession };
   }
@@ -4693,6 +5142,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return true;
   }
@@ -4770,6 +5220,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return true;
   }
@@ -4812,6 +5263,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return active.length;
   }
@@ -4982,6 +5434,8 @@ export class RestoStore {
       gracePlatesConsumed: 0,
       createdAt: now,
       status: 'pending',
+      requiresSuperAdminCoSign: data.platesRequested > 120,
+      coSignStatus: data.platesRequested > 120 ? 'pending_super_admin' : 'not_required',
     };
 
     if (!this.state.customers) this.state.customers = [];
@@ -5028,6 +5482,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return { customer: newCustomer, approval };
   }
@@ -5087,6 +5542,8 @@ export class RestoStore {
       gracePlatesConsumed: 0,
       createdAt: now,
       status: 'pending',
+      requiresSuperAdminCoSign: data.platesRequested > 120,
+      coSignStatus: data.platesRequested > 120 ? 'pending_super_admin' : 'not_required',
     };
 
     if (!this.state.pendingApprovals) this.state.pendingApprovals = [];
@@ -5143,6 +5600,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return approval;
   }
@@ -5164,6 +5622,38 @@ export class RestoStore {
     if (!customer) return { success: false, error: 'Customer not found' };
 
     const now = new Date().toISOString();
+
+    // High-value dual control: Exceeding 120 plates requires cryptographic co-signing from Super Admin
+    if (approval.platesRequested > 120 && approval.coSignStatus !== 'co_signed') {
+      approval.requiresSuperAdminCoSign = true;
+      approval.coSignStatus = 'pending_super_admin';
+      approval.reviewedAt = now;
+      approval.reviewedByAdminName = bossName;
+
+      this.logAudit({
+        restaurantCode: approval.restaurantCode,
+        actorRole: 'restaurant_admin',
+        actorName: bossName,
+        action: 'BOSS_APPROVED_AWAITING_COSIGN',
+        details: `Boss approved high-value balance of ${approval.platesRequested} plates (> 120 plates threshold) for #${customer.memberNo} (${customer.name}). Awaiting Super Admin cryptographic co-signature before ledger credit becomes irrevocable.`,
+      });
+
+      this.sendNotification({
+        restaurantCode: approval.restaurantCode,
+        target: 'all',
+        senderRole: 'restaurant_admin',
+        senderName: bossName,
+        type: 'system_broadcast',
+        title: `High-Value Top-Up (>120 Plates) Awaiting Super Admin Co-Sign`,
+        message: `Boss verified payment for ${approval.platesRequested} plates (#${customer.memberNo} ${customer.name}). Super Admin co-signature is required.`,
+        priority: 'urgent',
+      });
+
+      this.scheduleSaveState();
+      this.pushStateToServer();
+      this.notify();
+      return { success: true, customer };
+    }
     // Use the grace meals linked to this specific approval; fall back to customer.gracePlatesConsumed only for a new_customer registration if set directly
     const graceConsumed =
       (approval.gracePlatesConsumed || 0) > 0
@@ -5286,8 +5776,43 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return { success: true, customer };
+  }
+
+  /**
+   * Super Admin Cryptographic Co-Signing for High-Value Entitlements (> 120 plates / 2 months)
+   * Enforces dual control between Restaurant Admin and Super Admin.
+   */
+  public coSignPendingRequest(
+    approvalId: string,
+    superAdminName = 'Ephrem (Founder & Super Admin)'
+  ): { success: boolean; customer?: Customer; error?: string } {
+    if (!this.state.pendingApprovals) return { success: false, error: 'No approvals found' };
+    const approval = this.state.pendingApprovals.find((a) => a.id === approvalId);
+    if (!approval) return { success: false, error: 'Approval request not found' };
+
+    const customer = this.state.customers.find((c) => c.id === approval.customerId);
+    if (!customer) return { success: false, error: 'Customer not found' };
+
+    const now = new Date().toISOString();
+    const signature = `COSIGN-${approval.id}-${Date.now().toString(36).toUpperCase()}`;
+
+    approval.coSignStatus = 'co_signed';
+    approval.coSignedAt = now;
+    approval.coSignedBySuperAdminName = superAdminName;
+    approval.coSignature = signature;
+
+    this.logAudit({
+      restaurantCode: approval.restaurantCode,
+      actorRole: 'super_admin',
+      actorName: superAdminName,
+      action: 'APPROVAL_COSIGNED',
+      details: `Super Admin cryptographically co-signed high-value balance of ${approval.platesRequested} plates (> 120 threshold) for #${customer.memberNo} (${customer.name}). Sig: ${signature}`,
+    });
+
+    return this.approvePendingRequest(approvalId, approval.reviewedByAdminName || 'Restaurant Boss');
   }
 
   /**
@@ -5354,6 +5879,7 @@ export class RestoStore {
     }
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return { success: true };
   }
@@ -5419,6 +5945,191 @@ export class RestoStore {
   }
 
   // =========================================================================
+  // RESTAURANT EXPENSE TRACKING & PROFIT/LOSS CO-PILOT
+  // =========================================================================
+
+  public getRestaurantExpenses(restaurantCode?: string): RestaurantExpense[] {
+    if (!this.state.expenses) this.state.expenses = [];
+    const code = restaurantCode || this.state.currentRestaurantCode;
+    return this.state.expenses
+      .filter((e) => e.restaurantCode === code)
+      .sort((a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime());
+  }
+
+  public addRestaurantExpense(params: {
+    restaurantCode?: string;
+    category: ExpenseCategory;
+    categoryLabel?: string;
+    amountRwf: number;
+    description: string;
+    supplierName?: string;
+    receiptNumber?: string;
+    recordedByRole?: string;
+    recordedByName?: string;
+  }): RestaurantExpense {
+    if (!this.state.expenses) this.state.expenses = [];
+    const code = params.restaurantCode || this.state.currentRestaurantCode;
+    const now = new Date().toISOString();
+    const id = `exp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
+    const categoryLabels: Record<ExpenseCategory, string> = {
+      food_supplies: 'Food Supplies & Produce',
+      fuel_gas_charcoal: 'Cooking Fuel, LPG & Charcoal',
+      staff_wages: 'Staff & Kitchen Wages',
+      rent_utilities: 'Rent, Water & Electricity',
+      packaging_logistics: 'Packaging, Soap & Logistics',
+      other: 'Other Operating Expenses',
+    };
+
+    const newExpense: RestaurantExpense = {
+      id,
+      restaurantCode: code,
+      category: params.category,
+      categoryLabel: params.categoryLabel || categoryLabels[params.category] || 'Operating Expense',
+      amountRwf: Math.max(0, Math.round(params.amountRwf)),
+      description: params.description.trim(),
+      supplierName: params.supplierName?.trim(),
+      receiptNumber: params.receiptNumber?.trim(),
+      recordedByRole: params.recordedByRole || this.state.currentRole,
+      recordedByName: params.recordedByName || 'Manager',
+      recordedAt: now,
+    };
+
+    this.state.expenses.unshift(newExpense);
+
+    this.logAudit({
+      restaurantCode: code,
+      actorRole: this.state.currentRole,
+      actorName: newExpense.recordedByName,
+      action: 'EXPENSE_RECORDED',
+      details: `Recorded ${newExpense.categoryLabel} expense: ${newExpense.amountRwf.toLocaleString()} RWF (${newExpense.description})`,
+    });
+
+    this.scheduleSaveState();
+    this.pushStateToServer();
+    this.notify();
+    return newExpense;
+  }
+
+  public deleteRestaurantExpense(expenseId: string, actorName = 'Manager'): boolean {
+    if (!this.state.expenses) return false;
+    const idx = this.state.expenses.findIndex((e) => e.id === expenseId);
+    if (idx === -1) return false;
+    const [removed] = this.state.expenses.splice(idx, 1);
+
+    this.logAudit({
+      restaurantCode: removed.restaurantCode,
+      actorRole: this.state.currentRole,
+      actorName,
+      action: 'EXPENSE_DELETED',
+      details: `Deleted expense record ${removed.id}: ${removed.amountRwf.toLocaleString()} RWF (${removed.description})`,
+    });
+
+    this.scheduleSaveState();
+    this.pushStateToServer();
+    this.notify();
+    return true;
+  }
+
+  public getRestaurantProfitAndLoss(
+    restaurantCode?: string,
+    targetMonth?: number,
+    targetYear?: number
+  ): {
+    monthLabel: string;
+    intakeCashRwf: number;
+    realizedRevenueRwf: number;
+    outstandingLiabilityRwf: number;
+    totalExpensesRwf: number;
+    grossProfitRwf: number;
+    netCashFlowRwf: number;
+    costPerPlateServed: number;
+    avgRevenuePerPlate: number;
+    platesServedCount: number;
+    isOperatingAtLoss: boolean;
+    healthStatus: 'profitable' | 'balanced' | 'loss_warning';
+    healthRecommendation: string;
+    expenseCategories: { category: ExpenseCategory; label: string; amountRwf: number; percentage: number }[];
+  } {
+    const code = restaurantCode || this.state.currentRestaurantCode;
+    const now = new Date();
+    const m = targetMonth !== undefined ? targetMonth : now.getMonth();
+    const y = targetYear !== undefined ? targetYear : now.getFullYear();
+
+    const recon = this.getRestaurantMonthlyMetrics(code, new Date(y, m, 1));
+    const allExpenses = this.getRestaurantExpenses(code).filter((e) => {
+      const d = new Date(e.recordedAt);
+      return d.getMonth() === m && d.getFullYear() === y;
+    });
+
+    const totalExpensesRwf = allExpenses.reduce((sum, e) => sum + e.amountRwf, 0);
+    const realizedRevenueRwf = recon.monthlyUsedCashRwf;
+    const intakeCashRwf = recon.monthlyPrepaidCashRwf;
+    const outstandingLiabilityRwf = recon.remainingCashRwf;
+    const platesServedCount = recon.monthlyUsedPlates;
+    const avgRevenuePerPlate = recon.avgPricePerPlate;
+
+    const grossProfitRwf = realizedRevenueRwf - totalExpensesRwf;
+    const netCashFlowRwf = intakeCashRwf - totalExpensesRwf;
+    const costPerPlateServed = platesServedCount > 0 ? Math.round(totalExpensesRwf / platesServedCount) : 0;
+    const isOperatingAtLoss = platesServedCount > 0 && grossProfitRwf < 0;
+
+    let healthStatus: 'profitable' | 'balanced' | 'loss_warning' = 'balanced';
+    let healthRecommendation = 'Operating in a healthy financial position.';
+
+    if (platesServedCount === 0 && totalExpensesRwf === 0) {
+      healthStatus = 'balanced';
+      healthRecommendation = 'No meals or expenses logged yet for this billing cycle.';
+    } else if (isOperatingAtLoss) {
+      healthStatus = 'loss_warning';
+      const lossPerMeal = costPerPlateServed - avgRevenuePerPlate;
+      healthRecommendation = `Attention: Meal production costs (${costPerPlateServed.toLocaleString()} RWF/plate) exceed average plate revenue (${avgRevenuePerPlate.toLocaleString()} RWF/plate) by ${lossPerMeal.toLocaleString()} RWF. Consider auditing wholesale dry goods suppliers or adjusting meal bundle pricing.`;
+    } else if (grossProfitRwf > 0) {
+      healthStatus = 'profitable';
+      const margin = Math.round((grossProfitRwf / Math.max(1, realizedRevenueRwf)) * 100);
+      healthRecommendation = `Strong operational health: Realized ${margin}% gross margin across ${platesServedCount.toLocaleString()} meals served this month.`;
+    }
+
+    const categoryMap = new Map<ExpenseCategory, number>();
+    for (const exp of allExpenses) {
+      categoryMap.set(exp.category, (categoryMap.get(exp.category) || 0) + exp.amountRwf);
+    }
+
+    const categoryLabels: Record<ExpenseCategory, string> = {
+      food_supplies: 'Food Supplies & Produce',
+      fuel_gas_charcoal: 'Cooking Fuel & LPG',
+      staff_wages: 'Staff & Kitchen Wages',
+      rent_utilities: 'Rent, Water & Electric',
+      packaging_logistics: 'Logistics & Packaging',
+      other: 'Other Expenses',
+    };
+
+    const expenseCategories = Array.from(categoryMap.entries()).map(([cat, amt]) => ({
+      category: cat,
+      label: categoryLabels[cat] || cat,
+      amountRwf: amt,
+      percentage: totalExpensesRwf > 0 ? Math.round((amt / totalExpensesRwf) * 100) : 0,
+    })).sort((a, b) => b.amountRwf - a.amountRwf);
+
+    return {
+      monthLabel: recon.monthLabel,
+      intakeCashRwf,
+      realizedRevenueRwf,
+      outstandingLiabilityRwf,
+      totalExpensesRwf,
+      grossProfitRwf,
+      netCashFlowRwf,
+      costPerPlateServed,
+      avgRevenuePerPlate,
+      platesServedCount,
+      isOperatingAtLoss,
+      healthStatus,
+      healthRecommendation,
+      expenseCategories,
+    };
+  }
+
+  // =========================================================================
   // CUSTOMER ACCOUNT LIFECYCLE & SECURITY (Requirement 4)
   // =========================================================================
 
@@ -5436,6 +6147,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return true;
   }
@@ -5509,6 +6221,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return newShift;
   }
@@ -5567,6 +6280,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return { success: true, shift, varianceRwf: variance };
   }
@@ -5587,6 +6301,7 @@ export class RestoStore {
       details: `Updated restaurant details and appearance for ${resto.name} (${restaurantCode})`,
     });
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return resto;
   }
@@ -5633,6 +6348,7 @@ export class RestoStore {
       details: `Updated student subscription policy: enabled=${updated.enabled}, price=${updated.priceRwf} RWF, graceDays=${updated.graceDays}`,
     });
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return updated;
   }
@@ -5818,6 +6534,7 @@ export class RestoStore {
 
     this.state.studentSubscriptionPayments.unshift(payment);
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
 
     const providerName = params.provider === 'mtn_momo' ? 'MTN Mobile Money (*182#)' : 'Airtel Money (*500#)';
@@ -5907,6 +6624,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return { success: true, subscription: sub };
   }
@@ -5939,6 +6657,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return { success: true };
   }
@@ -6018,6 +6737,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return { success: true, subscription: sub };
   }
@@ -6056,6 +6776,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return { success: true };
   }
@@ -6122,6 +6843,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return { success: true, activationCode: code, expiresAt };
   }
@@ -6249,6 +6971,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return { success: true, customer: cust };
   }
@@ -6343,6 +7066,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return { success: true, customer: cust };
   }
@@ -6389,6 +7113,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return { success: true, requestId };
   }
@@ -6427,6 +7152,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return { success: true, recoveryCode: code, expiresAt };
   }
@@ -6500,6 +7226,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return { success: true };
   }
@@ -6633,6 +7360,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return { success: true, customer: cust };
   }

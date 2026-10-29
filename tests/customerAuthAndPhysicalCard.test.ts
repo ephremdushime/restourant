@@ -477,4 +477,146 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     const newV2Scan = restoStore.processScan(newCardTokenV2);
     assert.equal(newV2Scan.scanEvent.status, 'approved', 'Newly issued V2 physical card works immediately with customer balance');
   });
+
+  test('Step 10: Time-Dependent Monthly Restaurant License (7-Day Warning, Auto-Expiry Lock, Super Admin Renewal) & Full Customer Subscription Enforcement', () => {
+    const customer = restoStore.getState().customers[0];
+    assert.ok(customer);
+
+    // 1. Set restaurant license to 5 days remaining -> triggers 7-day expiry warning
+    restoStore.setRestaurantLicenseRemainingDays('RW01', 5);
+    const warnStatus = restoStore.getRestaurantLicenseStatus('RW01');
+    assert.equal(warnStatus.status, 'expiring_soon');
+    assert.equal(warnStatus.isExpiringSoon, true);
+    assert.equal(warnStatus.isExpired, false);
+    assert.ok(warnStatus.daysRemaining <= 7 && warnStatus.daysRemaining > 0);
+
+    // 2. Monthly subscription ends -> license automatically expires and blocks scanning
+    restoStore.setRestaurantLicenseRemainingDays('RW01', -1);
+    const expStatus = restoStore.getRestaurantLicenseStatus('RW01');
+    assert.equal(expStatus.status, 'expired');
+    assert.equal(expStatus.isExpired, true);
+
+    const cardToken = generateCardToken(customer.restaurantCode, customer.memberNo, customer.cardVersion);
+    const blockedByExpiredLicense = restoStore.processScan(cardToken);
+    assert.equal(blockedByExpiredLicense.outcome, 'REJECTED');
+    assert.equal(blockedByExpiredLicense.rejectionCode, 'LICENSE_INVALID');
+
+    // 3. Super Admin renews/activates 30-day license -> immediately unlocks restaurant operations
+    const renewedLic = restoStore.renewRestaurantLicense({
+      restaurantCode: 'RW01',
+      validDays: 30,
+    });
+    assert.ok(renewedLic.id);
+    const activeStatus = restoStore.getRestaurantLicenseStatus('RW01');
+    assert.equal(activeStatus.status, 'active');
+    assert.equal(activeStatus.isExpired, false);
+    assert.equal(activeStatus.isExpiringSoon, false);
+
+    // 4. Customer Subscription Enforcement across every customer feature when enabled
+    restoStore.updateStudentSubscriptionSettings({
+      enabled: true,
+      priceRwf: 500,
+      graceDays: 3,
+    });
+
+    const unsubscribedCust = restoStore.getState().customers[2];
+    assert.ok(unsubscribedCust);
+    // Ensure unsubscribedCust has no active subscription
+    restoStore.getState().customerSubscriptions = restoStore
+      .getState()
+      .customerSubscriptions.filter((s) => s.customerId !== unsubscribedCust.id);
+
+    // Digital phone QR generation is blocked without subscription
+    const phoneQrBlocked = restoStore.getCustomerPhoneQr(unsubscribedCust);
+    assert.equal(phoneQrBlocked.token, '', 'Digital phone QR must not be generated without active subscription');
+
+    // Plate transfer is blocked without subscription
+    const transferBlocked = restoStore.transferPlates({
+      senderCustomerId: unsubscribedCust.id,
+      recipientIdentifier: customer.memberNo,
+      plates: 1,
+      pin: '1234',
+    });
+    assert.equal(transferBlocked.success, false);
+    assert.equal(transferBlocked.requiresSubscription, true);
+  });
+
+  test('Step 11: Single-Plate Pricing, Dual-Control Co-Signing (>120p), P&L Co-Pilot & Super Admin Subscription Toggle', () => {
+    // 1. Single Plate Base Rate & Dynamic Bundle Calculation
+    const singleRate = restoStore.getRestaurantDefaultPlatePrice('RW01');
+    assert.ok(singleRate >= 1000, 'Baseline single plate price is configured');
+
+    const calc7 = restoStore.calculatePlatesPrice('RW01', 7);
+    assert.equal(calc7.amountRwf, 7 * singleRate, '7 plates calculated at unit rate');
+
+    const calc60 = restoStore.calculatePlatesPrice('RW01', 60);
+    assert.ok(calc60.amountRwf > 0, '60 plates bundle calculated correctly');
+
+    // 2. High-Liability Dual Control (> 120 plates / 2-month threshold)
+    const { approval: highValApproval, customer: highValCustomer } = restoStore.registerProvisionalCustomer({
+      restaurantCode: 'RW01',
+      name: 'Aimable Nkurunziza',
+      phone: '+250788334455',
+      idType: 'national_id',
+      idNumber: '1199880011223344',
+      isStudent: false,
+      platesRequested: 150, // > 120 plates!
+      amountRwf: 150000,
+      paymentMethod: 'mtn_momo',
+      paymentReference: 'MOMO-HIGH-VAL-991',
+      registeredByStaffId: 'staff_1',
+      registeredByStaffName: 'Cashier Alice',
+      stationId: 'sp_1',
+      stationName: 'Stand 1',
+    });
+
+    assert.equal(highValApproval.requiresSuperAdminCoSign, true);
+    assert.equal(highValApproval.coSignStatus, 'pending_super_admin');
+
+    // Boss approves payment verification
+    const bossReview = restoStore.approvePendingRequest(highValApproval.id, 'Restaurant Boss (Executive)');
+    assert.equal(bossReview.success, true);
+    // Ledger credit is withheld until Super Admin co-signs
+    assert.equal(highValApproval.coSignStatus, 'pending_super_admin');
+    const balanceBeforeCoSign = restoStore.getCustomerBalance(highValApproval.customerId);
+    assert.equal(balanceBeforeCoSign, 0, 'Plates not credited to balance before Super Admin co-sign');
+
+    // Super Admin co-signs
+    const coSignResult = restoStore.coSignPendingRequest(highValApproval.id, 'Ephrem (Founder & Super Admin)');
+    assert.equal(coSignResult.success, true);
+    assert.equal(highValApproval.coSignStatus, 'co_signed');
+    assert.ok(highValApproval.coSignature?.startsWith('COSIGN-'));
+    const balanceAfterCoSign = restoStore.getCustomerBalance(highValApproval.customerId);
+    assert.equal(balanceAfterCoSign, 150, '150 plates credited after Super Admin cryptographic co-signature');
+
+    // 3. Operating Expense Recording & Profit/Loss (P&L) Co-Pilot
+    const exp = restoStore.addRestaurantExpense({
+      restaurantCode: 'RW01',
+      category: 'food_supplies',
+      amountRwf: 85000,
+      description: '100kg Rice & Dry Beans Wholesale',
+      supplierName: 'Nyabugogo Grain Hub',
+      receiptNumber: 'INV-8891',
+      recordedByName: 'Manager Ephrem',
+    });
+    assert.ok(exp.id);
+    assert.equal(exp.amountRwf, 85000);
+
+    const pnl = restoStore.getRestaurantProfitAndLoss('RW01');
+    assert.ok(pnl.totalExpensesRwf >= 85000);
+    assert.ok(typeof pnl.grossProfitRwf === 'number');
+    assert.ok(pnl.healthStatus === 'profitable' || pnl.healthStatus === 'balanced' || pnl.healthStatus === 'loss_warning');
+
+    // 4. Super Admin Toggles Customer Subscription OFF -> All features unlocked without payment
+    restoStore.updateStudentSubscriptionSettings({
+      enabled: false,
+    });
+    const subSettings = restoStore.getStudentSubscriptionSettings();
+    assert.equal(subSettings.enabled, false);
+
+    const testCust = restoStore.getState().customers.find((c) => c.id === highValApproval.customerId);
+    assert.ok(testCust);
+    const phoneQrUnlocked = restoStore.getCustomerPhoneQr(testCust);
+    assert.ok(phoneQrUnlocked.token.length > 0, 'Digital phone QR works when monetization is toggled OFF');
+  });
 });

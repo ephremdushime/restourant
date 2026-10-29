@@ -896,11 +896,28 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
               )}
             </div>
 
-            <div className="p-4 bg-white rounded-2xl inline-block shadow-lg mx-auto">
-              <QrCanvas
-                value={qrPassType === 'dynamic' ? tokenInfo.token : permanentCardToken}
-                size={215}
-              />
+            <div className="relative inline-block mx-auto">
+              {/* Live Security Strobe Perimeter (Prevents Static Screenshot Fraud) */}
+              {qrPassType === 'dynamic' && (
+                <div className="absolute -inset-1 rounded-3xl bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-500 animate-pulse opacity-75 blur-xs pointer-events-none" />
+              )}
+              <div className="relative p-4 bg-white rounded-2xl shadow-xl border-2 border-emerald-400/80">
+                <QrCanvas
+                  value={qrPassType === 'dynamic' ? tokenInfo.token : permanentCardToken}
+                  size={215}
+                />
+                {qrPassType === 'dynamic' && (
+                  <div className="mt-2.5 pt-2 border-t border-slate-200 flex items-center justify-between text-[11px] font-mono text-slate-800">
+                    <span className="flex items-center gap-1 font-black text-emerald-700">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping inline-block" />
+                      LIVE PASS
+                    </span>
+                    <span className="font-bold text-slate-900">
+                      #{customer.memberNo} · Active
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
 
             {qrPassType === 'dynamic' ? (

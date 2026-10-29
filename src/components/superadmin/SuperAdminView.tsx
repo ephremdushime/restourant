@@ -123,6 +123,9 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
   // Metrics
   const totalSubRevenue = state.subscriptionPayments.reduce((sum, p) => sum + p.amountRwf, 0);
+  const pendingCoSigns = (state.pendingApprovals || []).filter(
+    (a) => a.platesRequested > 120 || a.requiresSuperAdminCoSign
+  );
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
@@ -167,6 +170,14 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
         {[
           { id: 'restaurants', label: 'Tenants & Health' },
           { id: 'student_subs', label: 'Student Monetization (500 RWF)' },
+          {
+            id: 'cosign_desk',
+            label: `Dual-Control Co-Sign Desk (>120p)${
+              pendingCoSigns.filter((a) => a.coSignStatus === 'pending_super_admin').length > 0
+                ? ` (${pendingCoSigns.filter((a) => a.coSignStatus === 'pending_super_admin').length} Action Req)`
+                : ''
+            }`,
+          },
           { id: 'plans', label: 'B2B Subscriptions & Limits' },
           { id: 'licenses', label: 'Signed Licences (.lic)' },
           { id: 'revenue', label: 'Platform Revenue' },
@@ -189,71 +200,135 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       {/* 1. RESTAURANTS TENANCY & HEALTH */}
       {activeSubTab === 'restaurants' && (
         <div className="space-y-4">
-          <div className="rounded-xl bg-slate-900 border border-slate-800 overflow-hidden">
+          <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-bold text-white flex items-center gap-2">
+                <FileKey className="w-4 h-4 text-emerald-400" />
+                <span>Time-Dependent Monthly Restaurant Licensing &amp; 7-Day Expiry Sentinel</span>
+              </h2>
+              <p className="text-xs text-slate-300 mt-0.5">
+                Licenses automatically expire when the monthly period ends. Restaurants receive an automatic warning <strong>7 days before expiry</strong>, and if expired, both Boss and Scanner portals are enforced to renew before continuing operation.
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-xl bg-slate-900 border border-slate-800 overflow-x-auto">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-950 text-slate-400 border-b border-slate-800">
+              <thead className="bg-slate-950 text-slate-300 border-b border-slate-800">
                 <tr>
                   <th className="py-3 px-4">Restaurant</th>
-                  <th className="py-3 px-4">Status &amp; Plan</th>
-                  <th className="py-3 px-4">Active License</th>
-                  <th className="py-3 px-4">Software Version</th>
-                  <th className="py-3 px-4">Last Sync</th>
-                  <th className="py-3 px-4 text-right">Switch Authority</th>
+                  <th className="py-3 px-4">License &amp; Operational Status</th>
+                  <th className="py-3 px-4">Time Remaining &amp; Expiry</th>
+                  <th className="py-3 px-4">Super Admin License Control</th>
+                  <th className="py-3 px-4 text-right">Target Scope</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/80">
                 {state.restaurants.map((resto) => {
-                  const lic = state.licenses.find((l) => l.id === resto.currentLicenseId);
+                  const licStatus = restoStore.getRestaurantLicenseStatus(resto.code);
+                  const lic = licStatus.license;
                   const isCurrent = state.currentRestaurantCode === resto.code;
                   return (
                     <tr key={resto.code} className="hover:bg-slate-800/40">
-                      <td className="py-3 px-4">
+                      <td className="py-3.5 px-4">
                         <div className="font-bold text-white text-sm">{resto.name}</div>
                         <div className="text-slate-400 font-mono text-[11px]">
                           Code: {resto.code} · {resto.phone}
                         </div>
                       </td>
 
-                      <td className="py-3 px-4">
-                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase bg-emerald-950 border border-emerald-800 text-emerald-400">
-                          {resto.status}
+                      <td className="py-3.5 px-4">
+                        <span
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase border ${
+                            licStatus.status === 'active'
+                              ? 'bg-emerald-950 border-emerald-700 text-emerald-300'
+                              : licStatus.status === 'expiring_soon'
+                              ? 'bg-amber-950 border-amber-600 text-amber-300 animate-pulse'
+                              : 'bg-rose-950 border-rose-700 text-rose-300'
+                          }`}
+                        >
+                          {licStatus.status === 'active'
+                            ? 'ACTIVE · OPERATIONAL'
+                            : licStatus.status === 'expiring_soon'
+                            ? `WARNING · ${licStatus.daysRemaining}D LEFT`
+                            : 'EXPIRED · LOCKED'}
                         </span>
-                        <div className="text-slate-400 text-[11px] mt-0.5 capitalize">
+                        <div className="text-slate-400 text-[11px] mt-1 capitalize">
                           {resto.planId.replace('_', ' ')}
                         </div>
                       </td>
 
-                      <td className="py-3 px-4 font-mono text-slate-300">
+                      <td className="py-3.5 px-4 font-mono text-slate-300">
                         {lic ? (
                           <div>
-                            <div className="text-emerald-400 font-bold">{lic.id}</div>
-                            <div className="text-slate-500 text-[10px]">
+                            <div
+                              className={`font-bold ${
+                                licStatus.isExpired
+                                  ? 'text-rose-400'
+                                  : licStatus.isExpiringSoon
+                                  ? 'text-amber-300'
+                                  : 'text-emerald-400'
+                              }`}
+                            >
+                              {lic.id} ({licStatus.isExpired ? '0 days left' : `${licStatus.daysRemaining} days left`})
+                            </div>
+                            <div className="text-slate-400 text-[11px]">
                               Valid until {new Date(lic.validUntil).toLocaleDateString()}
                             </div>
                           </div>
                         ) : (
-                          <span className="text-amber-400">Unlicensed</span>
+                          <span className="text-rose-400 font-bold">Unlicensed (Locked)</span>
                         )}
                       </td>
 
-                      <td className="py-3 px-4 font-mono text-slate-400 text-[11px]">
-                        {resto.softwareVersion}
+                      <td className="py-3.5 px-4">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              restoStore.renewRestaurantLicense({
+                                restaurantCode: resto.code,
+                                validDays: 30,
+                              })
+                            }
+                            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1 shadow-xs transition-colors cursor-pointer"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            <span>{licStatus.isExpired ? 'Activate 30d License' : 'Renew +30d'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => restoStore.setRestaurantLicenseRemainingDays(resto.code, 5)}
+                            title="Set license to 5 days remaining to trigger 7-day renewal warning"
+                            className="px-2.5 py-1.5 rounded-lg bg-amber-950/80 hover:bg-amber-900 border border-amber-700 text-amber-300 font-semibold text-[11px] transition-colors cursor-pointer"
+                          >
+                            Warn (5d left)
+                          </button>
+
+                          {!licStatus.isExpired && (
+                            <button
+                              type="button"
+                              onClick={() => restoStore.setRestaurantLicenseRemainingDays(resto.code, -1)}
+                              title="Immediately expire license and lock Boss & Scanner portals until renewed"
+                              className="px-2.5 py-1.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-800 text-rose-300 font-semibold text-[11px] transition-colors cursor-pointer"
+                            >
+                              Expire Now
+                            </button>
+                          )}
+                        </div>
                       </td>
 
-                      <td className="py-3 px-4 font-mono text-slate-400 text-[11px]">
-                        {new Date(resto.lastSyncAt).toLocaleTimeString()}
-                      </td>
-
-                      <td className="py-3 px-4 text-right">
+                      <td className="py-3.5 px-4 text-right">
                         <button
                           onClick={() => restoStore.setRestaurantCode(resto.code)}
-                          className={`px-3 py-1 rounded text-xs font-semibold transition-colors ${
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
                             isCurrent
                               ? 'bg-emerald-950 border border-emerald-600 text-emerald-400'
                               : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
                           }`}
                         >
-                          {isCurrent ? 'Current Local Authority' : 'Switch Context'}
+                          {isCurrent ? 'Active Scope' : 'Select Scope'}
                         </button>
                       </td>
                     </tr>
@@ -515,9 +590,9 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
               </div>
 
               <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
-                <div className="text-[10px] text-slate-400 uppercase font-mono">Enforced Feature</div>
-                <div className="text-sm font-bold text-white font-mono mt-0.5">Digital Plate Transfer</div>
-                <div className="text-[10px] text-slate-500 mt-0.5">Requires active / grace entitlement</div>
+                <div className="text-[10px] text-slate-400 uppercase font-mono">Enforced Scope</div>
+                <div className="text-sm font-bold text-white font-mono mt-0.5">All Customer Portal Features</div>
+                <div className="text-[10px] text-slate-500 mt-0.5">QR, Balance, Transfers, History &amp; Alerts</div>
               </div>
 
               <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
@@ -833,6 +908,129 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 Grant Entitlement
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* 8. DUAL-CONTROL CRYPTOGRAPHIC CO-SIGNING DESK (> 120 PLATES / 2 MONTHS) */}
+      {activeSubTab === 'cosign_desk' && (
+        <div className="space-y-6">
+          <div className="p-5 rounded-2xl bg-gradient-to-br from-indigo-950/80 via-slate-900 to-slate-900 border border-indigo-500/40 space-y-2">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-5 h-5 text-indigo-400" />
+              <h3 className="text-base font-bold text-white tracking-tight">
+                Dual-Control High-Liability Co-Signing Desk (&gt; 120 Plates / 2-Month Cap)
+              </h3>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 uppercase font-bold">
+                Platform Security Policy
+              </span>
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed max-w-3xl">
+              Meal balances exceeding <strong>120 plates</strong> represent substantial cafeteria liabilities (&gt; 130,000 RWF).
+              To eliminate cashier collusion, fraudulent Mobile Money SMS entry, or rogue administrative adjustments,
+              the ledger credit remains pending until <strong>both</strong> the Restaurant Admin and Super Admin cryptographically co-sign the entry.
+            </p>
+          </div>
+
+          <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-bold text-white uppercase tracking-wider">
+                  High-Value Patron Requests Awaiting / Requiring Dual Control
+                </h4>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Showing all patron top-ups &gt; 120 plates across all connected campus cafeterias.
+                </p>
+              </div>
+              <span className="text-xs font-mono px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-indigo-300 font-bold">
+                {pendingCoSigns.length} recorded
+              </span>
+            </div>
+
+            {pendingCoSigns.length === 0 ? (
+              <div className="text-center py-12 border border-dashed border-slate-800 rounded-xl space-y-2">
+                <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto" />
+                <div className="text-sm font-bold text-white">All Clear — No High-Value Co-Signs Pending</div>
+                <div className="text-xs text-slate-400 max-w-md mx-auto">
+                  No top-ups exceeding 120 plates require cryptographic countersignature at this time.
+                </div>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="border-b border-slate-800 text-slate-400 uppercase tracking-wider text-[10px]">
+                    <tr>
+                      <th className="py-3 px-3">Cafeteria</th>
+                      <th className="py-3 px-3">Patron &amp; Phone</th>
+                      <th className="py-3 px-3">Volume &amp; Cash Intake</th>
+                      <th className="py-3 px-3">MoMo Reference</th>
+                      <th className="py-3 px-3">Status &amp; Verification</th>
+                      <th className="py-3 px-3 text-right">Super Admin Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60 font-medium">
+                    {pendingCoSigns.map((appr) => {
+                      const isReadyForCoSign = appr.coSignStatus === 'pending_super_admin';
+                      const isCoSigned = appr.coSignStatus === 'co_signed';
+                      return (
+                        <tr key={appr.id} className="hover:bg-slate-800/40 transition-colors">
+                          <td className="py-3 px-3 text-white font-mono">{appr.restaurantCode}</td>
+                          <td className="py-3 px-3">
+                            <div className="font-bold text-white">{appr.customerName}</div>
+                            <div className="text-[11px] text-slate-400 font-mono">#{appr.memberNo} · {appr.customerPhone}</div>
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="text-amber-400 font-mono font-bold text-sm">+{appr.platesRequested} plates</span>
+                            <div className="text-slate-300 font-mono text-[11px]">{appr.amountRwf.toLocaleString()} RWF</div>
+                          </td>
+                          <td className="py-3 px-3">
+                            <div className="font-mono text-emerald-400 text-xs font-bold">{appr.paymentReference}</div>
+                            <div className="text-slate-400 text-[10px] uppercase">{appr.paymentMethod}</div>
+                          </td>
+                          <td className="py-3 px-3">
+                            {isCoSigned ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                <CheckCircle2 className="w-3 h-3" /> Co-Signed &amp; Committed
+                              </span>
+                            ) : isReadyForCoSign ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse">
+                                Verified by Boss · Awaiting Co-Sign
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-400">
+                                Awaiting Boss Verification First
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 text-right">
+                            {isReadyForCoSign ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const res = restoStore.coSignPendingRequest(appr.id);
+                                  if (res.success) {
+                                    alert(`Successfully cryptographically co-signed ${appr.platesRequested} plates for #${appr.memberNo}! Ledger credit committed.`);
+                                  } else {
+                                    alert(res.error || 'Failed to co-sign request.');
+                                  }
+                                }}
+                                className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md transition-colors cursor-pointer"
+                              >
+                                Cryptographically Co-Sign
+                              </button>
+                            ) : isCoSigned ? (
+                              <span className="text-slate-500 font-mono text-[11px]">{appr.coSignature?.slice(0, 16)}...</span>
+                            ) : (
+                              <span className="text-slate-500 text-xs italic">Boss must approve first</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}
