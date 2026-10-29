@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Restaurant, Plan, License, SubscriptionPayment, Language } from '../../types';
 import { restoStore } from '../../store/restoStore';
 import { translations } from '../../services/i18n';
+import { KinyarwandaTranslationStudio } from './KinyarwandaTranslationStudio';
 import {
   Building2,
   FileKey,
@@ -169,6 +170,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       <div className="flex flex-wrap gap-2 border-b border-slate-800 pb-3 text-sm font-medium text-slate-300">
         {[
           { id: 'restaurants', label: 'Tenants & Health' },
+          { id: 'kinyarwanda_cms', label: '🇷🇼 Kinyarwanda & Translations CMS' },
           { id: 'student_subs', label: 'Student Monetization (500 RWF)' },
           {
             id: 'cosign_desk',
@@ -1033,6 +1035,11 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
             )}
           </div>
         </div>
+      )}
+
+      {/* 9. KINYARWANDA & TRANSLATION STUDIO (CMS) */}
+      {activeSubTab === 'kinyarwanda_cms' && (
+        <KinyarwandaTranslationStudio currentLanguage={language} />
       )}
 
       {/* ONBOARD RESTAURANT MODAL */}

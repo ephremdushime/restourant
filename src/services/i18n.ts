@@ -1008,3 +1008,56 @@ export const translations = {
     },
   },
 };
+
+function deepMerge(target: any, source: any): any {
+  if (!source || typeof source !== 'object') return target;
+  for (const key of Object.keys(source)) {
+    if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+      if (!target[key] || typeof target[key] !== 'object') target[key] = {};
+      deepMerge(target[key], source[key]);
+    } else if (source[key] !== undefined) {
+      target[key] = source[key];
+    }
+  }
+  return target;
+}
+
+export function flattenTranslations(obj: any, prefix = ''): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!obj || typeof obj !== 'object') return result;
+  for (const key of Object.keys(obj)) {
+    const val = obj[key];
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
+      Object.assign(result, flattenTranslations(val, path));
+    } else if (typeof val === 'string' || typeof val === 'number') {
+      result[path] = String(val);
+    }
+  }
+  return result;
+}
+
+export function unflattenTranslations(flat: Record<string, string>): any {
+  const result: Record<string, any> = {};
+  for (const path of Object.keys(flat)) {
+    const parts = path.split('.');
+    let cur = result;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const p = parts[i];
+      if (!cur[p] || typeof cur[p] !== 'object') cur[p] = {};
+      cur = cur[p];
+    }
+    cur[parts[parts.length - 1]] = flat[path];
+  }
+  return result;
+}
+
+export function applyCustomTranslations(overrides: Partial<Record<Language, any>>): void {
+  if (!overrides) return;
+  for (const lang of Object.keys(overrides) as Language[]) {
+    if (translations[lang] && overrides[lang]) {
+      deepMerge(translations[lang], overrides[lang]);
+    }
+  }
+}
+

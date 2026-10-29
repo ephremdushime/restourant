@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Customer, Package } from '../../types';
+import { Customer, Package, Restaurant } from '../../types';
 import { restoStore } from '../../store/restoStore';
 import { QrCanvas } from '../common/QrCanvas';
 import {
@@ -471,6 +471,7 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
                         customer={cust}
                         restaurantName={restaurant?.name || 'Kigali Independent University Canteen'}
                         isOnboarding={cust.name.startsWith('Onboarding Patron')}
+                        restaurant={restaurant}
                       />
                       {sandboxSimEnabled && (
                         <div className="mt-2 flex items-center gap-2 print:hidden">
@@ -497,6 +498,7 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
                       <CardBackView
                         customer={cust}
                         restaurantName={restaurant?.name || 'Kigali Independent University Canteen'}
+                        restaurant={restaurant}
                       />
                     </div>
                   )}
@@ -518,6 +520,7 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
                         customer={cust}
                         restaurantName={restaurant?.name || 'Kigali Independent University Canteen'}
                         isOnboarding={cust.name.startsWith('Onboarding Patron')}
+                        restaurant={restaurant}
                       />
                     </div>
 
@@ -529,6 +532,7 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
                       <CardBackView
                         customer={cust}
                         restaurantName={restaurant?.name || 'Kigali Independent University Canteen'}
+                        restaurant={restaurant}
                       />
                     </div>
                   </React.Fragment>
@@ -545,22 +549,119 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
 // --------------------------------------------------------------------------------
 // FRONT SIDE CARD COMPONENT (ISO/IEC 7810 ID-1 CR80: 85.60 × 53.98 mm)
 // --------------------------------------------------------------------------------
-export const CardFrontView: React.FC<{
+export interface CardFrontViewProps {
   customer: Customer;
   restaurantName: string;
   isOnboarding?: boolean;
-}> = ({ customer, restaurantName, isOnboarding }) => {
+  restaurant?: Restaurant | null;
+}
+
+export const getCardThemePalette = (badgeStyle?: string, primaryColor?: string) => {
+  if (badgeStyle === 'emerald' || primaryColor === 'emerald') {
+    return {
+      gradientStart: '#10b981',
+      gradientMid: '#059669',
+      gradientEnd: '#064e3b',
+      accentLight: '#34d399',
+      badgeBg: 'bg-emerald-900',
+      badgeBorder: 'border-emerald-500',
+      brandText: 'text-emerald-950',
+      sloganColor: 'text-emerald-900',
+      backStripe: 'bg-emerald-800',
+      accentSvg: '#059669',
+    };
+  }
+  if (badgeStyle === 'gold' || primaryColor === 'amber') {
+    return {
+      gradientStart: '#f59e0b',
+      gradientMid: '#d97706',
+      gradientEnd: '#78350f',
+      accentLight: '#fbbf24',
+      badgeBg: 'bg-amber-900',
+      badgeBorder: 'border-amber-500',
+      brandText: 'text-amber-950',
+      sloganColor: 'text-amber-900',
+      backStripe: 'bg-amber-800',
+      accentSvg: '#d97706',
+    };
+  }
+  if (badgeStyle === 'dark') {
+    return {
+      gradientStart: '#475569',
+      gradientMid: '#1e293b',
+      gradientEnd: '#0f172a',
+      accentLight: '#64748b',
+      badgeBg: 'bg-slate-900',
+      badgeBorder: 'border-slate-600',
+      brandText: 'text-slate-950',
+      sloganColor: 'text-slate-800',
+      backStripe: 'bg-slate-950',
+      accentSvg: '#334155',
+    };
+  }
+  if (primaryColor === 'purple') {
+    return {
+      gradientStart: '#c084fc',
+      gradientMid: '#9333ea',
+      gradientEnd: '#581c87',
+      accentLight: '#d8b4fe',
+      badgeBg: 'bg-purple-900',
+      badgeBorder: 'border-purple-500',
+      brandText: 'text-purple-950',
+      sloganColor: 'text-purple-900',
+      backStripe: 'bg-purple-900',
+      accentSvg: '#9333ea',
+    };
+  }
+  if (primaryColor === 'rose') {
+    return {
+      gradientStart: '#fb7185',
+      gradientMid: '#e11d48',
+      gradientEnd: '#881337',
+      accentLight: '#fda4af',
+      badgeBg: 'bg-rose-900',
+      badgeBorder: 'border-rose-500',
+      brandText: 'text-rose-950',
+      sloganColor: 'text-rose-900',
+      backStripe: 'bg-rose-900',
+      accentSvg: '#e11d48',
+    };
+  }
+  // Default Campus Blue
+  return {
+    gradientStart: '#0284c7',
+    gradientMid: '#0369a1',
+    gradientEnd: '#0c4a6e',
+    accentLight: '#38bdf8',
+    badgeBg: 'bg-blue-900',
+    badgeBorder: 'border-blue-500',
+    brandText: 'text-blue-950',
+    sloganColor: 'text-blue-900',
+    backStripe: 'bg-blue-950',
+    accentSvg: '#0284c7',
+  };
+};
+
+export const CardFrontView: React.FC<CardFrontViewProps> = ({
+  customer,
+  restaurantName,
+  isOnboarding,
+  restaurant,
+}) => {
   const cardToken = restoStore.getCustomerCardQr(customer);
   const serialNo = `RP2026${customer.memberNo}`;
-  // Never fall back to hardcoded sample student registration number
   const studentNo = customer.studentProfile?.registrationNumber?.trim() || null;
+  const theme = getCardThemePalette(restaurant?.badgeStyle, restaurant?.primaryColor);
+  const logoUrl = restaurant?.logoUrl;
+  const welcomeMessage = restaurant?.welcomeMessage || 'Murakaza Neza! Healthy Meals';
+  const gradId = `cardGrad_${customer.id ? customer.id.replace(/[^a-zA-Z0-9]/g, '') : 'default'}`;
 
   return (
     <div
       className="cr80-card w-[350px] h-[218px] bg-white text-slate-900 rounded-[20px] border border-slate-300 shadow-xl relative overflow-hidden flex flex-col justify-between font-sans select-none break-inside-avoid print:shadow-none print:border-slate-400"
       style={{ aspectRatio: '85.60 / 53.98' }}
     >
-      {/* Dynamic Blue Curved Swoosh at Bottom & Right */}
+      {/* Dynamic Curved Swoosh matching Restaurant Custom Theme */}
       <svg
         className="absolute bottom-0 left-0 right-0 w-full h-[120px] pointer-events-none"
         viewBox="0 0 350 120"
@@ -570,52 +671,60 @@ export const CardFrontView: React.FC<{
       >
         <path
           d="M0,55 C85,15 170,95 260,35 C310,5 340,15 350,10 L350,120 L0,120 Z"
-          fill="#0284c7"
+          fill={theme.accentLight}
           opacity="0.3"
         />
         <path
           d="M0,75 C90,30 180,95 270,45 C315,20 340,30 350,25 L350,120 L0,120 Z"
-          fill="url(#cardFrontBlueGrad)"
+          fill={`url(#${gradId})`}
         />
         <defs>
-          <linearGradient id="cardFrontBlueGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#0284c7" />
-            <stop offset="60%" stopColor="#0369a1" />
-            <stop offset="100%" stopColor="#0c4a6e" />
+          <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor={theme.gradientStart} />
+            <stop offset="60%" stopColor={theme.gradientMid} />
+            <stop offset="100%" stopColor={theme.gradientEnd} />
           </linearGradient>
         </defs>
       </svg>
 
-      {/* Top Header: RestoPass Logo & Smart Meal Access */}
+      {/* Top Header: Restaurant Logo & RestoPass Brand */}
       <div className="flex items-center justify-between p-3.5 pb-0 relative z-10">
-        <div className="flex items-center gap-2">
-          <div className="w-9 h-9 rounded-full bg-blue-900 text-white flex items-center justify-center shadow-xs">
-            <Utensils className="w-5 h-5" />
-          </div>
+        <div className="flex items-center gap-2.5">
+          {logoUrl ? (
+            <img
+              src={logoUrl}
+              alt={restaurantName}
+              className="w-10 h-10 rounded-full object-cover border-2 border-white shadow-xs shrink-0"
+            />
+          ) : (
+            <div className={`w-10 h-10 rounded-full ${theme.badgeBg} text-white flex items-center justify-center shadow-xs shrink-0`}>
+              <Utensils className="w-5 h-5" />
+            </div>
+          )}
           <div>
-            <div className="text-[17px] font-black text-blue-950 leading-tight tracking-tight">
+            <div className={`text-[17px] font-black ${theme.brandText} leading-tight tracking-tight`}>
               RestoPass
             </div>
-            <div className="text-[10px] font-semibold text-sky-700 leading-tight">
+            <div className="text-[10.5px] font-bold text-slate-700 leading-tight">
               Smart Meal Access
             </div>
           </div>
         </div>
 
-        {/* Fork & knife subtle watermark */}
-        <div className="text-blue-900/15 mr-1 pointer-events-none">
-          <Utensils className="w-8 h-8" />
+        {/* Decorative watermark */}
+        <div className="text-slate-400/20 mr-1 pointer-events-none">
+          <Utensils className="w-9 h-9" />
         </div>
       </div>
 
-      {/* Center Body: Customer Details & Scannable QR Code */}
-      <div className="grid grid-cols-12 gap-2 px-3.5 items-center relative z-10 my-auto">
+      {/* Center Body: Customer Details with Enlarged Dashboard-Level Typography */}
+      <div className="grid grid-cols-12 gap-2 px-4 items-center relative z-10 my-auto">
         {/* Left Column: Photo & Name & Info */}
         <div className="col-span-7 space-y-1.5">
-          <div className="flex items-center gap-2">
-            <div className="w-11 h-11 rounded-full overflow-hidden bg-slate-100 border-2 border-white shadow-sm shrink-0">
+          <div className="flex items-center gap-2.5">
+            <div className="w-12 h-12 rounded-full overflow-hidden bg-slate-100 border-2 border-white shadow-sm shrink-0">
               {isOnboarding ? (
-                <div className="w-full h-full flex items-center justify-center bg-slate-200 text-slate-500 text-[8px] font-bold text-center">
+                <div className="w-full h-full flex items-center justify-center bg-slate-200 text-slate-500 text-[8.5px] font-black text-center uppercase">
                   PHOTO
                 </div>
               ) : (
@@ -626,54 +735,53 @@ export const CardFrontView: React.FC<{
                 />
               )}
             </div>
-            <div className="min-w-0">
-              <div className="text-xs font-black text-slate-900 truncate leading-tight">
+            <div className="min-w-0 space-y-0.5">
+              <div className="text-[14px] sm:text-[15px] font-black text-slate-950 truncate leading-tight uppercase tracking-tight">
                 {customer.name}
               </div>
-              {studentNo ? (
-                <div className="text-[9px] text-slate-700 font-medium truncate">
-                  Student ID: {studentNo}
-                </div>
-              ) : (
-                <div className="text-[9px] text-slate-700 font-medium truncate">
-                  Member: #{customer.memberNo}
+              <div className="inline-flex items-center px-2 py-0.5 rounded-md bg-slate-900 text-white font-mono text-[11px] font-black tracking-wider shadow-xs">
+                <span>MEM: #{customer.memberNo}</span>
+              </div>
+              {studentNo && (
+                <div className="text-[11px] text-slate-800 font-bold truncate">
+                  ID: <span className="font-mono">{studentNo}</span>
                 </div>
               )}
-              <div className="text-[9px] text-slate-600 font-mono">
-                Phone: {customer.phone}
+              <div className="text-[11px] text-slate-700 font-bold font-mono truncate">
+                Tel: {customer.phone}
               </div>
             </div>
           </div>
         </div>
 
-        {/* Right Column: Real Scannable QR Code & Serial */}
+        {/* Right Column: Scannable QR Code & Bold Serial */}
         <div className="col-span-5 flex flex-col items-center justify-center">
-          <div className="p-1.5 bg-white rounded-xl border border-slate-300 shadow-md">
+          <div className="p-1 bg-white rounded-xl border border-slate-300 shadow-md">
             <QrCanvas value={cardToken} size={82} />
           </div>
-          <div className="text-[10px] font-mono font-black text-slate-900 tracking-wider text-center mt-1">
+          <div className="text-[11px] font-mono font-black text-slate-950 tracking-wider text-center mt-1">
             {serialNo}
           </div>
         </div>
       </div>
 
-      {/* Bottom Footer: Restaurant/Canteen Branding & Slogan */}
-      <div className="px-3.5 pb-2.5 pt-1 flex items-end justify-between relative z-10">
-        <div className="flex items-center gap-1.5 max-w-[200px]">
-          <div className="w-6 h-6 rounded-full bg-white text-blue-900 flex items-center justify-center shadow-xs shrink-0">
+      {/* Bottom Footer: Restaurant Branding & Customized Slogan */}
+      <div className="px-4 pb-2.5 pt-1 flex items-end justify-between relative z-10">
+        <div className="flex items-center gap-1.5 max-w-[210px]">
+          <div className="w-6 h-6 rounded-full bg-white text-slate-900 flex items-center justify-center shadow-xs shrink-0">
             <GraduationCap className="w-3.5 h-3.5" />
           </div>
-          <div className="text-[9px] font-bold leading-tight truncate text-slate-900">
+          <div className="text-[11px] font-black leading-tight truncate text-slate-950 uppercase tracking-tight">
             {restaurantName}
           </div>
         </div>
 
-        <div className="text-right">
-          <div className="text-[10px] italic font-semibold text-blue-950 font-serif leading-tight">
-            Healthy Meals
+        <div className="text-right max-w-[125px]">
+          <div className={`text-[11px] italic font-bold ${theme.sloganColor} font-serif leading-tight truncate`}>
+            {welcomeMessage.split('!')[0] || 'Healthy Meals'}
           </div>
-          <div className="text-[10px] italic font-bold text-blue-900 font-serif leading-tight">
-            Bright Future
+          <div className="text-[10px] italic font-semibold text-slate-700 font-serif leading-tight">
+            Prepaid Meal Pass
           </div>
         </div>
       </div>
@@ -687,69 +795,81 @@ export const CardFrontView: React.FC<{
 export const CardBackView: React.FC<{
   customer: Customer;
   restaurantName: string;
-}> = ({ customer, restaurantName }) => {
+  restaurant?: Restaurant | null;
+}> = ({ customer, restaurantName, restaurant }) => {
+  const theme = getCardThemePalette(restaurant?.badgeStyle, restaurant?.primaryColor);
+  const logoUrl = restaurant?.logoUrl;
+
   return (
     <div
       className="cr80-card w-[350px] h-[218px] bg-white text-slate-900 rounded-[20px] border border-slate-300 shadow-xl relative overflow-hidden flex flex-col justify-between font-sans select-none break-inside-avoid print:shadow-none print:border-slate-400"
       style={{ aspectRatio: '85.60 / 53.98' }}
     >
-      {/* Top Navy Header Stripe */}
-      <div className="h-4 bg-slate-950 w-full" />
+      {/* Top Header Stripe with Restaurant Theme Color */}
+      <div className={`h-4.5 ${theme.backStripe} w-full`} />
 
       {/* Center Branding & Notice */}
       <div className="px-5 py-2 text-center my-auto space-y-2">
         {/* RestoPass Logo */}
         <div className="flex items-center justify-center gap-2">
-          <div className="w-8 h-8 rounded-full bg-blue-900 text-white flex items-center justify-center shadow-xs">
-            <Utensils className="w-4 h-4" />
-          </div>
+          {logoUrl ? (
+            <img
+              src={logoUrl}
+              alt={restaurantName}
+              className="w-8 h-8 rounded-full object-cover border border-slate-300 shadow-xs shrink-0"
+            />
+          ) : (
+            <div className={`w-8 h-8 rounded-full ${theme.badgeBg} text-white flex items-center justify-center shadow-xs`}>
+              <Utensils className="w-4 h-4" />
+            </div>
+          )}
           <div className="text-left">
-            <div className="text-base font-black text-blue-950 leading-tight">
+            <div className={`text-base font-black ${theme.brandText} leading-tight`}>
               RestoPass
             </div>
-            <div className="text-[9px] font-semibold text-slate-500 leading-tight">
-              Smart Meal Access
+            <div className="text-[10px] font-bold text-slate-600 leading-tight">
+              Smart Meal Access · {restaurantName}
             </div>
           </div>
         </div>
 
         {/* Divider Line */}
-        <div className="w-40 h-0.5 bg-blue-200 mx-auto" />
+        <div className="w-44 h-0.5 bg-slate-200 mx-auto" />
 
-        {/* Mandatory Legal Notice in Kinyarwanda & English */}
+        {/* Mandatory Legal Notice in Kinyarwanda & English with High-Contrast Typography */}
         <div className="space-y-0.5">
-          <div className="text-[13px] font-black text-blue-950 leading-snug">
+          <div className="text-[13.5px] font-black text-slate-950 leading-snug">
             Iyi karita ni umutungo wihariye wa resitora.
           </div>
-          <div className="text-[10.5px] text-slate-600 font-medium">
+          <div className="text-[11px] text-slate-700 font-semibold">
             This card is the property of the restaurant.
           </div>
         </div>
       </div>
 
       {/* Bottom Feature Badges (Sikure, Tegereza, Koresha) */}
-      <div className="px-4 pb-3 pt-1.5 border-t border-slate-200 bg-slate-50/70 flex items-center justify-around text-center text-slate-700">
+      <div className="px-4 pb-3 pt-1.5 border-t border-slate-200 bg-slate-50/80 flex items-center justify-around text-center text-slate-800">
         <div className="flex items-center gap-1.5">
-          <ShieldCheck className="w-4 h-4 text-blue-900 shrink-0" />
+          <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
           <div className="text-left leading-tight">
-            <div className="text-[9px] font-black text-blue-950">Sikure</div>
-            <div className="text-[8px] text-slate-500">(Secure)</div>
+            <div className="text-[10px] font-black text-slate-950">Sikure</div>
+            <div className="text-[8.5px] text-slate-600 font-medium">(Secure)</div>
           </div>
         </div>
 
         <div className="flex items-center gap-1.5">
-          <Radio className="w-4 h-4 text-blue-900 shrink-0" />
+          <Radio className="w-4 h-4 text-sky-600 shrink-0" />
           <div className="text-left leading-tight">
-            <div className="text-[9px] font-black text-blue-950">Tegereza</div>
-            <div className="text-[8px] text-slate-500">(Scan)</div>
+            <div className="text-[10px] font-black text-slate-950">Tegereza</div>
+            <div className="text-[8.5px] text-slate-600 font-medium">(Scan)</div>
           </div>
         </div>
 
         <div className="flex items-center gap-1.5">
-          <QrCode className="w-4 h-4 text-blue-900 shrink-0" />
+          <QrCode className="w-4 h-4 text-amber-600 shrink-0" />
           <div className="text-left leading-tight">
-            <div className="text-[9px] font-black text-blue-950">Koresha</div>
-            <div className="text-[8px] text-slate-500">(Use)</div>
+            <div className="text-[10px] font-black text-slate-950">Koresha</div>
+            <div className="text-[8.5px] text-slate-600 font-medium">(Use)</div>
           </div>
         </div>
       </div>

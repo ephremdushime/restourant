@@ -68,6 +68,7 @@ import {
   sha256,
 } from '../services/cryptoService';
 import { sound } from '../services/audioService';
+import { applyCustomTranslations } from '../services/i18n';
 
 const STORAGE_KEY = 'RESTOPASS_STATE_V1.1';
 const STORAGE_KEY_PROD = 'RESTOPASS_PRODUCTION_CLEAN_V2';
@@ -182,6 +183,7 @@ export interface AppState {
 
   activationRequests: CustomerActivationRequest[];
   pinRecoveryRequests: CustomerPinRecoveryRequest[];
+  customTranslations?: Partial<Record<Language, any>>;
 }
 
 function getInitialState(): AppState {
@@ -1346,6 +1348,7 @@ function getInitialState(): AppState {
       studentSubscriptionPayments: [],
       activationRequests: [],
       pinRecoveryRequests: [],
+      customTranslations: {},
       expenses: [
         {
           id: 'exp_rw01_1',
@@ -1423,6 +1426,7 @@ function getProductionCleanState(): AppState {
     studentSubscriptionPayments: [],
     activationRequests: [],
     pinRecoveryRequests: [],
+    customTranslations: {},
   };
 }
 
@@ -1475,6 +1479,9 @@ export class RestoStore {
 
   constructor() {
     this.state = this.loadState();
+    if (this.state.customTranslations) {
+      applyCustomTranslations(this.state.customTranslations);
+    }
     if (typeof window !== 'undefined') {
       try {
         this.authToken = sessionStorage.getItem('restopass_active_token') || null;
@@ -1827,6 +1834,15 @@ export class RestoStore {
       hasChanges = true;
     }
 
+    if (serverState.customTranslations) {
+      this.state.customTranslations = {
+        ...this.state.customTranslations,
+        ...serverState.customTranslations,
+      };
+      applyCustomTranslations(this.state.customTranslations);
+      hasChanges = true;
+    }
+
     if (hasChanges) {
       if (typeof window !== 'undefined') {
         try {
@@ -1933,6 +1949,7 @@ export class RestoStore {
           studentSubscriptionSettings: parsed.studentSubscriptionSettings
             ? { ...baseState.studentSubscriptionSettings, ...parsed.studentSubscriptionSettings }
             : baseState.studentSubscriptionSettings,
+          customTranslations: parsed.customTranslations || {},
         };
       }
     } catch (e) {
@@ -7363,6 +7380,58 @@ export class RestoStore {
     this.pushStateToServer();
     this.notify();
     return { success: true, customer: cust };
+  }
+
+  /**
+   * Super Admin Live Translation Management (CMS)
+   * Allows live editing, persistence, and instant propagation of Kinyarwanda & other translations
+   */
+  public saveCustomTranslations(language: Language, overrides: Record<string, any>): void {
+    if (!this.state.customTranslations) {
+      this.state.customTranslations = {};
+    }
+    this.state.customTranslations[language] = {
+      ...(this.state.customTranslations[language] || {}),
+      ...overrides,
+    };
+    applyCustomTranslations(this.state.customTranslations);
+    this.scheduleSaveState();
+    this.pushStateToServer();
+    this.notify();
+    this.logAudit({
+      actorRole: 'super_admin',
+      actorName: 'Super Admin Authority',
+      action: 'TRANSLATIONS_UPDATED',
+      details: `Updated custom language dictionary for '${language}'.`,
+    });
+  }
+
+  public resetCustomTranslations(language?: Language): void {
+    if (language) {
+      if (this.state.customTranslations) {
+        delete this.state.customTranslations[language];
+      }
+    } else {
+      this.state.customTranslations = {};
+    }
+    this.scheduleSaveState();
+    this.pushStateToServer();
+    this.notify();
+    this.logAudit({
+      actorRole: 'super_admin',
+      actorName: 'Super Admin Authority',
+      action: 'TRANSLATIONS_RESET',
+      details: language
+        ? `Reset custom translations for '${language}' to factory defaults.`
+        : 'Reset all custom translations to factory defaults.',
+    });
+  }
+
+  public getCustomTranslations(language?: Language): Record<string, any> {
+    if (language) {
+      return this.state.customTranslations?.[language] || {};
+    }
+    return this.state.customTranslations || {};
   }
 }
 

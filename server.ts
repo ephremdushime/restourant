@@ -1917,6 +1917,7 @@ function scopeStateForUser(state: any, user: UserSession): any {
       studentSubscriptionPayments: (state.studentSubscriptionPayments || []).filter((sp: any) => sp.restaurantCode === rCode),
       activationRequests: (state.activationRequests || []).filter((ar: any) => ar.restaurantCode === rCode),
       pinRecoveryRequests: (state.pinRecoveryRequests || []).filter((pr: any) => pr.restaurantCode === rCode),
+      customTranslations: state.customTranslations || {},
     };
   }
 
@@ -1950,6 +1951,7 @@ function scopeStateForUser(state: any, user: UserSession): any {
         graceDays: 3,
         plateTransfersRequireSubscription: true,
       },
+      customTranslations: state.customTranslations || {},
     };
   }
 
@@ -1982,6 +1984,7 @@ function scopeStateForUser(state: any, user: UserSession): any {
       },
       customerSubscriptions: (state.customerSubscriptions || []).filter((cs: any) => cs.customerId === custId),
       studentSubscriptionPayments: (state.studentSubscriptionPayments || []).filter((sp: any) => sp.customerId === custId),
+      customTranslations: state.customTranslations || {},
     };
   }
 
@@ -2218,6 +2221,12 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
           serverDbState.studentSubscriptionSettings = {
             ...serverDbState.studentSubscriptionSettings,
             ...fullState.studentSubscriptionSettings,
+          };
+        }
+        if (fullState.customTranslations) {
+          serverDbState.customTranslations = {
+            ...(serverDbState.customTranslations || {}),
+            ...fullState.customTranslations,
           };
         }
       }

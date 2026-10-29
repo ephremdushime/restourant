@@ -689,6 +689,7 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
                 <CardFrontView
                   customer={printCardCustomer}
                   restaurantName={currentResto?.name || 'Kigali Independent University Canteen'}
+                  restaurant={currentResto}
                 />
               </div>
 
@@ -697,6 +698,7 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
                 <CardBackView
                   customer={printCardCustomer}
                   restaurantName={currentResto?.name || 'Kigali Independent University Canteen'}
+                  restaurant={currentResto}
                 />
               </div>
             </div>
