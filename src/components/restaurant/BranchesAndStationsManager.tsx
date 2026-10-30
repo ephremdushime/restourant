@@ -50,6 +50,7 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
   const branches = restoStore.getRestaurantBranches(restaurantCode);
   const stationUsers = restoStore.getRestaurantStationUsers(restaurantCode);
   const scanPoints = state.scanPoints.filter((sp) => sp.restaurantCode === restaurantCode);
+  const quota = restoStore.getCashierQuotaStatus(restaurantCode);
 
   // Tab: 'branches' | 'station_users' | 'activity'
   const [activeTab, setActiveTab] = useState<'station_users' | 'branches' | 'activity'>('station_users');
@@ -174,7 +175,7 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
           name: userFullName.trim(),
           username: userUsername.trim().toLowerCase(),
           phone: userPhone.trim(),
-          role: userRole,
+          role: 'scanner',
           status: 'active',
           passwordHash: userPassword,
           pin: userPin.trim() || '1234',
@@ -446,11 +447,15 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
                         </td>
 
                         <td className="py-3 px-4">
-                          <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-slate-800 text-slate-200 border border-slate-700">
-                            {user.role.replace('_', ' ')}
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase bg-emerald-950 text-emerald-300 border border-emerald-800 flex items-center gap-1 w-fit">
+                            <ShieldCheck className="w-3 h-3 text-emerald-400 shrink-0" />
+                            <span>Scanner Operator</span>
                           </span>
-                          <div className="text-[10px] font-mono text-slate-500 mt-1">
-                            POS PIN: <strong className="text-slate-300">{user.pin}</strong>
+                          <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-1 font-mono">
+                            <span>PIN:</span>
+                            <strong className="text-slate-200">{user.pin}</strong>
+                            <span className="text-slate-600">·</span>
+                            <span className="text-[10px] text-emerald-400">All-in-One POS</span>
                           </div>
                         </td>
 
@@ -915,17 +920,50 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
                   </select>
                 </div>
                 <div>
-                  <label className="text-slate-300 font-semibold block mb-1">Role &amp; Permissions *</label>
-                  <select
-                    value={userRole}
-                    onChange={(e) => setUserRole(e.target.value as any)}
-                    className="w-full p-2.5 rounded-lg bg-slate-950 border border-slate-700 text-white focus:border-emerald-500 outline-hidden"
-                  >
-                    <option value="stand_staff">Scanner Stand Operator</option>
-                    <option value="reception">Reception / Onboarding Desk</option>
-                    <option value="cashier">Cashier &amp; Top-Up Desk</option>
-                  </select>
+                  <label className="text-slate-300 font-semibold block mb-1">Station Account Role</label>
+                  <div className="p-2.5 rounded-lg bg-emerald-950/40 border border-emerald-800 text-emerald-300 font-semibold flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span className="truncate text-xs">Scanner Station Operator</span>
+                    </div>
+                    <span className="text-[9px] font-mono bg-emerald-900/80 px-1.5 py-0.5 rounded text-emerald-200 uppercase tracking-wider font-bold shrink-0">
+                      Unified
+                    </span>
+                  </div>
                 </div>
+              </div>
+
+              {/* Station Capability & License Quota Banner */}
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-white flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>1 Physical Station = 1 Operator Account</span>
+                  </span>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+                    License Quota: {quota.activeCashiers} / {quota.maxAllowed} Used
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Every physical scanner station requires exactly one operator account. Under <span className="text-emerald-400 font-mono font-bold">/#scanner</span>, this operator has full counter authority: <strong>Meal Plate Deductions</strong>, <strong>Customer Registration</strong>, <strong>Cash Top-Ups</strong>, and <strong>Card Issuance</strong>.
+                </p>
+
+                {quota.isAtLimit ? (
+                  <div className="p-2.5 rounded-lg bg-rose-950/70 border border-rose-800 text-rose-200 text-[11px] flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="text-rose-300 block">Station Quota Reached ({quota.activeCashiers}/{quota.maxAllowed} Licensed)</strong>
+                      <span>Your restaurant has provisioned all licensed stations. Contact Super Admin to expand your license scan points.</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-2 rounded-lg bg-emerald-950/30 border border-emerald-900/50 text-emerald-300 text-[11px] flex items-center justify-between">
+                    <span>License Capacity Available</span>
+                    <span className="font-mono text-emerald-400 font-bold">
+                      {quota.maxAllowed - quota.activeCashiers} Station Slots Remaining
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -988,9 +1026,14 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
               </button>
               <button
                 type="submit"
-                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md cursor-pointer"
+                disabled={quota.isAtLimit}
+                className={`px-5 py-2 rounded-xl font-bold text-xs shadow-md transition-all ${
+                  quota.isAtLimit
+                    ? 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
+                    : 'bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer'
+                }`}
               >
-                Create Account &amp; Provision Station
+                {quota.isAtLimit ? 'Station Quota Full (Upgrade License)' : 'Create Account & Provision Station'}
               </button>
             </div>
           </form>

@@ -3852,9 +3852,24 @@ export class RestoStore {
     currency: string;
     planId: string;
     termsOverride?: Restaurant['termsOverride'];
+    licensedScanPoints?: number;
+    basePriceRwf?: number;
+    pricePerExtraScanPointRwf?: number;
+    studentSubscriptionPriceRwf?: number;
+    singlePlatePriceRwf?: number;
   }): Restaurant {
     const code = data.code.toUpperCase().trim();
     const now = new Date().toISOString();
+
+    const selectedPlan = this.state.plans.find((p) => p.id === data.planId) || this.state.plans[0];
+    const termsOverride: Restaurant['termsOverride'] = {
+      effectiveFrom: now,
+      ...(data.termsOverride || {}),
+    };
+
+    if (data.basePriceRwf !== undefined) termsOverride.basePriceRwf = Number(data.basePriceRwf);
+    if (data.pricePerExtraScanPointRwf !== undefined) termsOverride.pricePerExtraScanPointRwf = Number(data.pricePerExtraScanPointRwf);
+    if (data.studentSubscriptionPriceRwf !== undefined) termsOverride.studentSubscriptionPriceRwf = Number(data.studentSubscriptionPriceRwf);
 
     const restaurant: Restaurant = {
       code,
@@ -3866,7 +3881,9 @@ export class RestoStore {
       currency: data.currency || 'RWF',
       status: 'active',
       planId: data.planId,
-      termsOverride: data.termsOverride,
+      termsOverride,
+      defaultPlatePriceRwf: data.singlePlatePriceRwf ? Number(data.singlePlatePriceRwf) : 1200,
+      studentSubscriptionPriceRwf: data.studentSubscriptionPriceRwf !== undefined ? Number(data.studentSubscriptionPriceRwf) : undefined,
       highestTimeSeen: Date.now(),
       lastSyncAt: now,
       softwareVersion: '1.1.0-authority',
@@ -3884,13 +3901,35 @@ export class RestoStore {
       isUsed: false,
     });
 
+    // Auto issue initial 30-day signed license with configured stations quota
+    const scanPointsLimit = data.licensedScanPoints || selectedPlan?.terms?.maxScanPointsIncluded || 2;
+    try {
+      this.issueLicense({
+        restaurantCode: code,
+        planId: data.planId,
+        maxScanPoints: Number(scanPointsLimit),
+        validDays: 30,
+        graceDays: selectedPlan?.terms?.graceDays || 7,
+        featureFlags: {
+          spotChecksEnabled: true,
+          multiStationEnabled: Number(scanPointsLimit) > 1,
+          secondPlateAllowed: true,
+          customerTransfersEnabled: true,
+        },
+      });
+    } catch (e) {
+      console.warn('Initial license issuance skipped in createRestaurant:', e);
+    }
+
     this.logAudit({
       actorRole: 'super_admin',
       actorName: 'Ephrem (Founder)',
       action: 'RESTAURANT_ONBOARDED',
-      details: `Created restaurant ${code} - ${restaurant.name}. Generated activation code ${codeStr}`,
+      details: `Created restaurant ${code} - ${restaurant.name} on ${selectedPlan?.name || data.planId} with ${scanPointsLimit} licensed scan point stations. Generated activation code ${codeStr}`,
     });
 
+    this.scheduleSaveState();
+    this.pushStateToServer();
     this.notify();
     return restaurant;
   }
@@ -4019,6 +4058,90 @@ export class RestoStore {
     this.pushStateToServer();
     this.notify();
     return newLic;
+  }
+
+  /**
+   * Super Admin: Update Pricing and Terms for a Plan template
+   */
+  public updatePlan(
+    planId: string,
+    updates: Partial<Plan['terms']>,
+    actorName = 'Platform Admin (Ephrem)'
+  ): Plan | null {
+    const plan = this.state.plans.find((p) => p.id === planId);
+    if (!plan) return null;
+
+    plan.terms = {
+      ...plan.terms,
+      ...updates,
+    };
+
+    this.logAudit({
+      actorRole: 'super_admin',
+      actorName,
+      action: 'PLAN_TERMS_UPDATED',
+      details: `Updated plan "${plan.name}" (${planId}): basePrice=${plan.terms.basePriceRwf} RWF, extraStationFee=${plan.terms.pricePerExtraScanPointRwf} RWF, maxIncluded=${plan.terms.maxScanPointsIncluded}`,
+    });
+
+    this.scheduleSaveState();
+    this.pushStateToServer();
+    this.notify();
+    return plan;
+  }
+
+  /**
+   * Super Admin: Update Pricing, Student Subscription Fee and Licensed Stations for a Restaurant
+   */
+  public updateRestaurantPricingAndTerms(
+    restaurantCode: string,
+    data: {
+      basePriceRwf?: number;
+      pricePerExtraScanPointRwf?: number;
+      studentSubscriptionPriceRwf?: number;
+      defaultPlatePriceRwf?: number;
+      maxScanPoints?: number;
+      customNotes?: string;
+    },
+    actorName = 'Platform Admin (Ephrem)'
+  ): boolean {
+    const r = this.state.restaurants.find((res) => res.code === restaurantCode);
+    if (!r) return false;
+
+    if (!r.termsOverride) {
+      r.termsOverride = {
+        effectiveFrom: new Date().toISOString(),
+      };
+    }
+
+    if (data.basePriceRwf !== undefined) r.termsOverride.basePriceRwf = Number(data.basePriceRwf);
+    if (data.pricePerExtraScanPointRwf !== undefined) r.termsOverride.pricePerExtraScanPointRwf = Number(data.pricePerExtraScanPointRwf);
+    if (data.studentSubscriptionPriceRwf !== undefined) {
+      r.termsOverride.studentSubscriptionPriceRwf = Number(data.studentSubscriptionPriceRwf);
+      r.studentSubscriptionPriceRwf = Number(data.studentSubscriptionPriceRwf);
+    }
+    if (data.defaultPlatePriceRwf !== undefined) r.defaultPlatePriceRwf = Number(data.defaultPlatePriceRwf);
+    if (data.customNotes !== undefined) r.termsOverride.customNotes = data.customNotes;
+
+    // If maxScanPoints provided, update active license quota
+    if (data.maxScanPoints !== undefined) {
+      const activeLic = this.getRestaurantLicense(restaurantCode);
+      if (activeLic) {
+        activeLic.maxScanPoints = Math.max(1, Number(data.maxScanPoints));
+      }
+    }
+
+    this.logAudit({
+      restaurantCode,
+      actorRole: 'super_admin',
+      actorName,
+      action: 'RESTAURANT_PRICING_UPDATED',
+      details: `Updated pricing & terms for ${r.name} (${restaurantCode}): basePrice=${r.termsOverride.basePriceRwf || 'default'} RWF, extraStation=${r.termsOverride.pricePerExtraScanPointRwf || 'default'} RWF, studentSub=${r.studentSubscriptionPriceRwf || 'default'} RWF, platePrice=${r.defaultPlatePriceRwf} RWF`,
+    });
+
+    this.scheduleSaveState();
+    this.pushStateToServer();
+    this.notify();
+    return true;
   }
 
   /**
@@ -6405,6 +6528,25 @@ export class RestoStore {
     return this.state.studentSubscriptionSettings;
   }
 
+  /**
+   * Authoritative student subscription price resolver:
+   * 1. Check restaurant terms override (per-restaurant custom rate)
+   * 2. Check restaurant custom studentSubscriptionPriceRwf
+   * 3. Fallback to platform-wide studentSubscriptionSettings.priceRwf (default 500 RWF)
+   */
+  public getStudentSubscriptionPrice(restaurantCode?: string): number {
+    const code = restaurantCode || this.state.currentRestaurantCode;
+    const r = this.state.restaurants.find((res) => res.code === code);
+    if (r?.termsOverride?.studentSubscriptionPriceRwf !== undefined) {
+      return Number(r.termsOverride.studentSubscriptionPriceRwf);
+    }
+    if (r?.studentSubscriptionPriceRwf !== undefined) {
+      return Number(r.studentSubscriptionPriceRwf);
+    }
+    const settings = this.getStudentSubscriptionSettings();
+    return settings.priceRwf !== undefined ? Number(settings.priceRwf) : 500;
+  }
+
   public updateStudentSubscriptionSettings(
     updates: Partial<StudentSubscriptionSettings>,
     actorName = 'Platform Admin'
@@ -6413,7 +6555,7 @@ export class RestoStore {
     const updated: StudentSubscriptionSettings = {
       ...current,
       ...updates,
-      priceRwf: 500, // Price is strictly 500 RWF per specification
+      priceRwf: updates.priceRwf !== undefined ? Math.max(0, Number(updates.priceRwf)) : (current.priceRwf ?? 500),
       currency: 'RWF',
       period: 'monthly',
       updatedAt: new Date().toISOString(),
@@ -6486,6 +6628,9 @@ export class RestoStore {
 
     // 2. Look up customer's authoritative subscription
     const sub = this.getCustomerSubscription(customerId);
+    const customer = this.state.customers.find((c) => c.id === customerId);
+    const subPrice = this.getStudentSubscriptionPrice(customer?.restaurantCode);
+
     if (!sub) {
       return {
         allowed: false,
@@ -6493,7 +6638,7 @@ export class RestoStore {
         status: 'inactive',
         inGracePeriod: false,
         enforcementEnabled: true,
-        reason: 'An active student subscription (500 RWF/mo) is required for this digital feature.',
+        reason: `An active student subscription (${subPrice.toLocaleString()} RWF/mo) is required for this digital feature.`,
       };
     }
 
@@ -6545,7 +6690,7 @@ export class RestoStore {
       enforcementEnabled: true,
       reason:
         sub.status === 'expired'
-          ? 'Your subscription and 3-day grace period have expired. Please renew for 500 RWF/mo.'
+          ? `Your subscription and 3-day grace period have expired. Please renew for ${subPrice.toLocaleString()} RWF/mo.`
           : sub.status === 'pending_payment'
           ? 'Your payment is pending confirmation. Access will activate once verified.'
           : 'An active student subscription is required.',
@@ -6570,6 +6715,7 @@ export class RestoStore {
 
     const now = new Date().toISOString();
     const internalReference = `SUB-MOMO-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+    const subPrice = this.getStudentSubscriptionPrice(cust.restaurantCode);
 
     // Get or create subscription record in pending status
     let sub = this.state.customerSubscriptions.find((s) => s.customerId === cust.id);
@@ -6581,7 +6727,7 @@ export class RestoStore {
         restaurantCode: cust.restaurantCode,
         status: 'pending_payment',
         planName: 'Student Digital Pass',
-        priceRwf: 500, // Exactly 500 RWF
+        priceRwf: subPrice,
         currency: 'RWF',
         paymentMethod: params.provider,
         lastPaymentRef: internalReference,
@@ -6591,6 +6737,7 @@ export class RestoStore {
       this.state.customerSubscriptions.push(sub);
     } else {
       sub.status = 'pending_payment';
+      sub.priceRwf = subPrice;
       sub.lastPaymentRef = internalReference;
       sub.paymentMethod = params.provider;
       sub.updatedAt = now;
@@ -6605,7 +6752,7 @@ export class RestoStore {
       internalReference,
       provider: params.provider,
       phoneNumber: cleanPhone,
-      amountRwf: 500, // Strictly 500 RWF
+      amountRwf: subPrice,
       currency: 'RWF',
       status: 'pending',
       initiatedAt: now,
@@ -6620,7 +6767,7 @@ export class RestoStore {
     return {
       success: true,
       payment,
-      instructions: `USSD payment push sent via ${providerName} to ${cleanPhone}. Please enter your PIN on your phone to complete the 500 RWF subscription.`,
+      instructions: `USSD payment push sent via ${providerName} to ${cleanPhone}. Please enter your PIN on your phone to complete the ${subPrice.toLocaleString()} RWF subscription.`,
     };
   }
 
@@ -6647,6 +6794,7 @@ export class RestoStore {
     payment.status = 'verified';
     payment.verifiedAt = new Date(nowMs).toISOString();
     payment.providerTransactionId = providerTransactionId || `TRX_${Date.now()}`;
+    const verifiedPrice = payment.amountRwf || this.getStudentSubscriptionPrice(payment.restaurantCode);
 
     let sub = this.state.customerSubscriptions.find((s) => s.id === payment.subscriptionId);
     if (!sub) {
@@ -6657,7 +6805,7 @@ export class RestoStore {
         restaurantCode: payment.restaurantCode,
         status: 'active',
         planName: 'Student Digital Pass',
-        priceRwf: 500,
+        priceRwf: verifiedPrice,
         currency: 'RWF',
         currentPeriodStart: new Date(nowMs).toISOString(),
         currentPeriodEnd: new Date(periodEndMs).toISOString(),
@@ -6671,7 +6819,7 @@ export class RestoStore {
       this.state.customerSubscriptions.push(sub);
     } else {
       sub.status = 'active';
-      sub.priceRwf = 500;
+      sub.priceRwf = verifiedPrice;
       sub.currency = 'RWF';
       sub.currentPeriodStart = new Date(nowMs).toISOString();
       sub.currentPeriodEnd = new Date(periodEndMs).toISOString();

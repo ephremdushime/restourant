@@ -19,6 +19,7 @@ export interface PlanTerms {
   platformCardFeeRwf: number;
   platformReissueFeeRwf: number;
   maxScanPointsIncluded: number;
+  studentSubscriptionPriceRwf?: number; // Customizable student digital pass price
 }
 
 export interface Plan {
@@ -53,6 +54,7 @@ export interface Restaurant {
   status: RestaurantStatus;
   planId: string;
   defaultPlatePriceRwf?: number;
+  studentSubscriptionPriceRwf?: number;
   bundlePricing?: PlateBundlePricing;
   welcomeMessage?: string;
   badgeStyle?: 'gold' | 'emerald' | 'blue' | 'dark';
