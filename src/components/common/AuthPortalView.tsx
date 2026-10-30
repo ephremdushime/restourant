@@ -87,17 +87,26 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [showSelfRegView, setShowSelfRegView] = useState(() => {
-    return typeof window !== 'undefined' && window.location.hash.toLowerCase().includes('register');
+    if (typeof window === 'undefined') return false;
+    const url = (window.location.pathname + window.location.hash).toLowerCase();
+    return url.includes('register') || url.includes('signup');
   });
 
   useEffect(() => {
-    const handleHash = () => {
-      if (typeof window !== 'undefined' && window.location.hash.toLowerCase().includes('register')) {
-        setShowSelfRegView(true);
+    const handleUrl = () => {
+      if (typeof window !== 'undefined') {
+        const url = (window.location.pathname + window.location.hash).toLowerCase();
+        if (url.includes('register') || url.includes('signup')) {
+          setShowSelfRegView(true);
+        }
       }
     };
-    window.addEventListener('hashchange', handleHash);
-    return () => window.removeEventListener('hashchange', handleHash);
+    window.addEventListener('hashchange', handleUrl);
+    window.addEventListener('popstate', handleUrl);
+    return () => {
+      window.removeEventListener('hashchange', handleUrl);
+      window.removeEventListener('popstate', handleUrl);
+    };
   }, []);
 
   const [isVerifying, setIsVerifying] = useState(false);
@@ -483,6 +492,26 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
             {t.auth.portalSubtitle}
           </p>
         </div>
+
+        {/* Active Dining Facility Context Badge */}
+        {(() => {
+          const matchedFacility = state.restaurants.find((r) => r.code === selectedRestoCode);
+          if (!matchedFacility) return null;
+          return (
+            <div className="flex items-center gap-3 p-3.5 rounded-2xl bg-slate-950/90 border border-emerald-500/30 shadow-inner">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-black text-sm shrink-0">
+                {matchedFacility.code}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">Campus Cafeteria Facility</div>
+                <div className="text-sm font-black text-white truncate">{matchedFacility.name}</div>
+              </div>
+              <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 font-mono text-[10px] font-bold border border-emerald-500/20">
+                {matchedFacility.currency || 'RWF'}
+              </span>
+            </div>
+          );
+        })()}
 
         {/* Portal Role Switcher Tabs (Only visible in Demo Mode; in Production each portal is strictly isolated to its role) */}
         {isDemoMode && (

@@ -147,14 +147,24 @@ export default function App() {
   // Unified app routing: URL Hash sync (#/scanner, #/boss, #/customer, #/superadmin)
   useEffect(() => {
     const handleHashChange = () => {
-      const rawHash = window.location.hash;
+      const rawHash = window.location.hash || '';
+      const rawPath = window.location.pathname || '';
+      const fullUrl = `${rawPath}${rawHash}`;
       const hash = rawHash.toLowerCase();
 
       // Check for direct restaurant slug or code in URL:
-      // Supports #/portal/RW01, #/portal/RW02, #/cafeteria/RW01, or ?resto=RW01
-      const restoParamMatch = rawHash.match(/[?&]resto=([a-zA-Z0-9_-]+)/i);
-      const portalPathMatch = rawHash.match(/#(?:portal|cafeteria|r)\/([a-zA-Z0-9_-]+)/i);
-      const targetSlug = restoParamMatch?.[1] || portalPathMatch?.[1];
+      // Supports:
+      // - Direct path: /rw01, /rw02, /rw03, /rw02/register, /rw02/login
+      // - Hash path: #/rw01, #/rw02, #/portal/rw01, #/cafeteria/rw01
+      // - Query param: ?resto=rw02 or ?r=rw02
+      const pathSegmentMatch = rawPath.match(/^\/([a-zA-Z0-9_-]{2,16})(?:\/|$)/i);
+      const hashSegmentMatch = rawHash.match(/#(?:portal\/|cafeteria\/|r\/)?([a-zA-Z0-9_-]{2,16})(?:\/|\?|$)/i);
+      const queryParamMatch = (window.location.search + rawHash).match(/[?&](?:resto|restaurant|r)=([a-zA-Z0-9_-]+)/i);
+
+      const targetSlug =
+        queryParamMatch?.[1] ||
+        (pathSegmentMatch && !['api', 'assets', 'uploads', 'dist', 'src'].includes(pathSegmentMatch[1].toLowerCase()) ? pathSegmentMatch[1] : null) ||
+        hashSegmentMatch?.[1];
 
       if (targetSlug) {
         const targetClean = targetSlug.toLowerCase();
@@ -225,29 +235,31 @@ export default function App() {
         }
       }
 
-      if (hash.includes('scanner') || hash.includes('stand')) {
+      const urlLower = fullUrl.toLowerCase();
+      if (urlLower.includes('scanner') || urlLower.includes('stand')) {
         handleRoleChange('stand_staff', false);
-      } else if (hash.includes('super')) {
-        if (hash.includes('subtab=deployment')) {
+      } else if (urlLower.includes('super')) {
+        if (urlLower.includes('subtab=deployment')) {
           setSuperAdminSubTab('deployment');
           setActiveTab('deployment');
-        } else if (hash.includes('subtab=')) {
-          const sub = new URLSearchParams(hash.split('?')[1] || '').get('subtab');
+        } else if (urlLower.includes('subtab=')) {
+          const sub = new URLSearchParams(fullUrl.split('?')[1] || '').get('subtab');
           if (sub) {
             setSuperAdminSubTab(sub);
             setActiveTab(sub);
           }
         }
         handleRoleChange('super_admin', false);
-      } else if (hash.includes('boss') || hash.includes('resto-admin') || (hash.includes('admin') && !hash.includes('super'))) {
+      } else if (urlLower.includes('boss') || urlLower.includes('resto-admin') || (urlLower.includes('admin') && !urlLower.includes('super'))) {
         handleRoleChange('restaurant_admin', false);
       } else if (
-        hash.includes('customer') ||
-        hash.includes('register') ||
-        hash.includes('patron') ||
-        hash.includes('card') ||
-        hash.includes('portal') ||
-        hash.includes('cafeteria')
+        targetSlug ||
+        urlLower.includes('customer') ||
+        urlLower.includes('register') ||
+        urlLower.includes('patron') ||
+        urlLower.includes('card') ||
+        urlLower.includes('portal') ||
+        urlLower.includes('cafeteria')
       ) {
         handleRoleChange('customer', false);
       }
