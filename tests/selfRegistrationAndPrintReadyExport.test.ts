@@ -103,3 +103,4 @@ describe('Student Self-Registration, Boss Approval & Print-Ready Export Workflow
     assert.equal(loginRes.customer?.name, 'Ineza Alice');
   });
 });
+

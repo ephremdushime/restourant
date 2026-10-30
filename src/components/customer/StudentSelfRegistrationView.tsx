@@ -608,3 +608,4 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
     </div>
   );
 };
+
