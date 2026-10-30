@@ -3,6 +3,7 @@ import { UserRole, Language } from '../../types';
 import { restoStore } from '../../store/restoStore';
 import { translations } from '../../services/i18n';
 import { sound } from '../../services/audioService';
+import { StudentSelfRegistrationView } from '../customer/StudentSelfRegistrationView';
 import {
   verifyPinSecure,
   verifyPasswordSecure,
@@ -31,6 +32,7 @@ import {
   Clock,
   Sparkles,
   XCircle,
+  UserPlus,
 } from 'lucide-react';
 
 interface AuthPortalViewProps {
@@ -64,6 +66,20 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   const [phoneOrMember, setPhoneOrMember] = useState(isDemoMode ? '28491' : '');
   const [showPassword, setShowPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const [showSelfRegView, setShowSelfRegView] = useState(() => {
+    return typeof window !== 'undefined' && window.location.hash.toLowerCase().includes('register');
+  });
+
+  useEffect(() => {
+    const handleHash = () => {
+      if (typeof window !== 'undefined' && window.location.hash.toLowerCase().includes('register')) {
+        setShowSelfRegView(true);
+      }
+    };
+    window.addEventListener('hashchange', handleHash);
+    return () => window.removeEventListener('hashchange', handleHash);
+  }, []);
 
   const [isVerifying, setIsVerifying] = useState(false);
   const [failedAttempts, setFailedAttempts] = useState(0);
@@ -424,6 +440,15 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
     }
   };
 
+  if (showSelfRegView) {
+    return (
+      <StudentSelfRegistrationView
+        onBackToLogin={() => setShowSelfRegView(false)}
+        defaultRestoCode={selectedRestoCode}
+      />
+    );
+  }
+
   return (
     <div className="min-h-[80vh] flex flex-col items-center justify-center p-4 sm:p-6">
       <div className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl p-6 sm:p-8 space-y-6">
@@ -769,6 +794,27 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
                 >
                   <Sparkles className="w-3.5 h-3.5" />
                   <span>Set Up Personal PIN</span>
+                </button>
+              </div>
+
+              {/* New Student Online Self-Registration & Subscription */}
+              <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-950/60 to-slate-900 border-2 border-emerald-500/50 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
+                <div>
+                  <div className="text-white font-bold text-xs flex items-center gap-1.5">
+                    <UserPlus className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>New Student? Register &amp; Subscribe Online</span>
+                  </div>
+                  <div className="text-[11px] text-slate-300 mt-0.5">
+                    Skip counter queues: Fill your details, pay via MoMo, and submit for Boss approval.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowSelfRegView(true)}
+                  className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs shrink-0 transition-colors shadow-sm cursor-pointer flex items-center justify-center gap-1"
+                >
+                  <span>Register Online</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
                 </button>
               </div>
             </>

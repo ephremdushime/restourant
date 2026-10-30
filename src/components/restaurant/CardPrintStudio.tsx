@@ -28,7 +28,7 @@ import {
 export interface CardPrintStudioProps {
   onBack?: () => void;
   initialCustomerId?: string;
-  initialMode?: 'bulk_onboarding' | 'existing_customers';
+  initialMode?: 'bulk_onboarding' | 'existing_customers' | 'print_ready_only';
   operatorName?: string;
 }
 
@@ -46,9 +46,11 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
     (typeof window !== 'undefined' && sessionStorage.getItem('restopass_user_label')) ||
     'Restaurant Administrator';
 
-  // Active Tab: 'bulk_onboarding' | 'existing_customers'
-  const [activeMode, setActiveMode] = useState<'bulk_onboarding' | 'existing_customers'>(
-    initialMode || 'existing_customers'
+  const printReadyCustomers = restoStore.getPrintReadyCustomers(state.currentRestaurantCode);
+
+  // Active Tab: 'bulk_onboarding' | 'existing_customers' | 'print_ready_only'
+  const [activeMode, setActiveMode] = useState<'bulk_onboarding' | 'existing_customers' | 'print_ready_only'>(
+    initialMode || (printReadyCustomers.length > 0 ? 'print_ready_only' : 'existing_customers')
   );
 
   // Card Side Layout format: Duplex Aligned (Page 1 Front / Page 2 Back), Side-by-Side Proof, Front Only, Back Only
@@ -151,12 +153,44 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
   // Cards to render in print view
   const displayCards: Customer[] = activeMode === 'bulk_onboarding'
     ? (lastGeneratedBatch || restoCustomers.slice(-batchCount))
+    : activeMode === 'print_ready_only'
+    ? (printReadyCustomers.length > 0 ? printReadyCustomers : restoCustomers)
     : isExistingBatchMode
     ? restoCustomers
     : (selectedExistingCustomer ? [selectedExistingCustomer] : []);
 
+  const handleMarkPrinted = () => {
+    const ids = displayCards.map((c) => c.id);
+    const count = restoStore.markBatchCardsAsPrinted(ids);
+    setBatchSuccessNotice(`Marked ${count} cards as printed and delivered!`);
+    setTimeout(() => setBatchSuccessNotice(null), 4000);
+  };
+
   return (
     <div className="space-y-6">
+      {/* LOCAL PRINT SHOP GUIDANCE BANNER */}
+      <div className="p-4 rounded-2xl bg-gradient-to-r from-sky-950/70 via-slate-900 to-indigo-950/60 border border-sky-500/40 print:hidden text-xs space-y-2 shadow-lg">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sky-300 font-bold text-sm">
+            <Sparkles className="w-4 h-4 text-sky-400" />
+            <span>No Card Printer in your restaurant? Zero equipment purchase needed!</span>
+          </div>
+          <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-sky-900/60 text-sky-200 border border-sky-700">
+            Export for Print Shop
+          </span>
+        </div>
+        <p className="text-slate-300 leading-relaxed">
+          You do not need to buy an expensive card printer. Click <strong>"Print Cards / Save PDF"</strong> below, choose Destination: <strong>"Save as PDF"</strong>, and copy the file to a USB flash drive or send it via WhatsApp to any local printing service shop in Kigali or your campus street. They will print on standard <strong>ISO ID-1 (CR80) PVC cards</strong>.
+        </p>
+      </div>
+
+      {batchSuccessNotice && (
+        <div className="p-3.5 rounded-xl bg-emerald-950/90 border border-emerald-500 text-emerald-200 text-xs font-bold flex items-center gap-2 print:hidden">
+          <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{batchSuccessNotice}</span>
+        </div>
+      )}
+
       {/* Top Controls Toolbar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-2xl bg-slate-900 border border-slate-800 print:hidden">
         <div>
@@ -185,6 +219,17 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
             </button>
           )}
 
+          {activeMode === 'print_ready_only' && displayCards.length > 0 && (
+            <button
+              onClick={handleMarkPrinted}
+              className="px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-600 border border-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Mark displayed cards as printed"
+            >
+              <CheckCircle className="w-4 h-4" />
+              <span>Mark ({displayCards.length}) as Printed</span>
+            </button>
+          )}
+
           <button
             onClick={handleExportManifestCsv}
             className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
@@ -207,6 +252,18 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
       {/* Mode Switcher Tabs */}
       <div className="flex items-center justify-between border-b border-slate-800 pb-2 text-xs font-semibold text-slate-400 print:hidden">
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setActiveMode('print_ready_only')}
+            className={`px-3.5 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer ${
+              activeMode === 'print_ready_only'
+                ? 'bg-emerald-600 text-white font-bold shadow-xs'
+                : 'hover:text-white hover:bg-slate-900 text-emerald-400'
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Ready for Print ({printReadyCustomers.length})</span>
+          </button>
+
           <button
             onClick={() => setActiveMode('bulk_onboarding')}
             className={`px-3.5 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer ${

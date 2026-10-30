@@ -5,6 +5,7 @@ import { translations } from '../../services/i18n';
 import { sound } from '../../services/audioService';
 import { BatteryIndicator } from '../common/BatteryIndicator';
 import { ScannerProvisionalModal } from './ScannerProvisionalModal';
+import { CardPrintStudio } from '../restaurant/CardPrintStudio';
 import {
   Camera,
   Barcode,
@@ -19,6 +20,7 @@ import {
   Volume2,
   VolumeX,
   AlertTriangle,
+  Printer,
 } from 'lucide-react';
 
 interface ScannerViewProps {
@@ -81,6 +83,10 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const [, setCameraError] = useState<string | null>(null);
   const [isProvisionalModalOpen, setIsProvisionalModalOpen] = useState(false);
   const [isPinDeskModalOpen, setIsPinDeskModalOpen] = useState(false);
+  const [isCardPrintModalOpen, setIsCardPrintModalOpen] = useState(false);
+  const printReadyCustomers = restoStore.getPrintReadyCustomers(state.currentRestaurantCode);
+  const printReadyCount = printReadyCustomers.length;
+
   const [pinDeskCustomerId, setPinDeskCustomerId] = useState<string>('');
   const [pinDeskMode, setPinDeskMode] = useState<'activation' | 'recovery'>('activation');
   const [pinDeskIdMethod, setPinDeskIdMethod] = useState<
@@ -100,7 +106,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const keyboardInputRef = useRef<HTMLInputElement | null>(null);
 
   const isAnyModalOpen =
-    overrideModalOpen || isProvisionalModalOpen || isPinDeskModalOpen;
+    overrideModalOpen || isProvisionalModalOpen || isPinDeskModalOpen || isCardPrintModalOpen;
 
   // Auto-advance timer countdown
   useEffect(() => {
@@ -444,6 +450,23 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             <KeyRound className="w-4 h-4 text-cyan-400" />
             <span className="hidden sm:inline">PIN / Activation Desk</span>
             <span className="sm:hidden">PIN Desk</span>
+          </button>
+
+          {/* Card Print & Export Studio (For Reception / Cashier Desk) */}
+          <button
+            type="button"
+            onClick={() => setIsCardPrintModalOpen(true)}
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold bg-slate-800 hover:bg-slate-700 border border-slate-600 text-sky-300 hover:text-white transition-colors cursor-pointer shadow-sm relative"
+            title="View print-ready cards approved by Boss, print directly or export for local print shops"
+          >
+            <Printer className="w-4 h-4 text-sky-400" />
+            <span className="hidden sm:inline">Print-Ready Cards</span>
+            <span className="sm:hidden">Print Cards</span>
+            {printReadyCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-sky-500 text-slate-950 text-[10px] font-black animate-pulse">
+                {printReadyCount}
+              </span>
+            )}
           </button>
 
           <button
@@ -1029,6 +1052,51 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         onClose={() => setIsProvisionalModalOpen(false)}
         onSuccessScan={(tok) => handleExecuteScan(tok)}
       />
+
+      {/* PRINT-READY CARDS & LOCAL PRINT SHOP EXPORT MODAL */}
+      {isCardPrintModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto"
+        >
+          <div className="bg-slate-900 border-2 border-slate-700 rounded-3xl max-w-5xl w-full p-4 sm:p-6 space-y-4 shadow-2xl my-auto max-h-[94vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-400">
+                  <Printer className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    <span>Card Printing &amp; Print Shop Export Studio</span>
+                    {printReadyCount > 0 && (
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-mono font-bold">
+                        {printReadyCount} Ready to Print
+                      </span>
+                    )}
+                  </h3>
+                  <p className="text-xs text-slate-300">
+                    Print directly or export print-ready PDF sheets for external printing service shops.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCardPrintModalOpen(false)}
+                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <CardPrintStudio
+              initialMode="print_ready_only"
+              operatorName={operatorName}
+              onBack={() => setIsCardPrintModalOpen(false)}
+            />
+          </div>
+        </div>
+      )}
 
       {/* CUSTOMER NON-SMS ACTIVATION & PIN RECOVERY DESK MODAL */}
       {isPinDeskModalOpen && (

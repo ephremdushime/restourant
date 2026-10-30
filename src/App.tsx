@@ -243,6 +243,7 @@ export default function App() {
         handleRoleChange('restaurant_admin', false);
       } else if (
         hash.includes('customer') ||
+        hash.includes('register') ||
         hash.includes('patron') ||
         hash.includes('card') ||
         hash.includes('portal') ||

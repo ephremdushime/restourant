@@ -5817,6 +5817,50 @@ export class RestoStore {
   }
 
   /**
+   * Retrieves all customers for a given restaurant whose physical card has been approved by the Boss
+   * and is queued for physical printing or export for a local print shop.
+   */
+  public getPrintReadyCustomers(restaurantCode: string): Customer[] {
+    return this.state.customers.filter(
+      (c) => c.restaurantCode === restaurantCode && Boolean(c.cardReadyForPrint) && c.cardStatus !== 'locked'
+    );
+  }
+
+  /**
+   * Marks a customer's physical card as printed/exported by the cashier or print shop
+   */
+  public markCardAsPrinted(customerId: string): boolean {
+    const cust = this.state.customers.find((c) => c.id === customerId);
+    if (!cust) return false;
+    cust.cardReadyForPrint = false;
+    (cust as any).cardPrintedAt = new Date().toISOString();
+    this.scheduleSaveState();
+    this.notify();
+    return true;
+  }
+
+  /**
+   * Marks multiple customers' physical cards as printed/exported in batch
+   */
+  public markBatchCardsAsPrinted(customerIds: string[]): number {
+    const ids = new Set(customerIds);
+    let count = 0;
+    const now = new Date().toISOString();
+    for (const c of this.state.customers) {
+      if (ids.has(c.id) && c.cardReadyForPrint) {
+        c.cardReadyForPrint = false;
+        (c as any).cardPrintedAt = now;
+        count++;
+      }
+    }
+    if (count > 0) {
+      this.scheduleSaveState();
+      this.notify();
+    }
+    return count;
+  }
+
+  /**
    * Super Admin Cryptographic Co-Signing for High-Value Entitlements (> 120 plates / 2 months)
    * Enforces dual control between Restaurant Admin and Super Admin.
    */
