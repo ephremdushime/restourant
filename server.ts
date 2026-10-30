@@ -95,11 +95,30 @@ if (fs.existsSync(DB_FILE)) {
   }
 }
 
+// Strip mock demo seed items from production server database
+const SEED_EXPENSE_IDS = new Set(['exp_rw01_1', 'exp_rw01_2']);
+const SEED_NOTIFICATION_IDS = new Set(['notif_init_1', 'notif_init_2', 'notif_init_3', 'notif_init_4', 'notif_init_5', 'notif_init_rw02_1']);
+const SEED_BRANCH_IDS = new Set(['br_rw01_main', 'br_rw01_east', 'br_rw01_huye', 'br_rw02_main', 'br_rw02_heights']);
+const SEED_USER_IDS = new Set(['usr_rw01_1', 'usr_rw01_2', 'usr_rw01_3', 'usr_rw02_1']);
+
 /**
  * Ensures student monetization defaults exist in state per specification
  */
 function ensureServerDbDefaults(state: any) {
   if (!state) return;
+  if (!state.licenses) state.licenses = [];
+  if (!state.restaurants) state.restaurants = [];
+  if (!state.customers) state.customers = [];
+  if (!state.ledgerEntries) state.ledgerEntries = [];
+  if (!state.payments) state.payments = [];
+  if (!state.scanEvents) state.scanEvents = [];
+  if (!state.scanPoints) state.scanPoints = [];
+  if (!state.notifications) state.notifications = [];
+  if (!state.branches) state.branches = [];
+  if (!state.stationUsers) state.stationUsers = [];
+  if (!state.expenses) state.expenses = [];
+  if (!state.balanceCheckpoints) state.balanceCheckpoints = [];
+  if (!state.pendingApprovals) state.pendingApprovals = [];
   if (!state.studentSubscriptionSettings) {
     state.studentSubscriptionSettings = {
       enabled: false, // strictly disabled at launch per spec
@@ -117,23 +136,17 @@ function ensureServerDbDefaults(state: any) {
   if (!state.activationRequests) state.activationRequests = [];
   if (!state.pinRecoveryRequests) state.pinRecoveryRequests = [];
 
-  // Strip mock demo seed items from production server database
-  const seedExp = new Set(['exp_rw01_1', 'exp_rw01_2']);
-  const seedNotif = new Set(['notif_init_1', 'notif_init_2', 'notif_init_3', 'notif_init_4', 'notif_init_5', 'notif_init_rw02_1']);
-  const seedBranches = new Set(['br_rw01_main', 'br_rw01_east', 'br_rw01_huye', 'br_rw02_main', 'br_rw02_heights']);
-  const seedUsers = new Set(['usr_rw01_1', 'usr_rw01_2', 'usr_rw01_3', 'usr_rw02_1']);
-
   if (Array.isArray(state.expenses)) {
-    state.expenses = state.expenses.filter((e: any) => !seedExp.has(e.id) && e.restaurantCode !== 'RW02');
+    state.expenses = state.expenses.filter((e: any) => !SEED_EXPENSE_IDS.has(e.id) && e.restaurantCode !== 'RW02');
   }
   if (Array.isArray(state.notifications)) {
-    state.notifications = state.notifications.filter((n: any) => !seedNotif.has(n.id) && n.restaurantCode !== 'RW02');
+    state.notifications = state.notifications.filter((n: any) => !SEED_NOTIFICATION_IDS.has(n.id) && n.restaurantCode !== 'RW02');
   }
   if (Array.isArray(state.branches)) {
-    state.branches = state.branches.filter((b: any) => !seedBranches.has(b.id) && b.restaurantCode !== 'RW02');
+    state.branches = state.branches.filter((b: any) => !SEED_BRANCH_IDS.has(b.id) && b.restaurantCode !== 'RW02');
   }
   if (Array.isArray(state.stationUsers)) {
-    state.stationUsers = state.stationUsers.filter((u: any) => !seedUsers.has(u.id) && u.restaurantCode !== 'RW02');
+    state.stationUsers = state.stationUsers.filter((u: any) => !SEED_USER_IDS.has(u.id) && u.restaurantCode !== 'RW02');
   }
 }
 ensureServerDbDefaults(serverDbState);
@@ -2140,7 +2153,7 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         const map = new Map(currentList.map((item: any) => [item.id, item]));
         for (const inc of fullState[key]) {
           if (!inc || !inc.id) continue;
-          if (seedExp.has(inc.id) || seedNotif.has(inc.id) || seedBranches.has(inc.id) || seedUsers.has(inc.id)) continue;
+          if (SEED_EXPENSE_IDS.has(inc.id) || SEED_NOTIFICATION_IDS.has(inc.id) || SEED_BRANCH_IDS.has(inc.id) || SEED_USER_IDS.has(inc.id)) continue;
           if (allowedRestoCode && inc.restaurantCode && inc.restaurantCode !== allowedRestoCode) continue;
           if (user.role === 'customer' && inc.customerId && inc.customerId !== user.userId) continue;
           const prev = map.get(inc.id);
