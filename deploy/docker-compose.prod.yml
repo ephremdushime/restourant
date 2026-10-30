@@ -105,3 +105,4 @@ volumes:
     driver: local
   app_uploads:
     driver: local
+

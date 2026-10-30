@@ -30,8 +30,25 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
 }) => {
   const state = restoStore.getState();
 
-  // Active restaurant selection
+  // Active restaurant selection (supports URL parameters: ?resto=CODE or #/register?resto=CODE)
   const [selectedRestoCode, setSelectedRestoCode] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const searchParams = new URLSearchParams(window.location.search);
+      const hashQuery = window.location.hash.includes('?') ? window.location.hash.split('?')[1] : '';
+      const hashParams = new URLSearchParams(hashQuery);
+      const urlCode = (
+        searchParams.get('resto') ||
+        searchParams.get('restaurant') ||
+        searchParams.get('r') ||
+        hashParams.get('resto') ||
+        hashParams.get('restaurant') ||
+        hashParams.get('r') ||
+        ''
+      ).toUpperCase();
+      if (urlCode && state.restaurants.some((r) => r.code === urlCode)) {
+        return urlCode;
+      }
+    }
     if (defaultRestoCode && state.restaurants.some((r) => r.code === defaultRestoCode)) {
       return defaultRestoCode;
     }

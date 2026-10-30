@@ -55,7 +55,26 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   const state = restoStore.getState();
 
   const [activeRole, setActiveRole] = useState<UserRole>(currentRole);
-  const [selectedRestoCode, setSelectedRestoCode] = useState(state.currentRestaurantCode);
+  const [selectedRestoCode, setSelectedRestoCode] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const searchParams = new URLSearchParams(window.location.search);
+      const hashQuery = window.location.hash.includes('?') ? window.location.hash.split('?')[1] : '';
+      const hashParams = new URLSearchParams(hashQuery);
+      const urlCode = (
+        searchParams.get('resto') ||
+        searchParams.get('restaurant') ||
+        searchParams.get('r') ||
+        hashParams.get('resto') ||
+        hashParams.get('restaurant') ||
+        hashParams.get('r') ||
+        ''
+      ).toUpperCase();
+      if (urlCode && state.restaurants.some((r) => r.code === urlCode)) {
+        return urlCode;
+      }
+    }
+    return state.currentRestaurantCode;
+  });
   const [selectedBranchId, setSelectedBranchId] = useState('');
   const [selectedStationId, setSelectedStationId] = useState(state.currentStationId);
 

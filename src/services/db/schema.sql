@@ -195,3 +195,4 @@ CREATE INDEX IF NOT EXISTS idx_scan_events_resto_time ON scan_events (restaurant
 CREATE INDEX IF NOT EXISTS idx_scan_events_customer ON scan_events (customer_id);
 CREATE INDEX IF NOT EXISTS idx_pending_approvals_resto ON pending_approvals (restaurant_code, status);
 CREATE INDEX IF NOT EXISTS idx_used_tokens_expires ON used_tokens (expires_at);
+

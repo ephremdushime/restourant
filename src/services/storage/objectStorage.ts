@@ -178,3 +178,4 @@ export async function uploadBase64Photo(
 export function resetS3Client(): void {
   s3ClientInstance = null;
 }
+
