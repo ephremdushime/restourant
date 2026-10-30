@@ -324,15 +324,24 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 ---
 
-## 12. Production Cloud Deployment & Scalability Architecture (50,000 DAU)
+## 12. Production Cloud Deployment & Dual-Path Failover Architecture (50,000 DAU)
 
-RestoPass supports a **Dual-Mode Hybrid Architecture**:
-1. **Cloud Multi-Instance Production Stack**:
-   - **PostgreSQL 16 Relational Persistence**: Strict relational tables (`restaurants`, `customers`, `ledger_entries`, `pending_approvals`, etc.) with database-enforced `UNIQUE (idempotency_key)` constraints on append-only ledgers to eliminate disk serialization bottlenecks and survive ephemeral cloud restarts.
-   - **Distributed Managed Redis 7**: Decoupled in-memory caching utilizing atomic `SET key 1 EX 45 NX` commands to prevent rotating QR token replays across horizontally scaled backend nodes.
-   - **S3-Compatible Object Storage**: Card Print Studio and Student Self-Registration portrait uploads offloaded to AWS S3, DigitalOcean Spaces, Cloudflare R2, or MinIO with public CDN URL delivery.
-2. **Offline Reception Laptop Mode**:
-   - Zero-dependency standalone operation during lunch rush hours without internet connectivity, utilizing atomic file persistence and in-memory caches.
+RestoPass employs a **Canonical Cloud Authority + Dual-Path Failover Architecture**:
+
+- **Core Design Principle**: The Central Cloud Authority (`app.restopass.rw`) remains the **sole canonical source of truth** for customer accounts, payments, approvals, and meal balances. The on-premises reception laptop acts as a **controlled, provisional scanning authority** during internet outages, but never issues credits or approves accounts independently.
+- **Dual-Path Scanning Architecture**:
+  1. **Primary Online Path (Direct Cloud Scanning)**: Scanner stations (smartphones, tablets, USB terminals) verify and deduct meals directly against the cloud API when internet connectivity is present—even if the reception laptop is powered off.
+  2. **Local Fallback Path (Provisional Edge Authority)**: When campus internet drops, scanners automatically fail over to the reception laptop edge service over the local Wi-Fi router (LAN).
+- **Provisional Offline Scanning Safeguards**:
+  - **15-Minute Freshness Guard**: Laptops must have synchronized within 15 minutes prior to entering offline mode.
+  - **4-Hour Maximum Window**: Maximum 4-hour offline operating window per dining service.
+  - **Rolling 120-Minute Window Limit**: Maximum 3 successful meals in any rolling 120-minute window, enforced across all 2–3 buffet counters.
+  - **Durable Write Before Display**: Scans are persisted to the durable local outbox with `idempotencyKey` before showing success signals.
+- **Multi-Tenant Direct URLs**:
+  - `https://app.restopass.rw/rw01` (ULK Main Campus)
+  - `https://app.restopass.rw/rw02` (Kigali Heights Dining)
+  - `https://app.restopass.rw/rw03` (UR Huye Dining)
+  - Sub-pages: `/rw02/register` (Self-Registration) and `/rw02/boss` (Boss Approvals)
 
 ### Quick Start: Multi-Container Cloud Deployment
 
@@ -341,11 +350,12 @@ RestoPass supports a **Dual-Mode Hybrid Architecture**:
 cp .env.example .env
 nano .env
 
-# 2. Launch production stack with PostgreSQL, Redis, and RestoPass App
-docker compose -f deploy/docker-compose.prod.yml up -d --build
+# 2. Launch production stack with PostgreSQL 16, Redis 7, and RestoPass App
+cd deploy
+docker compose -f docker-compose.prod.yml up -d --build
 
 # 3. Check container health status
-docker compose -f deploy/docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml ps
 ```
 
 ---
