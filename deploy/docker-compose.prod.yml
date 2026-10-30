@@ -1,0 +1,107 @@
+# ==============================================================================
+# RestoPass Multi-Tenant Campus & Cafeteria Cloud Production Stack
+# High-Scale Architecture (50,000 DAU Distributed Deployment)
+# ==============================================================================
+# Services:
+#   1. postgres: Managed Relational Database with strict constraints & append-only ledger
+#   2. redis: Distributed In-Memory Cache for 30s atomic QR token replay prevention
+#   3. app: Hardened Node.js Authority & SPA Application
+# ==============================================================================
+
+version: '3.8'
+
+services:
+  # ----------------------------------------------------------------------------
+  # 1. Primary PostgreSQL 16 Relational Persistence
+  # ----------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: restopass-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-restopass}
+      POSTGRES_USER: ${POSTGRES_USER:-restopass_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ChangeThisInProdToStrongPassword32Char!}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-restopass_app} -d ${POSTGRES_DB:-restopass}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+
+  # ----------------------------------------------------------------------------
+  # 2. Managed Redis 7 In-Memory Cache (Multi-Instance QR Replay Guard)
+  # ----------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: restopass-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-ChangeRedisProdPassword32Char!}"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-ChangeRedisProdPassword32Char!}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+
+  # ----------------------------------------------------------------------------
+  # 3. RestoPass Cloud Application Node
+  # ----------------------------------------------------------------------------
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: restopass-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # Relational persistence connection
+      DATABASE_URL: postgres://${POSTGRES_USER:-restopass_app}:${POSTGRES_PASSWORD:-ChangeThisInProdToStrongPassword32Char!}@postgres:5432/${POSTGRES_DB:-restopass}
+      PGSSLMODE: disable
+      # Distributed Redis cache
+      REDIS_URL: redis://:${REDIS_PASSWORD:-ChangeRedisProdPassword32Char!}@redis:6379
+      # Production Secrets (Mandatory >= 32 chars)
+      SESSION_SECRET: ${SESSION_SECRET:-CHANGE_ME_PRODUCTION_SESSION_SECRET_32_CHARS_LONG}
+      RESTOPASS_MASTER_SECRET: ${RESTOPASS_MASTER_SECRET:-CHANGE_ME_PRODUCTION_MASTER_SECRET_32_CHARS_LONG}
+      # S3 / DigitalOcean Spaces / Cloudflare R2 Object Storage
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_PUBLIC_URL_PREFIX: ${S3_PUBLIC_URL_PREFIX:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - app_uploads:/app/public/uploads
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  app_uploads:
+    driver: local

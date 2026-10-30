@@ -320,20 +320,48 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `GET /api/customer/subscription` | Authenticated | Checks student digital subscription status and entitlement (`500 RWF/month`). |
 | `POST /api/customer/subscription/checkout` | `customer` | Initiates an integer-safe `500 RWF` MTN MoMo / Airtel Money subscription payment. |
 | `POST /api/payments/mobile-money/callback` | Webhook | Processes Mobile Money provider callbacks idempotently and activates 30-day + 72h grace access. |
+| `POST /api/upload/photo` | Authenticated | Uploads patron photos to AWS S3, DigitalOcean Spaces, Cloudflare R2, or local disk fallback. |
 
 ---
 
-## 12. Automated Quality Gate & Test Suite
+## 12. Production Cloud Deployment & Scalability Architecture (50,000 DAU)
+
+RestoPass supports a **Dual-Mode Hybrid Architecture**:
+1. **Cloud Multi-Instance Production Stack**:
+   - **PostgreSQL 16 Relational Persistence**: Strict relational tables (`restaurants`, `customers`, `ledger_entries`, `pending_approvals`, etc.) with database-enforced `UNIQUE (idempotency_key)` constraints on append-only ledgers to eliminate disk serialization bottlenecks and survive ephemeral cloud restarts.
+   - **Distributed Managed Redis 7**: Decoupled in-memory caching utilizing atomic `SET key 1 EX 45 NX` commands to prevent rotating QR token replays across horizontally scaled backend nodes.
+   - **S3-Compatible Object Storage**: Card Print Studio and Student Self-Registration portrait uploads offloaded to AWS S3, DigitalOcean Spaces, Cloudflare R2, or MinIO with public CDN URL delivery.
+2. **Offline Reception Laptop Mode**:
+   - Zero-dependency standalone operation during lunch rush hours without internet connectivity, utilizing atomic file persistence and in-memory caches.
+
+### Quick Start: Multi-Container Cloud Deployment
+
+```bash
+# 1. Clone repository & configure production secrets
+cp .env.example .env
+nano .env
+
+# 2. Launch production stack with PostgreSQL, Redis, and RestoPass App
+docker compose -f deploy/docker-compose.prod.yml up -d --build
+
+# 3. Check container health status
+docker compose -f deploy/docker-compose.prod.yml ps
+```
+
+---
+
+## 13. Automated Quality Gate & Test Suite
 
 Every push and pull request to `main` is verified by GitHub Actions ([`.github/workflows/ci.yml`](file:///c:/Users/ADMIN/Restourant/restourant/.github/workflows/ci.yml)):
 
 ```bash
 npm run lint
-npm test -- --run
+npm test
 npm run build
 ```
 
-### Test Coverage Breakdown (`62` Passing Tests)
+### Test Coverage Breakdown (`88` Passing Tests across `23` Suites)
+- **[`tests/productionScale.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/productionScale.test.ts)**: PostgreSQL schema DDL parsing and relational table definitions, graceful offline database fallback, distributed Redis 30s QR replay guard with atomic SETNX, S3/Spaces/R2 object storage upload with local fallback, and authenticated `POST /api/upload/photo` verification.
 - **[`tests/apiSecurity.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/apiSecurity.test.ts)**: HMAC session token signing, tampering/expiration rejection, role-based tenant scoping, atomic DB backup persistence, customer identity isolation (`getCurrentCustomer` never falls back to another customer), and production secret validation.
 - **[`tests/cryptoService.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/cryptoService.test.ts)**: SHA-256 digests, HMAC-SHA256, hierarchical restaurant/customer key isolation, constant-time comparison, salted PIN verification, and `c1`/`v1` QR token verification.
 - **[`tests/customerAuthAndPhysicalCard.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/customerAuthAndPhysicalCard.test.ts)**: 7-step end-to-end verification of provisional registration, boss approval with grace meal reconciliation, non-SMS 6+ digit PIN activation, rate-limited login, audited PIN recovery, CR80 physical card scanning, and `500 RWF` monetization gating with physical card fallback.
@@ -342,6 +370,7 @@ npm run build
 - **[`tests/productionRemediation.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/productionRemediation.test.ts)**: Elimination of station pairing bypass codes, brute-force lockout, ledger idempotency guards, serialized disk writes under concurrency, and dynamic phone QR replay blocking.
 - **[`tests/studentSubscription.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/studentSubscription.test.ts)**: Launch feature flag defaults, `500 RWF` integer safety, Mobile Money callback idempotency, 72-hour grace period boundaries, complimentary access auditing, and physical card independence.
 - **[`tests/topupGraceAndScannerSpec.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/topupGraceAndScannerSpec.test.ts)**: All 5 top-up/grace accounting scenarios (`103 + 60 -> 163`, `5 - 2 + 60 -> 63`, `0 + 60 - 2 -> 58`, new customer `60 - 3 -> 57`, `0 balance + 3 grace used + second pending top-up -> blocked`) and all 12 scanner station validation and audio acceptance tests.
+- **[`tests/selfRegistrationAndPrintReadyExport.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/selfRegistrationAndPrintReadyExport.test.ts)**: Self-onboarding student workflow, Boss approval activation, print-ready PVC card batch export, and initial PIN setup.
 
 ---
 

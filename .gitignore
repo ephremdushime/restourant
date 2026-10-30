@@ -8,4 +8,5 @@ coverage/
 !.env.example
 data/
 *.tmp.*
+public/uploads/
 .vscode/

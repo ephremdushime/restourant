@@ -2,6 +2,15 @@ import express, { Request, Response, NextFunction } from 'express';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import {
+  isPostgresConfigured,
+  initPostgres,
+  loadStateFromPostgres,
+  saveStateToPostgres,
+  insertLedgerEntryPostgres,
+} from './src/services/db/postgresAdapter';
+import { recordTokenScan } from './src/services/cache/redisClient';
+import { uploadBase64Photo } from './src/services/storage/objectStorage';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -209,13 +218,19 @@ if (serverDbState) {
 
 /**
  * Serialized write queue mutex to prevent concurrent write collisions (Finding 5)
+ * Dual persistence engine: saves to PostgreSQL when configured, and atomic JSON file on local disk
  */
 let dbWriteQueue: Promise<boolean> = Promise.resolve(true);
 function queueDbSave(state: any): Promise<boolean> {
   return new Promise((resolve) => {
     dbWriteQueue = dbWriteQueue.then(async () => {
       try {
-        const ok = atomicSaveDb(state);
+        let pgOk = true;
+        if (isPostgresConfigured()) {
+          pgOk = await saveStateToPostgres(state);
+        }
+        const fileOk = atomicSaveDb(state);
+        const ok = isPostgresConfigured() ? pgOk : fileOk;
         resolve(ok);
         return ok;
       } catch (err) {
@@ -310,8 +325,9 @@ const authRateLimiter = createRateLimiter('auth', 20, 60 * 1000); // 20 attempts
 const apiRateLimiter = createRateLimiter('api', 120, 60 * 1000); // 120 requests per minute
 const syncRateLimiter = createRateLimiter('sync', 40, 60 * 1000); // 40 syncs per minute
 
-// Request body parser with scoped limits (Finding 7)
-app.use(express.json({ limit: '2mb' }));
+// Request body parser with scoped limits (supports patron portrait uploads)
+app.use(express.json({ limit: '10mb' }));
+app.use('/uploads', express.static(path.resolve(process.cwd(), 'public/uploads')));
 
 // ----------------------------------------------------
 // Cryptographic Session Engine & Token Verification (Finding 1 & 4)
@@ -1006,6 +1022,38 @@ app.post('/api/customer/recovery/complete', authRateLimiter, (req, res) => {
 });
 
 // ----------------------------------------------------
+// S3 / Cloudflare R2 / DigitalOcean Spaces / Local Photo Upload
+// ----------------------------------------------------
+
+// POST /api/upload/photo: Upload patron photos to cloud object storage (or local uploads/)
+app.post('/api/upload/photo', apiRateLimiter, requireAuth(), async (req, res) => {
+  const { photoBase64, filenameHint } = req.body;
+  if (!photoBase64 || typeof photoBase64 !== 'string') {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing required "photoBase64" data URL string.',
+    });
+  }
+
+  try {
+    const uploadResult = await uploadBase64Photo(photoBase64, filenameHint || 'patron');
+    return res.json({
+      success: true,
+      url: uploadResult.url,
+      key: uploadResult.key,
+      storageType: uploadResult.storageType,
+      sizeBytes: uploadResult.sizeBytes,
+    });
+  } catch (err: any) {
+    console.error('[Upload Photo Error]', err.message);
+    return res.status(400).json({
+      success: false,
+      error: err.message || 'Failed to process and store patron photo.',
+    });
+  }
+});
+
+// ----------------------------------------------------
 // Authoritative Cryptographic QR & License Engine (Finding 1 & 4)
 // ----------------------------------------------------
 
@@ -1209,9 +1257,19 @@ app.post(
         });
       }
 
+      // Distributed Replay Protection (Redis cluster with atomic SETNX & memory/DB fallback)
+      const tokenKey = `${custKey}:${scannedStep}`;
+      const replayCheck = await recordTokenScan(tokenKey, 45);
+      if (!replayCheck.allowed) {
+        return res.json({
+          success: true,
+          valid: false,
+          error: 'Token already used (screenshot replay detected across terminals)',
+        });
+      }
+
       // Shared Persistent Replay Protection across all stations & server restarts
       if (!serverDbState.usedTokens) serverDbState.usedTokens = [];
-      const tokenKey = `${custKey}:${scannedStep}`;
       const alreadyUsed = serverDbState.usedTokens.some((t: any) => t.tokenKey === tokenKey);
 
       if (alreadyUsed) {
@@ -2308,6 +2366,26 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
   let viteLoaded = false;
+
+  // Cloud Relational Database Initialization
+  if (isPostgresConfigured()) {
+    console.log('[Server Authority] PostgreSQL detected. Connecting and initializing schema...');
+    try {
+      const initialized = await initPostgres(serverDbState);
+      if (initialized) {
+        const pgState = await loadStateFromPostgres();
+        if (pgState && isValidAppState(pgState)) {
+          serverDbState = pgState;
+          ensureServerDbDefaults(serverDbState);
+          console.log('[Server Authority] Authoritative state loaded from PostgreSQL.');
+        }
+      }
+    } catch (pgBootErr) {
+      console.error('[Server Authority] PostgreSQL startup initialization failed, falling back to db.json:', pgBootErr);
+    }
+  } else {
+    console.log('[Server Authority] Running in standalone local storage mode (Offline Reception Laptop compatible).');
+  }
 
   if (!isProduction) {
     try {
