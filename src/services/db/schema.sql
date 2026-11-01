@@ -191,8 +191,14 @@ CREATE TABLE IF NOT EXISTS scan_requests (
     customer_id VARCHAR(64) NOT NULL,
     restaurant_code VARCHAR(32) NOT NULL,
     response JSONB NOT NULL,
+    request_hash VARCHAR(64),
+    actor_user_id VARCHAR(128),
+    station_id VARCHAR(64),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE scan_requests ADD COLUMN IF NOT EXISTS request_hash VARCHAR(64);
+ALTER TABLE scan_requests ADD COLUMN IF NOT EXISTS actor_user_id VARCHAR(128);
+ALTER TABLE scan_requests ADD COLUMN IF NOT EXISTS station_id VARCHAR(64);
 CREATE INDEX IF NOT EXISTS idx_scan_requests_created ON scan_requests (created_at);
 
 -- Production Performance Indexes
