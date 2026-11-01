@@ -31,6 +31,7 @@ describe('Cloud-authoritative scanner regression guards', () => {
   });
 
   test('dynamic QR replay protection is database-unique and physical cards remain reusable', () => {
+    assert.match(server, /Verification is deliberately read-only/);
     assert.match(server, /INSERT INTO used_tokens/);
     assert.match(server, /ON CONFLICT \(token_key\) DO NOTHING RETURNING token_key/);
     assert.match(server, /version === 'c1'/);
