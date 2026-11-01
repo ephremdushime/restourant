@@ -13,8 +13,8 @@ import { recordTokenScan, isRedisConfigured } from './src/services/cache/redisCl
 import { uploadBase64Photo } from './src/services/storage/objectStorage';
 
 const app = express();
-// Exactly one trusted reverse-proxy hop (Caddy) in the production Compose topology.
-app.set('trust proxy', 1);
+// Trust exactly one proxy hop only in production, where Caddy is the sole ingress.
+if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 // Cryptographic secrets for session signing & data integrity
