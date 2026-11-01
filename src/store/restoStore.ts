@@ -7544,7 +7544,7 @@ export class RestoStore {
 
     // Verify PIN with constant-time equality and salt
     const salt = getCustomerPinSalt(cust.id, cust.memberNo);
-    const isPinValid = await verifyPinSecure(cleanPin, salt, cust.pinHash || '1234');
+    const isPinValid = Boolean(cust.pinHash) && await verifyPinSecure(cleanPin, salt, cust.pinHash);
 
     if (!isPinValid) {
       cust.failedLoginAttempts = (cust.failedLoginAttempts || 0) + 1;
