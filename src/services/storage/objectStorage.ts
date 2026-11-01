@@ -101,7 +101,6 @@ export async function uploadPatronPhoto(
         Key: key,
         Body: buffer,
         ContentType: mimeType,
-        ACL: 'public-read',
       });
 
       await s3.send(command);
@@ -127,11 +126,17 @@ export async function uploadPatronPhoto(
         sizeBytes: buffer.length,
       };
     } catch (err: any) {
-      console.warn('[Object Storage] S3 upload failed, falling back to local disk:', err.message);
+      console.error('[Object Storage] S3 upload failed:', err.message);
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('Private object storage upload failed. Production will not fall back to public local storage.');
+      }
     }
   }
 
-  // Fallback to local disk (Offline reception laptop mode)
+  // Local disk storage is allowed only for non-production development/offline test mode.
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('S3-compatible object storage is required for production photo uploads.');
+  }
   const localDir = path.resolve(process.cwd(), 'public/uploads/patron-photos');
   if (!fs.existsSync(localDir)) {
     fs.mkdirSync(localDir, { recursive: true });
