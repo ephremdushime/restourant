@@ -387,6 +387,7 @@ export interface UserSession {
   role: 'stand_staff' | 'restaurant_admin' | 'customer' | 'super_admin';
   restaurantCode: string;
   stationId?: string;
+  sessionVersion?: number;
   iat: number;
   exp: number;
 }
@@ -527,10 +528,11 @@ function requireAuth(allowedRoles?: string[]) {
       if (!pool) return res.status(503).json({ success: false, error: 'Administrator identity service is unavailable.' });
       try {
         const admin = await pool.query(
-          "SELECT status FROM restaurant_admins WHERE id=$1 AND restaurant_code=$2 LIMIT 1",
+          "SELECT status, session_version FROM restaurant_admins WHERE id=$1 AND restaurant_code=$2 LIMIT 1",
           [session.userId, session.restaurantCode]
         );
-        if (admin.rows[0]?.status !== 'active') {
+        if (admin.rows[0]?.status !== 'active' ||
+            Number(admin.rows[0]?.session_version || 1) !== Number(session.sessionVersion || 1)) {
           return res.status(401).json({ success: false, error: 'Administrator account is inactive or no longer exists.' });
         }
       } catch (error) {
@@ -548,8 +550,9 @@ function requireAuth(allowedRoles?: string[]) {
         item.id === session.stationId && item.restaurantCode === session.restaurantCode &&
         item.status === 'active' && item.isPaired
       );
-      if (!staff || !station) {
-        return res.status(401).json({ success: false, error: 'Staff account or assigned station is inactive. Sign in again or contact the restaurant manager.' });
+      if (!staff || !station ||
+          Number(staff.sessionVersion || 1) !== Number(session.sessionVersion || 1)) {
+        return res.status(401).json({ success: false, error: 'Staff account, credentials or assigned station changed. Sign in again.' });
       }
     }
 
@@ -691,7 +694,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       return res.json({ success: true, token: legacyToken, user: { role: 'restaurant_admin', username: username.trim(), restaurantCode } });
     }
     const adminResult = await pool.query(
-      `SELECT id, username, display_name, password_hash, status
+      `SELECT id, username, display_name, password_hash, status, session_version
        FROM restaurant_admins WHERE restaurant_code=$1 AND username=$2 LIMIT 1`,
       [restaurantCode, username.trim().toLowerCase()]
     );
@@ -720,6 +723,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
     const token = createSessionToken({
       userId: admin.id, username: admin.username,
       role: 'restaurant_admin', restaurantCode,
+      sessionVersion: Number(admin.session_version || 1),
     });
     return res.json({
       success: true, token,
@@ -770,6 +774,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       role: 'stand_staff',
       restaurantCode,
       stationId: staff.stationId,
+      sessionVersion: Number(staff.sessionVersion || 1),
     });
     return res.json({
       success: true,
@@ -908,7 +913,7 @@ app.patch('/api/admin/restaurant-admins/:id', apiRateLimiter, requireAuth(['supe
   const passwordHash = password ? hashServerStaffSecret(password) : null;
   try {
     const result = await pool.query(
-      'UPDATE restaurant_admins SET status=COALESCE($2,status), password_hash=COALESCE($3,password_hash), updated_at=NOW() WHERE id=$1 RETURNING id,restaurant_code,username,display_name,status',
+      'UPDATE restaurant_admins SET status=COALESCE($2,status), password_hash=COALESCE($3,password_hash), session_version=CASE WHEN $2 IS NOT NULL OR $3 IS NOT NULL THEN session_version+1 ELSE session_version END, updated_at=NOW() WHERE id=$1 RETURNING id,restaurant_code,username,display_name,status',
       [id, status || null, passwordHash]
     );
     if (!result.rows[0]) return res.status(404).json({ success: false, error: 'Administrator account not found.' });
@@ -949,6 +954,19 @@ function hashServerStaffSecret(secret: string): string {
   const salt = crypto.randomBytes(16);
   const derived = crypto.scryptSync(secret, salt, 32, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
   return `scrypt$16384$8$1$${salt.toString('base64url')}$${derived.toString('base64url')}`;
+}
+
+function verifyServerStaffSecret(secret: string, stored: unknown): boolean {
+  if (!secret || typeof stored !== 'string' || !stored.startsWith('scrypt$')) return false;
+  try {
+    const parts = stored.split('$');
+    if (parts.length !== 6 || parts[1] !== '16384' || parts[2] !== '8' || parts[3] !== '1') return false;
+    const salt = Buffer.from(parts[4], 'base64url');
+    const expected = Buffer.from(parts[5], 'base64url');
+    if (salt.length !== 16 || expected.length !== 32) return false;
+    const actual = crypto.scryptSync(secret, salt, 32, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+    return crypto.timingSafeEqual(actual, expected);
+  } catch { return false; }
 }
 
 function computeServerCustomerPinHash(pin: string): string {
@@ -3190,11 +3208,27 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
               return res.status(400).json({ success: false, error: 'Staff PINs must contain at least 8 digits.' });
             }
             if (previous) {
+              const passwordChanged = suppliedPassword
+                ? (suppliedPassword.startsWith('scrypt$')
+                    ? suppliedPassword !== previous.passwordHash
+                    : !verifyServerStaffSecret(suppliedPassword, previous.passwordHash))
+                : false;
+              const pinChanged = suppliedPin
+                ? (suppliedPin.startsWith('scrypt$')
+                    ? suppliedPin !== previous.pin
+                    : !verifyServerStaffSecret(suppliedPin, previous.pin))
+                : false;
+              const assignmentChanged = incoming.stationId !== previous.stationId || incoming.status !== previous.status;
               staffMap.set(incoming.id, {
                 ...previous, ...incoming,
                 id: previous.id, restaurantCode: previous.restaurantCode,
-                passwordHash: suppliedPassword ? (suppliedPassword.startsWith('scrypt$') ? suppliedPassword : hashServerStaffSecret(suppliedPassword)) : previous.passwordHash,
-                pin: suppliedPin ? (suppliedPin.startsWith('scrypt$') ? suppliedPin : hashServerStaffSecret(suppliedPin)) : previous.pin,
+                passwordHash: suppliedPassword
+                  ? (suppliedPassword.startsWith('scrypt$') ? suppliedPassword : (passwordChanged ? hashServerStaffSecret(suppliedPassword) : previous.passwordHash))
+                  : previous.passwordHash,
+                pin: suppliedPin
+                  ? (suppliedPin.startsWith('scrypt$') ? suppliedPin : (pinChanged ? hashServerStaffSecret(suppliedPin) : previous.pin))
+                  : previous.pin,
+                sessionVersion: Number(previous.sessionVersion || 1) + (passwordChanged || pinChanged || assignmentChanged ? 1 : 0),
               });
             } else {
               if (suppliedPassword.length < 12) {
@@ -3204,6 +3238,7 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
                 ...incoming,
                 passwordHash: suppliedPassword.startsWith('scrypt$') ? suppliedPassword : hashServerStaffSecret(suppliedPassword),
                 pin: suppliedPin ? (suppliedPin.startsWith('scrypt$') ? suppliedPin : hashServerStaffSecret(suppliedPin)) : '',
+                sessionVersion: 1,
               });
             }
           }
