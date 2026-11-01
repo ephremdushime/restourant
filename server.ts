@@ -2605,9 +2605,26 @@ app.delete('/api/admin/customers/:customerId/entitlements/:entitlementId', apiRa
 function scopeStateForUser(state: any, user: UserSession): any {
   if (!state) return null;
 
-  // Super Admin receives complete state
+  // Credentials and identity-verification hashes must never cross the API boundary,
+  // including to super-admin dashboards. Authentication stays server-side.
+  const redactCustomers = (items: any[]) => (items || []).map((customer: any) => ({
+    ...customer,
+    pinHash: undefined,
+    idHash: undefined,
+  }));
+  const redactStationUsers = (items: any[]) => (items || []).map((stationUser: any) => ({
+    ...stationUser,
+    passwordHash: undefined,
+    pin: undefined,
+  }));
+
+  // Super Admin receives operational state, never raw authentication material.
   if (user.role === 'super_admin') {
-    return state;
+    return {
+      ...state,
+      customers: redactCustomers(state.customers || []),
+      stationUsers: redactStationUsers(state.stationUsers || []),
+    };
   }
 
   // Restaurant Admin: Scoped exclusively to their restaurantCode
@@ -2616,7 +2633,7 @@ function scopeStateForUser(state: any, user: UserSession): any {
     return {
       currentRestaurantCode: rCode,
       restaurants: (state.restaurants || []).filter((r: any) => r.code === rCode),
-      customers: (state.customers || []).filter((c: any) => c.restaurantCode === rCode),
+      customers: redactCustomers((state.customers || []).filter((c: any) => c.restaurantCode === rCode)),
       ledgerEntries: (state.ledgerEntries || []).filter((l: any) => l.restaurantCode === rCode),
       checkpoints: (state.checkpoints || []).filter((cp: any) => cp.restaurantCode === rCode),
       scanEvents: (state.scanEvents || []).filter((s: any) => s.restaurantCode === rCode),
@@ -2626,7 +2643,7 @@ function scopeStateForUser(state: any, user: UserSession): any {
       menuItems: (state.menuItems || []).filter((m: any) => m.restaurantCode === rCode),
       payments: (state.payments || []).filter((pm: any) => pm.restaurantCode === rCode),
       branches: (state.branches || []).filter((b: any) => b.restaurantCode === rCode),
-      stationUsers: (state.stationUsers || []).filter((su: any) => su.restaurantCode === rCode),
+      stationUsers: redactStationUsers((state.stationUsers || []).filter((su: any) => su.restaurantCode === rCode)),
       pendingApprovals: (state.pendingApprovals || []).filter((pa: any) => pa.restaurantCode === rCode),
       shifts: (state.shifts || []).filter((sh: any) => sh.restaurantCode === rCode),
       cashierSessions: (state.cashierSessions || []).filter((cs: any) => cs.restaurantCode === rCode),
@@ -2658,14 +2675,14 @@ function scopeStateForUser(state: any, user: UserSession): any {
     return {
       currentRestaurantCode: rCode,
       restaurants: (state.restaurants || []).filter((r: any) => r.code === rCode),
-      customers: (state.customers || []).filter((c: any) => c.restaurantCode === rCode),
+      customers: redactCustomers((state.customers || []).filter((c: any) => c.restaurantCode === rCode)),
       ledgerEntries: (state.ledgerEntries || []).filter((l: any) => l.restaurantCode === rCode),
       scanEvents: (state.scanEvents || []).filter((s: any) => s.restaurantCode === rCode),
       scanPoints: (state.scanPoints || []).filter((sp: any) => sp.restaurantCode === rCode),
       menuItems: (state.menuItems || []).filter((m: any) => m.restaurantCode === rCode),
       packages: (state.packages || []).filter((p: any) => p.restaurantCode === rCode),
       branches: (state.branches || []).filter((b: any) => b.restaurantCode === rCode),
-      stationUsers: (state.stationUsers || []).filter((su: any) => su.restaurantCode === rCode),
+      stationUsers: redactStationUsers((state.stationUsers || []).filter((su: any) => su.restaurantCode === rCode)),
       pendingApprovals: (state.pendingApprovals || []).filter((pa: any) => pa.restaurantCode === rCode),
       shifts: (state.shifts || []).filter((sh: any) => sh.restaurantCode === rCode),
       activationRequests: (state.activationRequests || []).filter((ar: any) => ar.restaurantCode === rCode),
@@ -2694,12 +2711,7 @@ function scopeStateForUser(state: any, user: UserSession): any {
     return {
       currentRestaurantCode: rCode,
       restaurants: (state.restaurants || []).filter((r: any) => r.code === rCode),
-      customers: (state.customers || [])
-        .filter((c: any) => c.id === custId || c.memberNo === user.username)
-        .map((c: any) => ({
-          ...c,
-          pinHash: undefined, // Redact sensitive hash
-        })),
+      customers: redactCustomers((state.customers || []).filter((c: any) => c.id === custId || c.memberNo === user.username)),
       ledgerEntries: dashEnt.allowed ? (state.ledgerEntries || []).filter((l: any) => l.customerId === custId) : [],
       menuItems: (state.menuItems || []).filter((m: any) => m.restaurantCode === rCode),
       packages: (state.packages || []).filter((p: any) => p.restaurantCode === rCode),
