@@ -10,7 +10,7 @@ import {
   insertLedgerEntryPostgres,
   getPostgresPool,
 } from './src/services/db/postgresAdapter';
-import { isRedisConfigured } from './src/services/cache/redisClient';
+import { getRedisClient, isRedisConfigured } from './src/services/cache/redisClient';
 import { uploadBase64Photo } from './src/services/storage/objectStorage';
 
 const app = express();
@@ -332,7 +332,45 @@ function createRateLimiter(bucketName: string, maxRequests: number, windowMs: nu
 const authRateLimiter = createRateLimiter('auth', 20, 60 * 1000); // 20 attempts per minute
 const apiRateLimiter = createRateLimiter('api', 120, 60 * 1000); // 120 requests per minute
 const syncRateLimiter = createRateLimiter('sync', 40, 60 * 1000); // 40 syncs per minute
-const scanRateLimiter = createRateLimiter('scan', 1200, 60 * 1000); // 20 scans/second per public IP for shared campus networks
+
+function createDistributedRateLimiter(bucketName: string, maxRequests: number, windowMs: number) {
+  const developmentFallback = createRateLimiter(`${bucketName}_fallback`, maxRequests, windowMs);
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const redis = getRedisClient();
+    if (!redis || redis.status !== 'ready') {
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(503).json({ success: false, error: 'Shared scan protection is temporarily unavailable. No scan was processed.' });
+      }
+      return developmentFallback(req, res, next);
+    }
+    try {
+      const ip = req.ip || req.socket.remoteAddress || 'unknown';
+      const windowId = Math.floor(Date.now() / windowMs);
+      const key = `restopass:rate:${bucketName}:${ip}:${windowId}`;
+      const count = Number(await redis.eval(
+        "local n = redis.call('INCR', KEYS[1]); if n == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]); end; return n",
+        1,
+        key,
+        String(windowMs)
+      ));
+      if (count > maxRequests) {
+        const retryAfter = Math.ceil((windowMs - (Date.now() % windowMs)) / 1000);
+        res.setHeader('Retry-After', String(retryAfter));
+        return res.status(429).json({ success: false, error: 'Scanner request limit reached. Please retry shortly.' });
+      }
+      next();
+    } catch (error) {
+      console.error('[Distributed Rate Limit] Redis operation failed:', error);
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(503).json({ success: false, error: 'Shared scan protection is temporarily unavailable. No scan was processed.' });
+      }
+      return developmentFallback(req, res, next);
+    }
+  };
+}
+
+// 1,200 scans/minute per public IP (20/sec) for multi-station campus networks.
+const scanRateLimiter = createDistributedRateLimiter('scan', 1200, 60 * 1000);
 
 // Request body parser with scoped limits (supports patron portrait uploads)
 app.use(express.json({ limit: '10mb' }));
