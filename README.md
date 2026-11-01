@@ -282,7 +282,6 @@ SESSION_SECRET="generate_a_strong_64_hex_char_secret_here_for_session_signing"
 
 # Mandatory (>= 32 random characters): Root HMAC secret for restaurant keys, c1 PVC cards, and v1 phone QRs
 RESTOPASS_MASTER_SECRET="generate_a_strong_64_hex_char_secret_here_for_master_authority"
-VITE_RESTOPASS_MASTER_KEY="generate_a_strong_64_hex_char_secret_here_for_master_authority"
 
 # Optional role password overrides
 RESTOPASS_SUPERADMIN_PASSWORD="your_strong_superadmin_password"
