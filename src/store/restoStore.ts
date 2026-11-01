@@ -3325,6 +3325,31 @@ export class RestoStore {
     }
   }
 
+  public async registerProvisionalCustomerAuthoritative(data: {
+    name: string; phone: string; photoUrl?: string; idType: string; idNumber: string;
+    isStudent: boolean; studentProfile?: any; packageId?: string; platesRequested: number;
+    amountRwf: number; paymentMethod: string; paymentReference: string; stationId: string;
+    branchId?: string; branchName?: string;
+  }): Promise<{ success: boolean; customer?: Customer; approval?: PendingApproval; error?: string }> {
+    if (!this.authToken) return { success: false, error: 'Staff session expired. Sign in again.' };
+    try {
+      const response = await fetch('/api/approvals/registration', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.authToken },
+        body: JSON.stringify(data),
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success || !result.customer || !result.approval) {
+        return { success: false, error: result?.error || 'Registration was not committed.' };
+      }
+      this.state.customers.push(result.customer);
+      this.state.pendingApprovals.unshift(result.approval);
+      this.notify();
+      return { success: true, customer: result.customer, approval: result.approval };
+    } catch {
+      return { success: false, error: 'Connection interrupted. Confirm the approval queue before retrying with the same payment reference.' };
+    }
+  }
+
   public async approvePendingRequestAuthoritative(approvalId: string): Promise<{ success: boolean; customer?: Customer; approval?: PendingApproval; awaitingCoSign?: boolean; error?: string }> {
     if (!this.authToken) return { success: false, error: 'Manager session expired. Sign in again.' };
     try {
