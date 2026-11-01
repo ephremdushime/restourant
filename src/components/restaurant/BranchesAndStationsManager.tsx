@@ -76,13 +76,13 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
   const [userBranchId, setUserBranchId] = useState<string>(branches[0]?.id || '');
   const [userStationName, setUserStationName] = useState('Stand 1 - Main Buffet');
   const [userPassword, setUserPassword] = useState('');
-  const [userPin, setUserPin] = useState('1234');
+  const [userPin, setUserPin] = useState('');
   const [showUserPassword, setShowUserPassword] = useState(false);
 
   // Reset Password Modal
   const [userToReset, setUserToReset] = useState<StationUser | null>(null);
   const [resetPasswordInput, setResetPasswordInput] = useState('');
-  const [resetPinInput, setResetPinInput] = useState('1234');
+  const [resetPinInput, setResetPinInput] = useState('');
   const [showResetPassword, setShowResetPassword] = useState(false);
 
   // Delete User Confirmation
@@ -147,8 +147,8 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
   // Handle Add Station User
   const handleCreateStationUser = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userFullName.trim() || !userUsername.trim() || !userPassword.trim()) {
-      showToast('Please fill out all required credentials', 'error');
+    if (!userFullName.trim() || !userUsername.trim() || userPassword.trim().length < 12 || !/^\d{8,12}$/.test(userPin.trim())) {
+      showToast('Enter a username, a password of at least 12 characters, and an 8–12 digit POS PIN.', 'error');
       return;
     }
 
@@ -178,7 +178,7 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
           role: 'scanner',
           status: 'active',
           passwordHash: userPassword,
-          pin: userPin.trim() || '1234',
+          pin: userPin.trim(),
           lastLoginAt: new Date().toISOString(),
           lastActiveAt: new Date().toISOString(),
         },
@@ -189,7 +189,7 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
       setUserFullName('');
       setUserUsername('');
       setUserPassword('');
-      setUserPin('1234');
+      setUserPin('');
       showToast(`Station operator account "@${userUsername}" created with active credentials!`);
     } catch (err: any) {
       showToast(err.message || 'Failed to create cashier account', 'error');
@@ -200,8 +200,8 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
   const handleExecutePasswordReset = (e: React.FormEvent) => {
     e.preventDefault();
     if (!userToReset) return;
-    if (!resetPasswordInput.trim()) {
-      showToast('New password cannot be empty', 'error');
+    if (resetPasswordInput.trim().length < 12 || (resetPinInput.trim() && !/^\d{8,12}$/.test(resetPinInput.trim()))) {
+      showToast('New password must be at least 12 characters; optional POS PIN must contain 8–12 digits.', 'error');
       return;
     }
 
@@ -451,11 +451,8 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
                             <ShieldCheck className="w-3 h-3 text-emerald-400 shrink-0" />
                             <span>Scanner Operator</span>
                           </span>
-                          <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-1 font-mono">
-                            <span>PIN:</span>
-                            <strong className="text-slate-200">{user.pin}</strong>
-                            <span className="text-slate-600">·</span>
-                            <span className="text-[10px] text-emerald-400">All-in-One POS</span>
+                          <div className="text-[10px] text-emerald-400 mt-1">
+                            Credentials are securely stored and never displayed.
                           </div>
                         </td>
 
@@ -537,7 +534,7 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
                           onClick={() => {
                             setUserToReset(user);
                             setResetPasswordInput('');
-                            setResetPinInput(user.pin);
+                            setResetPinInput('');
                           }}
                           className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-300 hover:text-white font-semibold text-xs transition-colors cursor-pointer inline-flex items-center gap-1"
                           title="Reset operator login password or PIN"
@@ -993,7 +990,8 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
                   <input
                     type={showUserPassword ? 'text' : 'password'}
                     required
-                    placeholder="Min 6 characters"
+                    minLength={12}
+                    placeholder="At least 12 characters"
                     value={userPassword}
                     onChange={(e) => setUserPassword(e.target.value)}
                     className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-white font-mono focus:border-emerald-500 outline-hidden"
@@ -1001,13 +999,15 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
                 </div>
                 <div>
                   <label className="text-slate-300 font-semibold block mb-1">
-                    4-Digit Tablet PIN *
+                    8–12 Digit POS PIN *
                   </label>
                   <input
                     type="password"
-                    maxLength={4}
+                    maxLength={12}
+                    minLength={8}
+                    pattern="[0-9]{8,12}"
                     required
-                    placeholder="1234"
+                    placeholder="8–12 digits"
                     value={userPin}
                     onChange={(e) => setUserPin(e.target.value)}
                     className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-white font-mono font-bold tracking-widest text-center focus:border-emerald-500 outline-hidden"
