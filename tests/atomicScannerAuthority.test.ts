@@ -63,6 +63,13 @@ describe('Cloud-authoritative scanner regression guards', () => {
     assert.match(server, /attemptedApprovalMutation/);
     assert.match(server, /Client-side bootstrap is disabled/);
     assert.doesNotMatch(server, /mergeScopedCollection\('pendingApprovals'/);
+    assert.match(store, /Customer registration requires the server-authoritative registration endpoint/);
+    assert.match(store, /Provisional registration is disabled until the server-authoritative approval endpoint/);
+    assert.match(store, /Approval requires the server-authoritative PostgreSQL approval workflow/);
+    assert.match(store, /Dual authorization requires the server-authoritative PostgreSQL co-sign endpoint/);
+    assert.match(store, /Rejection requires the server-authoritative PostgreSQL approval workflow/);
+    assert.match(store, /Plate transfers are disabled until the server-authoritative transfer endpoint/);
+    assert.match(store, /if \(this\.authToken && !this\.isDemoModeActive\(\)\) return false/);
   });
 
   test('pending-payment grace meals are committed with the scan transaction', () => {
