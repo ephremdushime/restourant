@@ -1808,7 +1808,7 @@ app.post('/api/approvals/:approvalId/approve', apiRateLimiter, requireAuth(['res
       serverDbState.ledgerEntries.push(committed.purchase);
       if (committed.graceEntry) serverDbState.ledgerEntries.push(committed.graceEntry);
     }
-    return res.json({ success: true, customer: committed.customer, approval: committed.approval, payment: committed.payment });
+    return res.json({ success: true, customer: committed.customer, approval: committed.approval, payment: committed.payment, ledgerEntries: [committed.purchase, ...(committed.graceEntry ? [committed.graceEntry] : [])] });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch {}
     if (error?.message === 'APPROVAL_ALREADY_CREDITED') return res.status(409).json({ success: false, error: 'Approval was already credited.' });
@@ -1848,7 +1848,7 @@ app.post('/api/approvals/:approvalId/cosign', apiRateLimiter, requireAuth(['supe
       serverDbState.ledgerEntries.push(committed.purchase);
       if (committed.graceEntry) serverDbState.ledgerEntries.push(committed.graceEntry);
     }
-    return res.json({ success: true, customer: committed.customer, approval: committed.approval, payment: committed.payment });
+    return res.json({ success: true, customer: committed.customer, approval: committed.approval, payment: committed.payment, ledgerEntries: [committed.purchase, ...(committed.graceEntry ? [committed.graceEntry] : [])] });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch {}
     if (error?.message === 'APPROVAL_ALREADY_CREDITED') return res.status(409).json({ success: false, error: 'Approval was already credited.' });
