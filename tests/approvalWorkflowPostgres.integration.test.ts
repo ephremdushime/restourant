@@ -141,6 +141,32 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       assert.deepEqual([a.status, b.status].sort(), [201, 409]);
     });
 
+    await t.test('browser sync cannot mint subscription entitlements or payment records', async () => {
+      const sync = await post('/api/sync', bossToken, {
+        fullState: {
+          customerSubscriptions: [{
+            id: 'forged-subscription-' + restaurantCode,
+            customerId: 'forged-customer',
+            restaurantCode,
+            status: 'active',
+            plan: 'monthly',
+            expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
+          }],
+          studentSubscriptionPayments: [{
+            id: 'forged-payment-' + restaurantCode,
+            customerId: 'forged-customer',
+            restaurantCode,
+            amountRwf: 500,
+            status: 'successful',
+          }],
+        },
+      });
+      assert.equal(sync.status, 200);
+      const state = serverModule.getServerDbState();
+      assert.equal((state.customerSubscriptions || []).length, 0);
+      assert.equal((state.studentSubscriptionPayments || []).length, 0);
+    });
+
     await t.test('station accounts are hashed, persisted and bound to their assigned station', async () => {
       const staff = {
         id: 'staff_' + restaurantCode,
