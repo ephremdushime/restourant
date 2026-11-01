@@ -1082,7 +1082,8 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
                 <input
                   type={showResetPassword ? 'text' : 'password'}
                   required
-                  placeholder="Enter strong new password"
+                  minLength={12}
+                  placeholder="At least 12 characters"
                   value={resetPasswordInput}
                   onChange={(e) => setResetPasswordInput(e.target.value)}
                   className="w-full p-2.5 rounded-lg bg-slate-950 border border-slate-700 text-white font-mono focus:border-amber-500 outline-hidden"
@@ -1091,12 +1092,14 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
 
               <div>
                 <label className="text-slate-300 font-semibold block mb-1">
-                  New 4-Digit Quick POS PIN
+                  New 8–12 Digit POS PIN (Optional)
                 </label>
                 <input
                   type="password"
-                  maxLength={4}
-                  required
+                  maxLength={12}
+                  minLength={8}
+                  pattern="[0-9]{8,12}"
+                  placeholder="Optional 8–12 digits"
                   value={resetPinInput}
                   onChange={(e) => setResetPinInput(e.target.value)}
                   className="w-full p-2.5 rounded-lg bg-slate-950 border border-slate-700 text-white font-mono font-bold tracking-widest text-center focus:border-amber-500 outline-hidden"
