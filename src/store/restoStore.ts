@@ -2299,14 +2299,14 @@ export class RestoStore {
         body: JSON.stringify({ payload, stationId, idempotencyKey }),
       });
       const result = await response.json();
-      if (!response.ok || !result?.success || !result?.scanEvent || !result?.ledgerEntry) {
+      if (!response.ok || !result?.success || !result?.scanEvent) {
         return { success: false, error: result?.error || 'The server did not authorize this meal.' };
       }
 
       const event = result.scanEvent as ScanEvent;
-      const ledgerEntry = result.ledgerEntry as LedgerEntry;
+      const ledgerEntry = result.ledgerEntry as LedgerEntry | null;
       this.pendingAuthoritativeScanKeys.delete(retryKey);
-      this.appendLedgerEntry(ledgerEntry);
+      if (ledgerEntry) this.appendLedgerEntry(ledgerEntry);
       if (!this.state.scanEvents.some((item) => item.id === event.id)) {
         this.state.scanEvents.unshift(event);
       }
