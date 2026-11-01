@@ -392,11 +392,21 @@ function verifySessionToken(token: string): UserSession | null {
     }
 
     const payload: UserSession = JSON.parse(Buffer.from(b64Payload, 'base64url').toString('utf-8'));
-    if (!payload.userId || !payload.role || !payload.exp) return null;
-
-    if (Date.now() > payload.exp) {
-      return null;
-    }
+    const allowedRoles = new Set(['stand_staff', 'restaurant_admin', 'customer', 'super_admin']);
+    if (
+      !payload ||
+      typeof payload.userId !== 'string' ||
+      !payload.userId ||
+      typeof payload.username !== 'string' ||
+      !allowedRoles.has(payload.role) ||
+      typeof payload.restaurantCode !== 'string' ||
+      !Number.isSafeInteger(payload.iat) ||
+      !Number.isSafeInteger(payload.exp) ||
+      payload.exp <= payload.iat ||
+      payload.exp - payload.iat > 24 * 60 * 60 * 1000 ||
+      Date.now() >= payload.exp ||
+      payload.iat > Date.now() + 60_000
+    ) return null;
 
     return payload;
   } catch {
@@ -496,9 +506,12 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
   // 1. Super Admin Authentication
   if (role === 'super_admin') {
     const configuredSuperAdminPassword = process.env.RESTOPASS_SUPERADMIN_PASSWORD || process.env.SUPERADMIN_PASSWORD;
-    const validPassword = configuredSuperAdminPassword
-      ? timingSafeCompare(password || '', configuredSuperAdminPassword)
-      : (typeof password === 'string' && password.length >= 8);
+    const validPassword = Boolean(
+      configuredSuperAdminPassword &&
+      configuredSuperAdminPassword.length >= 16 &&
+      typeof password === 'string' &&
+      timingSafeCompare(password, configuredSuperAdminPassword)
+    );
 
     if (!validPassword) {
       return res.status(401).json({ success: false, error: 'Invalid Super Admin credentials' });
@@ -528,9 +541,12 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
       return res.status(400).json({ success: false, error: 'Restaurant code is required' });
     }
     const configuredBossPassword = process.env.RESTOPASS_BOSS_PASSWORD || process.env.BOSS_PASSWORD;
-    const validPassword = configuredBossPassword
-      ? timingSafeCompare(password || '', configuredBossPassword)
-      : (typeof password === 'string' && password.length >= 6);
+    const validPassword = Boolean(
+      configuredBossPassword &&
+      configuredBossPassword.length >= 16 &&
+      typeof password === 'string' &&
+      timingSafeCompare(password, configuredBossPassword)
+    );
 
     if (!validPassword) {
       return res.status(401).json({ success: false, error: 'Invalid Restaurant Administrator credentials' });
@@ -562,8 +578,12 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
       return res.status(400).json({ success: false, error: 'Restaurant code is required' });
     }
     const entered = (pin || password || '').trim();
-    const configuredStaffPin = process.env.RESTOPASS_STAFF_DEFAULT_PIN || '1234';
-    const validPin = timingSafeCompare(entered, configuredStaffPin) || (entered.length >= 4);
+    const configuredStaffPin = process.env.RESTOPASS_STAFF_DEFAULT_PIN || '';
+    const validPin = Boolean(
+      configuredStaffPin.length >= 8 &&
+      entered.length >= 8 &&
+      timingSafeCompare(entered, configuredStaffPin)
+    );
     if (!validPin) {
       return res.status(401).json({ success: false, error: 'Invalid Staff PIN or Password' });
     }
@@ -603,7 +623,7 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
       return res.status(404).json({ success: false, error: 'Customer record not found' });
     }
 
-    const validPin = verifyServerCustomerPin(pin || '', cust) || (!cust.hasCustomPin && (pin === '1234' || pin === '123456'));
+    const validPin = verifyServerCustomerPin(pin || '', cust);
     if (!validPin) {
       return res.status(401).json({ success: false, error: 'Invalid Member No or PIN' });
     }
@@ -2368,23 +2388,25 @@ async function startServer() {
   let viteLoaded = false;
 
   // Cloud Relational Database Initialization
+  if (isProduction && !isPostgresConfigured()) {
+    throw new Error('[FATAL] DATABASE_URL is required in production. Refusing to start with local JSON persistence.');
+  }
+
   if (isPostgresConfigured()) {
     console.log('[Server Authority] PostgreSQL detected. Connecting and initializing schema...');
-    try {
-      const initialized = await initPostgres(serverDbState);
-      if (initialized) {
-        const pgState = await loadStateFromPostgres();
-        if (pgState && isValidAppState(pgState)) {
-          serverDbState = pgState;
-          ensureServerDbDefaults(serverDbState);
-          console.log('[Server Authority] Authoritative state loaded from PostgreSQL.');
-        }
-      }
-    } catch (pgBootErr) {
-      console.error('[Server Authority] PostgreSQL startup initialization failed, falling back to db.json:', pgBootErr);
+    const initialized = await initPostgres(serverDbState);
+    if (!initialized) {
+      throw new Error('[FATAL] PostgreSQL initialization failed. Production startup is aborted; no JSON fallback is permitted.');
     }
+    const pgState = await loadStateFromPostgres();
+    if (!pgState) {
+      throw new Error('[FATAL] Could not load authoritative state from PostgreSQL. Production startup is aborted.');
+    }
+    serverDbState = pgState;
+    ensureServerDbDefaults(serverDbState);
+    console.log('[Server Authority] Authoritative state loaded from PostgreSQL.');
   } else {
-    console.log('[Server Authority] Running in standalone local storage mode (Offline Reception Laptop compatible).');
+    console.log('[Server Authority] Running in standalone local storage mode (development/offline mode only).');
   }
 
   if (!isProduction) {
