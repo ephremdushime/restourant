@@ -33,7 +33,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
     restaurants: [{ code: restaurantCode, name: 'Approval Integration Test', status: 'active' }],
     scanPoints: [{ id: stationId, restaurantCode, status: 'active', isPaired: true, name: 'Integration Scanner' }],
     packages: [{ id: 'pkg_test_60', restaurantCode, name: '60 plates', platesCount: 60, priceRwf: 60000 }],
-    customers: [], pendingApprovals: [], ledgerEntries: [], payments: [], auditLogs: [],
+    customers: [], pendingApprovals: [], ledgerEntries: [], payments: [], auditLogs: [], stationUsers: [],
   });
 
   const httpServer = createServer(serverModule.app);
@@ -141,6 +141,43 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       assert.deepEqual([a.status, b.status].sort(), [201, 409]);
     });
 
+    await t.test('station accounts are hashed, persisted and bound to their assigned station', async () => {
+      const staff = {
+        id: 'staff_' + restaurantCode,
+        restaurantCode,
+        branchId: 'branch_' + restaurantCode,
+        branchName: 'Integration Branch',
+        stationId,
+        stationName: 'Integration Scanner',
+        name: 'Integration Staff',
+        username: 'integration.cashier',
+        phone: '+250780000099',
+        role: 'stand_staff',
+        status: 'active',
+        passwordHash: 'A-unique-strong-staff-password-2026',
+        pin: '83917462',
+        createdAt: new Date().toISOString(),
+      };
+      const sync = await post('/api/sync', bossToken, { fullState: { stationUsers: [staff] } });
+      assert.equal(sync.status, 200);
+      const stored = await pool!.query('SELECT data FROM station_users WHERE id=$1', [staff.id]);
+      assert.equal(stored.rowCount, 1);
+      assert.match(stored.rows[0].data.passwordHash, /^scrypt\\$/);
+      assert.match(stored.rows[0].data.pin, /^scrypt\\$/);
+      assert.notEqual(stored.rows[0].data.passwordHash, staff.passwordHash);
+      const login = await post('/api/auth/login', '', {
+        role: 'stand_staff', username: staff.username, password: staff.passwordHash,
+        restaurantCode, stationId,
+      });
+      assert.equal(login.status, 200);
+      assert.equal(login.body.user.stationId, stationId);
+      const wrongStation = await post('/api/auth/login', '', {
+        role: 'stand_staff', username: staff.username, password: staff.passwordHash,
+        restaurantCode, stationId: 'other_station',
+      });
+      assert.equal(wrongStation.status, 403);
+    });
+
     await t.test('rejection atomically locks a provisional new customer', async () => {
       const created = await post('/api/approvals/registration', bossToken, registration('E', 15, '+250780000005'));
       assert.equal(created.status, 201);
@@ -153,6 +190,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
   } finally {
     await new Promise<void>((resolve, reject) => httpServer.close((error) => error ? reject(error) : resolve()));
     await pool!.query('DELETE FROM audit_logs WHERE restaurant_code=$1', [restaurantCode]);
+    await pool!.query('DELETE FROM station_users WHERE restaurant_code=$1', [restaurantCode]);
     await pool!.query('DELETE FROM payments WHERE restaurant_code=$1', [restaurantCode]);
     await pool!.query('DELETE FROM ledger_entries WHERE restaurant_code=$1', [restaurantCode]);
     await pool!.query('DELETE FROM pending_approvals WHERE restaurant_code=$1', [restaurantCode]);
