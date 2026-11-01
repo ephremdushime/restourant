@@ -41,6 +41,13 @@ describe('Cloud-authoritative scanner regression guards', () => {
     assert.match(server, /version === 'v1'/);
   });
 
+  test('client sync cannot replace state or inject financial history and scan events', () => {
+    assert.match(server, /Full-state replacement is disabled/);
+    assert.match(server, /if \(user\.role === 'stand_staff' \|\| user\.role === 'customer'\) return false/);
+    assert.match(server, /Scan events are written only by server-side transactional scan endpoints/);
+    assert.match(server, /mergeScopedCollection\('pendingApprovals', user\.role !== 'stand_staff'\)/);
+  });
+
   test('pending-payment grace meals are committed with the scan transaction', () => {
     assert.match(server, /gracePlatesConsumed/);
     assert.match(server, /gracePlatesRemaining/);
