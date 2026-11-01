@@ -402,7 +402,13 @@ export async function recordUsedTokenPostgres(
   ttlSeconds = 60
 ): Promise<{ allowed: boolean }> {
   const p = getPostgresPool();
-  if (!p || !isInitialized) return { allowed: true };
+  if (!Number.isInteger(ttlSeconds) || ttlSeconds < 1 || ttlSeconds > 600) {
+    return { allowed: false };
+  }
+  if (!p || !isInitialized) {
+    // Production must never interpret an unavailable replay store as permission.
+    return { allowed: process.env.NODE_ENV !== 'production' };
+  }
 
   try {
     const res = await p.query(
@@ -417,7 +423,8 @@ export async function recordUsedTokenPostgres(
     return { allowed };
   } catch (err) {
     console.error('[PostgreSQL Adapter] Used token insert error:', err);
-    return { allowed: true }; // Failsafe to avoid blocking legitimate scans on transient DB err
+    // A replay-protection outage is a security failure, not permission to redeem.
+    return { allowed: false };
   }
 }
 
