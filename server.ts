@@ -691,6 +691,12 @@ app.post('/api/auth/logout', (req, res) => {
 // Customer Non-SMS Authentication, Activation & Recovery Endpoints (Section 4)
 // ----------------------------------------------------
 
+function hashServerStaffSecret(secret: string): string {
+  const salt = crypto.randomBytes(16);
+  const derived = crypto.scryptSync(secret, salt, 32, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+  return `scrypt$16384$8$1${salt.toString('base64url')}${derived.toString('base64url')}`;
+}
+
 function computeServerCustomerPinHash(pin: string): string {
   const salt = crypto.randomBytes(16);
   const derived = crypto.scryptSync(pin.trim(), salt, 32, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
@@ -2884,7 +2890,40 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         mergeScopedCollection('packages', true);
         mergeScopedCollection('menuItems', true);
         mergeScopedCollection('branches', true);
-        mergeScopedCollection('stationUsers', true);
+        // Staff credentials are write-once through sync: new accounts are hashed here,
+        // while existing credentials cannot be overwritten by a browser state payload.
+        if (Array.isArray(fullState.stationUsers)) {
+          const staffMap = new Map((serverDbState.stationUsers || []).map((item: any) => [item.id, item]));
+          for (const incoming of fullState.stationUsers) {
+            if (!incoming?.id || !incoming?.username || !incoming?.restaurantCode) continue;
+            if (allowedRestoCode && incoming.restaurantCode !== allowedRestoCode) continue;
+            const previous: any = staffMap.get(incoming.id);
+            const station = (serverDbState.scanPoints || []).find((point: any) =>
+              point.id === incoming.stationId && point.restaurantCode === incoming.restaurantCode
+            );
+            if (!station || !/^[a-zA-Z0-9._-]{3,64}$/.test(String(incoming.username))) continue;
+            if (previous) {
+              staffMap.set(incoming.id, {
+                ...previous,
+                ...incoming,
+                id: previous.id,
+                restaurantCode: previous.restaurantCode,
+                passwordHash: previous.passwordHash,
+                pin: previous.pin,
+              });
+            } else {
+              const password = typeof incoming.passwordHash === 'string' ? incoming.passwordHash : '';
+              const pin = typeof incoming.pin === 'string' ? incoming.pin : '';
+              if (password.length < 12 || (pin && !/^\\d{8,}$/.test(pin))) continue;
+              staffMap.set(incoming.id, {
+                ...incoming,
+                passwordHash: hashServerStaffSecret(password),
+                pin: pin ? hashServerStaffSecret(pin) : '',
+              });
+            }
+          }
+          serverDbState.stationUsers = Array.from(staffMap.values());
+        }
         mergeScopedCollection('scanPoints', true);
         mergeScopedCollection('cashierSessions', true);
         mergeScopedCollection('expenses', true);
