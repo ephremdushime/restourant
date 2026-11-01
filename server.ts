@@ -875,8 +875,9 @@ app.post('/api/admin/restaurant-admins', apiRateLimiter, requireAuth(['super_adm
   }
   const pool = getPostgresPool();
   if (!pool) return res.status(503).json({ success: false, error: 'PostgreSQL is required for administrator provisioning.' });
-  const client = await pool.connect();
+  let client: any;
   try {
+    client = await pool.connect();
     await client.query('BEGIN');
     const restaurant = await client.query('SELECT code FROM restaurants WHERE code=$1 FOR UPDATE', [restaurantCode]);
     if (!restaurant.rows[0]) {
@@ -896,12 +897,14 @@ app.post('/api/admin/restaurant-admins', apiRateLimiter, requireAuth(['super_adm
     await client.query('COMMIT');
     return res.status(201).json({ success: true, administrator: inserted.rows[0] });
   } catch (error: any) {
-    await client.query('ROLLBACK');
+    if (client) {
+      try { await client.query('ROLLBACK'); } catch {}
+    }
     if (error?.code === '23505') return res.status(409).json({ success: false, error: 'That username is already registered for this restaurant.' });
     console.error('[Restaurant Admin Provisioning] Failed:', error);
     return res.status(503).json({ success: false, error: 'Administrator account could not be provisioned.' });
   } finally {
-    client.release();
+    client?.release();
   }
 });
 
