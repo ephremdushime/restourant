@@ -3,12 +3,10 @@
  * Masterplan v1.1 Section 7
  */
 
-// In production, authoritative key derivation and cryptographic verification
-// are strictly executed on the backend server (`server.ts`).
-// In client browser builds, a scoped local offline key is used for standalone operation.
-export const MASTER_KEY =
-  (typeof process !== 'undefined' && process.env?.RESTOPASS_MASTER_SECRET) ||
-  'RESTOPASS_RWANDA_MASTER_2026_SUPER_ADMIN_EPHREM';
+// This browser-side key is deliberately public and has NO server authority.
+// It exists only for legacy local UI previews. Production QR validation and
+// all privileged signing must use the server-held MASTER_KEY in server.ts.
+export const MASTER_KEY = 'RESTOPASS_PUBLIC_CLIENT_PREVIEW_ONLY_V1';
 
 /**
  * Fast synchronous SHA-256 and HMAC implementation for instant UI & QR generation
