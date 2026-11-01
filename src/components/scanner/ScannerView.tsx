@@ -160,7 +160,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         return;
       }
 
-      if (!activeScan) return;
+      if (!activeScan || !isDemoMode) return;
 
       if (e.key === '2' && activeScan.event.platesDeducted < 2 && activeScan.balanceAfter >= 1) {
         e.preventDefault();
@@ -791,7 +791,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
               )}
 
               <div className="flex items-center justify-end gap-3 pt-2 border-t border-rose-800/80">
-                {activeScan.event.customerId && (
+                {isDemoMode && activeScan.event.customerId && (
                   <button
                     type="button"
                     onClick={() => setOverrideModalOpen(true)}
@@ -943,7 +943,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
               {/* Action Buttons: 2nd Plate, Undo, Done */}
               <div className="flex items-center justify-between gap-3 pt-1">
                 <div className="flex items-center gap-2.5">
-                  {activeScan.event.platesDeducted < 2 && activeScan.balanceAfter >= 1 && (
+                  {isDemoMode && activeScan.event.platesDeducted < 2 && activeScan.balanceAfter >= 1 && (
                     <button
                       type="button"
                       onClick={handleAddSecondPlate}
@@ -953,13 +953,13 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                     </button>
                   )}
 
-                  <button
+                  {isDemoMode && <button
                     type="button"
                     onClick={handleUndo}
                     className="px-4 py-2.5 rounded-xl bg-black/50 hover:bg-black/70 border border-white/25 text-white font-bold text-sm transition-all cursor-pointer"
                   >
                     Undo
-                  </button>
+                  </button>}
                 </div>
 
                 <button
