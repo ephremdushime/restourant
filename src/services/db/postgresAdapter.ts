@@ -277,6 +277,24 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
       }
     }
 
+    // 3a. Individually provisioned station staff accounts. Credential fields are
+    // already scrypt-hashed by the server before this persistence boundary.
+    if (Array.isArray(state.stationUsers)) {
+      for (const u of state.stationUsers) {
+        if (!u?.id || !u?.restaurantCode || !u?.username) continue;
+        await client.query(
+          `INSERT INTO station_users (id, restaurant_code, username, role, data)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (id) DO UPDATE
+           SET restaurant_code = EXCLUDED.restaurant_code,
+               username = EXCLUDED.username,
+               role = EXCLUDED.role,
+               data = EXCLUDED.data`,
+          [u.id, u.restaurantCode, u.username, u.role || 'stand_staff', JSON.stringify(u)]
+        );
+      }
+    }
+
     // 4. Pending Approvals (Boss Approvals Manager)
     if (Array.isArray(state.pendingApprovals)) {
       for (const a of state.pendingApprovals) {
