@@ -131,6 +131,33 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       assert.equal(after.rows[0].data.activationStatus, 'active');
     });
 
+    await t.test('concurrent duplicate top-up references create one pending payment only', async () => {
+      const created = await post('/api/approvals/registration', bossToken, registration('TOPUP-DUP', 10, '+250780000077'));
+      assert.equal(created.status, 201);
+      const approved = await post('/api/approvals/' + created.body.approval.id + '/approve', bossToken, {});
+      assert.equal(approved.status, 200);
+      const customerId = created.body.customer.id;
+      await pool!.query(
+        `UPDATE customers SET data=jsonb_set(jsonb_set(data,'{hasCustomPin}','true'::jsonb),'{activationStatus}',to_jsonb('active'::text)) WHERE id=$1`,
+        [customerId]
+      );
+      const paymentReference = 'TOPUP-DUP-REF-' + restaurantCode;
+      const request = {
+        customerId, platesRequested: 15, amountRwf: 15000,
+        paymentMethod: 'cash', paymentReference, stationId,
+      };
+      const [first, second] = await Promise.all([
+        post('/api/approvals/topup', bossToken, request),
+        post('/api/approvals/topup', bossToken, request),
+      ]);
+      assert.deepEqual([first.status, second.status].sort(), [201, 409]);
+      const rows = await pool!.query(
+        `SELECT COUNT(*)::int AS count FROM pending_approvals WHERE restaurant_code=$1 AND data->>'paymentReference'=$2`,
+        [restaurantCode, paymentReference]
+      );
+      assert.equal(rows.rows[0].count, 1);
+    });
+
     await t.test('concurrent duplicate identity registration is serialized', async () => {
       const payloadA = registration('D1', 10, '+250780000004');
       const payloadB = { ...registration('D2', 10, '+250780000004'), paymentReference: 'TEST-REF-D2', idNumber: payloadA.idNumber };
