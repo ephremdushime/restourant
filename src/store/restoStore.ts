@@ -3416,6 +3416,7 @@ export class RestoStore {
         if (i < 0) this.state.pendingApprovals.unshift(result.approval); else this.state.pendingApprovals[i] = result.approval;
       }
       if (result.payment && !this.state.payments.some((x) => x.id === result.payment.id)) this.state.payments.unshift(result.payment);
+      if (Array.isArray(result.ledgerEntries)) result.ledgerEntries.forEach((entry: LedgerEntry) => this.appendLedgerEntry(entry));
       this.notify();
       return { success: true, customer: result.customer, approval: result.approval };
     } catch {
