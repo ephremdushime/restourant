@@ -1332,7 +1332,7 @@ app.post(
 app.post(
   '/api/scans/consume',
   apiRateLimiter,
-  requireAuth(['stand_staff', 'restaurant_admin', 'super_admin']),
+  requireAuth(['stand_staff', 'restaurant_admin']),
   async (req, res) => {
     const user = req.user!;
     const payload = typeof req.body?.payload === 'string' ? req.body.payload.trim() : '';
@@ -1351,9 +1351,9 @@ app.post(
     if (!station || !station.isPaired) {
       return res.status(403).json({ success: false, error: 'Scanner station is not paired or active for this restaurant.' });
     }
-    const licenseStatus = (serverDbState?.licenses || []).find((l: any) =>
-      l.restaurantCode === restaurantCode && l.id === (serverDbState?.restaurants || []).find((r: any) => r.code === restaurantCode)?.currentLicenseId
-    );
+    const currentRestaurant = (serverDbState?.restaurants || []).find((r: any) => r.code === restaurantCode);
+    const restaurantLicenses = (serverDbState?.licenses || []).filter((l: any) => l.restaurantCode === restaurantCode);
+    const licenseStatus = restaurantLicenses.find((l: any) => l.id === currentRestaurant?.currentLicenseId) || restaurantLicenses[restaurantLicenses.length - 1];
     if (!licenseStatus || new Date(licenseStatus.validUntil).getTime() <= Date.now()) {
       return res.status(403).json({ success: false, error: 'Restaurant license is inactive or expired.' });
     }
@@ -1376,10 +1376,14 @@ app.post(
 
       // Idempotent retries return the exact original committed result.
       const prior = await client.query(
-        'SELECT response FROM scan_requests WHERE idempotency_key = $1 FOR UPDATE',
+        'SELECT response, restaurant_code FROM scan_requests WHERE idempotency_key = $1 FOR UPDATE',
         [idempotencyKey]
       );
       if (prior.rows[0]?.response) {
+        if (prior.rows[0].restaurant_code !== restaurantCode) {
+          await client.query('ROLLBACK');
+          return res.status(403).json({ success: false, error: 'Idempotency key belongs to another restaurant.' });
+        }
         await client.query('COMMIT');
         return res.json(prior.rows[0].response);
       }
@@ -1470,7 +1474,11 @@ app.post(
       const recentEvents = recent.rows.map((r: any) => r.data || {});
       const platesInWindow = recentEvents.reduce((sum: number, ev: any) =>
         sum + ((ev.status === 'approved' || ev.status === 'warning_confirmed') ? Number(ev.platesDeducted || 0) : 0), 0);
-      if (recentEvents.some((ev: any) => ev.scanPointId === requestedStationId && (ev.status === 'approved' || ev.status === 'warning_confirmed'))) {
+      const lastStationScan = await client.query(
+        "SELECT data FROM scan_events WHERE restaurant_code = $1 AND station_id = $2 AND status IN ('approved', 'warning_confirmed') ORDER BY created_at DESC LIMIT 1",
+        [restaurantCode, requestedStationId]
+      );
+      if (lastStationScan.rows[0]?.data?.customerId === customerRow.id) {
         await client.query('ROLLBACK');
         return res.status(409).json({ success: false, error: 'Consecutive scans at this station are not allowed. Scan another customer first.' });
       }
