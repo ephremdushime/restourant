@@ -1654,6 +1654,8 @@ app.post('/api/approvals/registration', apiRateLimiter, requireAuth(['stand_staf
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [referenceLock]);
     const duplicateRef = await client.query("SELECT id FROM pending_approvals WHERE restaurant_code=$1 AND data->>'paymentReference'=$2 LIMIT 1", [user.restaurantCode, reference]);
     if (duplicateRef.rows[0]) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Payment reference has already been submitted.' }); }
+    const identityLock = 'customer-identity:' + user.restaurantCode + ':' + crypto.createHash('sha256').update(phone.replace(/\s+/g, '') + '|' + idHash).digest('hex');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [identityLock]);
     const duplicate = await client.query(
       "SELECT member_no FROM customers WHERE restaurant_code=$1 AND (phone=$2 OR data->>'idHash'=$3 OR ($4<>'' AND data->'studentProfile'->>'registrationNumber'=$4)) LIMIT 1",
       [user.restaurantCode, phone, idHash, typeof b.studentProfile?.registrationNumber === 'string' ? b.studentProfile.registrationNumber.trim() : '']
