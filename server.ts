@@ -2914,7 +2914,7 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
             } else {
               const password = typeof incoming.passwordHash === 'string' ? incoming.passwordHash : '';
               const pin = typeof incoming.pin === 'string' ? incoming.pin : '';
-              if (password.length < 12 || (pin && !/^\\d{8,}$/.test(pin))) continue;
+              if (password.length < 12 || (pin && !/^\d{8,}$/.test(pin))) continue;
               staffMap.set(incoming.id, {
                 ...incoming,
                 passwordHash: hashServerStaffSecret(password),
