@@ -3218,7 +3218,9 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
                     ? suppliedPin !== previous.pin
                     : !verifyServerStaffSecret(suppliedPin, previous.pin))
                 : false;
-              const assignmentChanged = incoming.stationId !== previous.stationId || incoming.status !== previous.status;
+              const assignmentChanged =
+                (incoming.stationId !== undefined && incoming.stationId !== previous.stationId) ||
+                (incoming.status !== undefined && incoming.status !== previous.status);
               staffMap.set(incoming.id, {
                 ...previous, ...incoming,
                 id: previous.id, restaurantCode: previous.restaurantCode,
