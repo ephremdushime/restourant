@@ -506,14 +506,33 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
     if (plates <= 0 || amount <= 0) return;
 
     setTopUpSubmitting(true);
-    const result = await restoStore.topUpCustomerAuthoritative({
-      customerId: topUpCustomer.id,
-      plates,
-      amountRwf: amount,
-      paymentMethod: topUpMethod,
-      reference: topUpRef,
-      packageId: packageIdToRecord,
-    });
+    let result: { success: boolean; error?: string };
+    let awaitingCoSign = false;
+    if (plates > 120) {
+      const station = state.scanPoints.find((item) =>
+        item.id === state.currentStationId && item.restaurantCode === state.currentRestaurantCode && item.status === 'active' && item.isPaired
+      ) || state.scanPoints.find((item) =>
+        item.restaurantCode === state.currentRestaurantCode && item.status === 'active' && item.isPaired
+      );
+      if (!station) {
+        setTopUpSubmitting(false);
+        setActionToast('A paired active scanner station is required to submit a high-value approval.');
+        setTimeout(() => setActionToast(null), 5000);
+        return;
+      }
+      const pending = await restoStore.createPendingTopupAuthoritative({
+        customerId: topUpCustomer.id, platesRequested: plates, amountRwf: amount,
+        paymentMethod: topUpMethod, paymentReference: topUpRef, packageId: packageIdToRecord,
+        stationId: station.id,
+      });
+      result = { success: pending.success, error: pending.error };
+      awaitingCoSign = pending.success;
+    } else {
+      result = await restoStore.topUpCustomerAuthoritative({
+        customerId: topUpCustomer.id, plates, amountRwf: amount,
+        paymentMethod: topUpMethod, reference: topUpRef, packageId: packageIdToRecord,
+      });
+    }
     setTopUpSubmitting(false);
     if (!result.success) {
       setActionToast(result.error || 'Top-up was not confirmed by the server.');
@@ -523,8 +542,10 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
     setTopUpModalOpen(false);
     setIsCustomTopUp(false);
     setTopUpRef('MOMO-' + Math.floor(1000000 + Math.random() * 9000000));
-    setActionToast(`Successfully credited ${plates} plates (${amount.toLocaleString()} RWF) to #${topUpCustomer.memberNo}.`);
-    setTimeout(() => setActionToast(null), 4000);
+    setActionToast(awaitingCoSign
+      ? `High-value request for ${plates} plates recorded. Boss approval and independent Super Admin co-sign are required before credit.`
+      : `Successfully credited ${plates} plates (${amount.toLocaleString()} RWF) to #${topUpCustomer.memberNo}.`);
+    setTimeout(() => setActionToast(null), 5000);
   };
 
   // Package Management Handlers
