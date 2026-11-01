@@ -5344,25 +5344,26 @@ export class RestoStore {
     actorName = 'Restaurant Boss'
   ): boolean {
     if (!this.state.stationUsers) return false;
-    const idx = this.state.stationUsers.findIndex(
-      (u) => u.id === userId && u.restaurantCode === restaurantCode
+    const user = this.state.stationUsers.find(
+      (item) => item.id === userId && item.restaurantCode === restaurantCode
     );
-    if (idx !== -1) {
-      const removed = this.state.stationUsers.splice(idx, 1)[0];
-      this.logAudit({
-        restaurantCode,
-        branchId: removed.branchId,
-        branchName: removed.branchName,
-        actorRole: 'restaurant_admin',
-        actorName,
-        action: 'STATION_USER_DELETED',
-        details: `Deleted station user account "${removed.name}" (@${removed.username})`,
-      });
-      this.scheduleSaveState();
-      this.notify();
-      return true;
-    }
-    return false;
+    if (!user) return false;
+    // Soft-disable the server identity; removing a client array entry must not
+    // leave an active PostgreSQL credential behind.
+    user.status = 'blocked';
+    this.logAudit({
+      restaurantCode,
+      branchId: user.branchId,
+      branchName: user.branchName,
+      actorRole: 'restaurant_admin',
+      actorName,
+      action: 'STATION_USER_DEACTIVATED',
+      details: `Deactivated station user account "${user.name}" (@${user.username})`,
+    });
+    this.scheduleSaveState();
+    this.pushStateToServer();
+    this.notify();
+    return true;
   }
 
   // =========================================================================
