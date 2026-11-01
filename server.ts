@@ -329,9 +329,11 @@ function createRateLimiter(bucketName: string, maxRequests: number, windowMs: nu
   };
 }
 
-const authRateLimiter = createRateLimiter('auth', 20, 60 * 1000); // 20 attempts per minute
-const apiRateLimiter = createRateLimiter('api', 120, 60 * 1000); // 120 requests per minute
-const syncRateLimiter = createRateLimiter('sync', 40, 60 * 1000); // 40 syncs per minute
+// All externally reachable API buckets use Redis in production so limits are shared
+// across replicas. The process-local limiter is development/test fallback only.
+const authRateLimiter = createDistributedRateLimiter('auth', 20, 60 * 1000);
+const apiRateLimiter = createDistributedRateLimiter('api', 120, 60 * 1000);
+const syncRateLimiter = createDistributedRateLimiter('sync', 40, 60 * 1000);
 
 function createDistributedRateLimiter(bucketName: string, maxRequests: number, windowMs: number) {
   const developmentFallback = createRateLimiter(`${bucketName}_fallback`, maxRequests, windowMs);
@@ -346,7 +348,9 @@ function createDistributedRateLimiter(bucketName: string, maxRequests: number, w
     try {
       const ip = req.ip || req.socket.remoteAddress || 'unknown';
       const windowId = Math.floor(Date.now() / windowMs);
-      const key = `restopass:rate:${bucketName}:${ip}:${windowId}`;
+      // Hash the client address so Redis keys do not retain raw IP addresses.
+      const ipKey = crypto.createHash('sha256').update(ip).digest('hex');
+      const key = `restopass:rate:${bucketName}:${ipKey}:${windowId}`;
       const count = Number(await redis.eval(
         "local n = redis.call('INCR', KEYS[1]); if n == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]); end; return n",
         1,
