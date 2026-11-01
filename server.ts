@@ -2318,6 +2318,22 @@ async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
   let viteLoaded = false;
 
+  // Explicit bootstrap credentials are required until role-based administrator
+  // accounts are fully migrated to persistent credential records.
+  if (isProduction) {
+    const requiredCredentials = [
+      ['RESTOPASS_SUPERADMIN_PASSWORD', process.env.RESTOPASS_SUPERADMIN_PASSWORD],
+      ['RESTOPASS_BOSS_PASSWORD', process.env.RESTOPASS_BOSS_PASSWORD || process.env.BOSS_PASSWORD],
+      ['RESTOPASS_STAFF_DEFAULT_PIN', process.env.RESTOPASS_STAFF_DEFAULT_PIN],
+    ] as const;
+    for (const [name, value] of requiredCredentials) {
+      const minimumLength = name === 'RESTOPASS_STAFF_DEFAULT_PIN' ? 8 : 16;
+      if (!value || value.length < minimumLength) {
+        throw new Error(`[FATAL] ${name} must be configured with at least ${minimumLength} characters in production.`);
+      }
+    }
+  }
+
   // Cloud Relational Database Initialization
   if (isProduction && !isRedisConfigured()) {
     throw new Error('[FATAL] REDIS_URL is required in production for distributed QR replay protection.');
