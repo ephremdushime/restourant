@@ -299,6 +299,14 @@ function createRateLimiter(bucketName: string, maxRequests: number, windowMs: nu
   return (req: Request, res: Response, next: NextFunction) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
     const now = Date.now();
+    if (store!.size > 10000) {
+      for (const [key, value] of store!.entries()) if (now > value.resetTime) store!.delete(key);
+      while (store!.size > 10000) {
+        const oldestKey = store!.keys().next().value;
+        if (oldestKey === undefined) break;
+        store!.delete(oldestKey);
+      }
+    }
     let record = store!.get(ip);
 
     if (!record || now > record.resetTime) {
@@ -599,6 +607,11 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
       return res.status(401).json({ success: false, error: 'Invalid Member No or PIN' });
     }
 
+    if (!cust.pinHash.startsWith('scrypt$')) {
+      cust.pinHash = computeServerCustomerPinHash(pin || '');
+      void queueDbSave(serverDbState);
+    }
+
     const targetCust = cust;
 
     const token = createSessionToken({
@@ -652,22 +665,32 @@ app.post('/api/auth/logout', (req, res) => {
 // Customer Non-SMS Authentication, Activation & Recovery Endpoints (Section 4)
 // ----------------------------------------------------
 
-function computeServerCustomerPinHash(pin: string, customerId: string, memberNo: string): string {
-  const salt = `RESTOPASS_CUST_SALT:${customerId}:${memberNo}`;
-  const saltedPayload = `RESTOPASS_SALTED_PIN_V1:${salt}:${pin.trim()}`;
-  return crypto.createHash('sha256').update(saltedPayload).digest('hex');
+function computeServerCustomerPinHash(pin: string): string {
+  const salt = crypto.randomBytes(16);
+  const derived = crypto.scryptSync(pin.trim(), salt, 32, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+  return `scrypt$16384$8$1$${salt.toString('base64url')}$${derived.toString('base64url')}`;
 }
 
 function verifyServerCustomerPin(enteredPin: string, customer: any): boolean {
-  if (!enteredPin || !customer) return false;
+  if (!enteredPin || !customer || typeof customer.pinHash !== 'string' || !customer.pinHash) return false;
   const cleanEntered = enteredPin.trim();
-  const expected = (customer.pinHash || '1234').trim();
-  if (timingSafeCompare(cleanEntered, expected)) return true;
-  const computedHash = computeServerCustomerPinHash(cleanEntered, customer.id, customer.memberNo);
-  if (timingSafeCompare(computedHash, expected)) return true;
+  const expected = customer.pinHash.trim();
+  if (expected.startsWith('scrypt$')) {
+    try {
+      const parts = expected.split('$');
+      if (parts.length !== 6 || parts[1] !== '16384' || parts[2] !== '8' || parts[3] !== '1') return false;
+      const salt = Buffer.from(parts[4], 'base64url');
+      const expectedHash = Buffer.from(parts[5], 'base64url');
+      if (salt.length !== 16 || expectedHash.length !== 32) return false;
+      const actualHash = crypto.scryptSync(cleanEntered, salt, 32, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+      return crypto.timingSafeEqual(actualHash, expectedHash);
+    } catch { return false; }
+  }
+  const legacySalt = `RESTOPASS_CUST_SALT:${customer.id}:${customer.memberNo}`;
+  const legacyPayload = `RESTOPASS_SALTED_PIN_V1:${legacySalt}:${cleanEntered}`;
+  const legacyHash = crypto.createHash('sha256').update(legacyPayload).digest('hex');
   const plainHash = crypto.createHash('sha256').update(cleanEntered).digest('hex');
-  if (timingSafeCompare(plainHash, expected)) return true;
-  return false;
+  return timingSafeCompare(cleanEntered, expected) || timingSafeCompare(legacyHash, expected) || timingSafeCompare(plainHash, expected);
 }
 
 // POST /api/customer/auth/login: Authenticate phone number + 6+ digit PIN (Rate-limited, lockout, generic error)
@@ -730,6 +753,7 @@ app.post('/api/customer/auth/login', authRateLimiter, (req, res) => {
   }
 
   // Login success
+  if (!cust.pinHash.startsWith('scrypt$')) cust.pinHash = computeServerCustomerPinHash(cleanPin);
   cust.failedLoginAttempts = 0;
   cust.lockedUntil = null;
   cust.lastLoginAt = new Date().toISOString();
@@ -883,7 +907,7 @@ app.post('/api/customer/activation/complete', authRateLimiter, (req, res) => {
     return res.status(400).json({ success: false, error: 'Invalid, expired, or already used activation code.' });
   }
 
-  const pinHash = computeServerCustomerPinHash(cleanPin, cust.id, cust.memberNo);
+  const pinHash = computeServerCustomerPinHash(cleanPin);
   cust.pinHash = pinHash;
   cust.hasCustomPin = true;
   cust.pinSetAt = new Date().toISOString();
@@ -998,7 +1022,7 @@ app.post('/api/customer/recovery/complete', authRateLimiter, (req, res) => {
   const cust = customers.find((c: any) => c.id === recReq.customerId);
   if (!cust) return res.status(404).json({ success: false, error: 'Customer not found' });
 
-  const pinHash = computeServerCustomerPinHash(cleanPin, cust.id, cust.memberNo);
+  const pinHash = computeServerCustomerPinHash(cleanPin);
   cust.pinHash = pinHash;
   cust.hasCustomPin = true;
   cust.pinSetAt = new Date().toISOString();
@@ -1697,100 +1721,8 @@ app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['cu
 });
 
 // POST /api/payments/mobile-money/callback: Webhook callback from Mobile Money provider with Idempotency
-app.post('/api/payments/mobile-money/callback', apiRateLimiter, async (req, res) => {
-  ensureServerDbDefaults(serverDbState);
-  const { internalReference, providerTransactionId, amountRwf, currency, status } = req.body;
-
-  if (!internalReference) {
-    return res.status(400).json({ success: false, error: 'internalReference is required' });
-  }
-
-  const payment = (serverDbState.studentSubscriptionPayments || []).find(
-    (p: any) => p.internalReference === internalReference
-  );
-  if (!payment) {
-    return res.status(404).json({ success: false, error: 'Payment record not found' });
-  }
-
-  // Idempotency: Duplicate callbacks must not re-activate or extend access
-  if (payment.status === 'verified') {
-    const sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.id === payment.subscriptionId);
-    return res.json({ success: true, message: 'Payment already processed (idempotent)', subscription: sub });
-  }
-
-  // Verify amount: Strictly 500 RWF
-  if (typeof amountRwf === 'number' && amountRwf !== 500) {
-    payment.status = 'failed';
-    payment.failureReason = `Amount mismatch: Expected 500 RWF, received ${amountRwf}`;
-    await queueDbSave(serverDbState);
-    return res.status(400).json({ success: false, error: 'Payment amount mismatch. Expected exactly 500 RWF.' });
-  }
-
-  if (currency && currency !== 'RWF') {
-    payment.status = 'failed';
-    payment.failureReason = `Currency mismatch: Expected RWF, received ${currency}`;
-    await queueDbSave(serverDbState);
-    return res.status(400).json({ success: false, error: 'Currency mismatch. Expected RWF.' });
-  }
-
-  if (status === 'failed') {
-    payment.status = 'failed';
-    payment.failureReason = req.body.failureReason || 'Customer declined or insufficient funds';
-    await queueDbSave(serverDbState);
-    return res.json({ success: true, message: 'Marked payment as failed' });
-  }
-
-  const nowMs = Date.now();
-  const periodEndMs = nowMs + 30 * 24 * 3600 * 1000;
-  const graceDays = serverDbState.studentSubscriptionSettings?.graceDays || 3;
-  const graceEndMs = periodEndMs + graceDays * 24 * 3600 * 1000;
-
-  payment.status = 'verified';
-  payment.verifiedAt = new Date(nowMs).toISOString();
-  payment.providerTransactionId = providerTransactionId || `MPAY_${Date.now()}`;
-
-  let sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.id === payment.subscriptionId);
-  if (!sub) {
-    sub = {
-      id: payment.subscriptionId,
-      customerId: payment.customerId,
-      memberNo: payment.memberNo,
-      restaurantCode: payment.restaurantCode,
-      status: 'active',
-      planName: 'Student Digital Pass',
-      priceRwf: 500,
-      currency: 'RWF',
-      currentPeriodStart: new Date(nowMs).toISOString(),
-      currentPeriodEnd: new Date(periodEndMs).toISOString(),
-      gracePeriodEnd: new Date(graceEndMs).toISOString(),
-      cancelAtPeriodEnd: false,
-      paymentMethod: payment.provider,
-      lastPaymentRef: payment.internalReference,
-      createdAt: new Date(nowMs).toISOString(),
-      updatedAt: new Date(nowMs).toISOString(),
-    };
-    serverDbState.customerSubscriptions.push(sub);
-  } else {
-    sub.status = 'active';
-    sub.priceRwf = 500;
-    sub.currency = 'RWF';
-    sub.currentPeriodStart = new Date(nowMs).toISOString();
-    sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
-    sub.gracePeriodEnd = new Date(graceEndMs).toISOString();
-    sub.cancelAtPeriodEnd = false;
-    sub.paymentMethod = payment.provider;
-    sub.lastPaymentRef = payment.internalReference;
-    sub.updatedAt = new Date(nowMs).toISOString();
-  }
-
-  await queueDbSave(serverDbState);
-
-  return res.json({
-    success: true,
-    status: 'active',
-    subscription: sub,
-    message: 'Mobile Money payment verified and student subscription activated successfully.',
-  });
+app.post('/api/payments/mobile-money/callback', apiRateLimiter, (_req, res) => {
+  return res.status(503).json({ success: false, error: 'Payment callback verification is not configured. No subscription was activated.' });
 });
 
 // POST /api/customer/subscription/cancel: Cancels future subscription renewal
@@ -2358,24 +2290,30 @@ async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
   let viteLoaded = false;
 
-  // Cloud Relational Database Initialization
+  if (isProduction) {
+    const requiredCredentials = [
+      ['RESTOPASS_SUPERADMIN_PASSWORD', process.env.RESTOPASS_SUPERADMIN_PASSWORD],
+      ['RESTOPASS_BOSS_PASSWORD', process.env.RESTOPASS_BOSS_PASSWORD || process.env.BOSS_PASSWORD],
+      ['RESTOPASS_STAFF_DEFAULT_PIN', process.env.RESTOPASS_STAFF_DEFAULT_PIN],
+    ] as const;
+    for (const [name, value] of requiredCredentials) {
+      const minimumLength = name === 'RESTOPASS_STAFF_DEFAULT_PIN' ? 8 : 16;
+      if (!value || value.length < minimumLength) throw new Error(`[FATAL] ${name} must be configured with at least ${minimumLength} characters in production.`);
+    }
+    if (!isRedisConfigured()) throw new Error('[FATAL] REDIS_URL is required in production for distributed QR replay protection.');
+    if (!isPostgresConfigured()) throw new Error('[FATAL] DATABASE_URL is required in production. Refusing to start with local JSON persistence.');
+  }
   if (isPostgresConfigured()) {
     console.log('[Server Authority] PostgreSQL detected. Connecting and initializing schema...');
-    try {
-      const initialized = await initPostgres(serverDbState);
-      if (initialized) {
-        const pgState = await loadStateFromPostgres();
-        if (pgState && isValidAppState(pgState)) {
-          serverDbState = pgState;
-          ensureServerDbDefaults(serverDbState);
-          console.log('[Server Authority] Authoritative state loaded from PostgreSQL.');
-        }
-      }
-    } catch (pgBootErr) {
-      console.error('[Server Authority] PostgreSQL startup initialization failed, falling back to db.json:', pgBootErr);
-    }
+    const initialized = await initPostgres(serverDbState);
+    if (!initialized) throw new Error('[FATAL] PostgreSQL initialization failed. Production startup is aborted; no JSON fallback is permitted.');
+    const pgState = await loadStateFromPostgres();
+    if (!pgState) throw new Error('[FATAL] Could not load authoritative state from PostgreSQL. Startup is aborted.');
+    serverDbState = pgState;
+    ensureServerDbDefaults(serverDbState);
+    console.log('[Server Authority] Authoritative state loaded from PostgreSQL.');
   } else {
-    console.log('[Server Authority] Running in standalone local storage mode (Offline Reception Laptop compatible).');
+    console.log('[Server Authority] Running in local storage mode (development only).');
   }
 
   if (!isProduction) {
