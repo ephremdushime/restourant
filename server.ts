@@ -11,7 +11,7 @@ import {
   getPostgresPool,
 } from './src/services/db/postgresAdapter';
 import { ensureRedisReady, getRedisClient, isRedisConfigured } from './src/services/cache/redisClient';
-import { uploadBase64Photo } from './src/services/storage/objectStorage';
+import { uploadBase64Photo, downloadPatronPhoto } from './src/services/storage/objectStorage';
 
 const app = express();
 if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
@@ -1106,11 +1106,52 @@ app.post('/api/customer/recovery/complete', authRateLimiter, (req, res) => {
 });
 
 // ----------------------------------------------------
-// S3 / Cloudflare R2 / DigitalOcean Spaces / Local Photo Upload
+// Private patron photo access and uploads
 // ----------------------------------------------------
 
-// POST /api/upload/photo: Upload patron photos to cloud object storage (or local uploads/)
-app.post('/api/upload/photo', apiRateLimiter, requireAuth(), async (req, res) => {
+function normalizePrivatePhotoUrl(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 512) return '';
+  try {
+    const parsed = new URL(value, 'https://restopass.invalid');
+    const key = parsed.searchParams.get('key') || '';
+    if (parsed.pathname !== '/api/customer/photo' || !/^patron-photos\/[A-Za-z0-9._-]{1,180}$/.test(key)) return '';
+    return `/api/customer/photo?key=${encodeURIComponent(key)}`;
+  } catch {
+    return '';
+  }
+}
+
+// Photos are private objects; access is granted only through an authenticated,
+// tenant-scoped route after confirming the object is attached to a customer record.
+app.get('/api/customer/photo', apiRateLimiter, requireAuth(), async (req, res) => {
+  const key = typeof req.query.key === 'string' ? req.query.key : '';
+  if (!/^patron-photos\/[A-Za-z0-9._-]{1,180}$/.test(key)) {
+    return res.status(400).json({ success: false, error: 'Invalid photo reference.' });
+  }
+  const privateUrl = `/api/customer/photo?key=${encodeURIComponent(key)}`;
+  const customer = (serverDbState?.customers || []).find((item: any) => item.photoUrl === privateUrl);
+  if (!customer) return res.status(404).json({ success: false, error: 'Photo not found.' });
+  const user = req.user!;
+  if (user.role === 'customer' && customer.id !== user.userId) {
+    return res.status(403).json({ success: false, error: 'You are not authorized to view this photo.' });
+  }
+  if (user.role !== 'super_admin' && customer.restaurantCode !== user.restaurantCode) {
+    return res.status(403).json({ success: false, error: 'Photo belongs to another restaurant.' });
+  }
+  try {
+    const photo = await downloadPatronPhoto(key);
+    res.setHeader('Content-Type', photo.contentType);
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.status(200).send(photo.buffer);
+  } catch (error) {
+    console.error('[Private Photo Retrieval] Failed:', error);
+    return res.status(404).json({ success: false, error: 'Photo is unavailable.' });
+  }
+});
+
+// POST /api/upload/photo: Upload patron photos to private object storage.
+app.post('/api/upload/photo', apiRateLimiter, requireAuth(['stand_staff', 'restaurant_admin', 'super_admin']), async (req, res) => {
   const { photoBase64, filenameHint } = req.body;
   if (!photoBase64 || typeof photoBase64 !== 'string') {
     return res.status(400).json({
@@ -1123,7 +1164,7 @@ app.post('/api/upload/photo', apiRateLimiter, requireAuth(), async (req, res) =>
     const uploadResult = await uploadBase64Photo(photoBase64, filenameHint || 'patron');
     return res.json({
       success: true,
-      url: uploadResult.url,
+      url: `/api/customer/photo?key=${encodeURIComponent(uploadResult.key)}`,
       key: uploadResult.key,
       storageType: uploadResult.storageType,
       sizeBytes: uploadResult.sizeBytes,
@@ -1713,7 +1754,7 @@ app.post('/api/approvals/registration', apiRateLimiter, requireAuth(['stand_staf
     const customer = {
       id: customerId, memberNo, restaurantCode: user.restaurantCode, branchId: b.branchId || station.branchId,
       branchName: b.branchName || station.branchName, name, phone,
-      photoUrl: typeof b.photoUrl === 'string' ? b.photoUrl.slice(0, 2000000) : '',
+      photoUrl: normalizePrivatePhotoUrl(b.photoUrl),
       idType, idHash, idNumberMasked: idNumber.length > 5 ? idNumber.slice(0, 5) + '****' : '****',
       isStudent: Boolean(b.isStudent), studentProfile: b.isStudent && b.studentProfile && typeof b.studentProfile === 'object' ? b.studentProfile : undefined,
       cardVersion: 1, keyVersion: 1, cardStatus: 'active', pinHash: null, hasCustomPin: false,
