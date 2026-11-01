@@ -15,6 +15,8 @@ describe('Cloud-authoritative scanner regression guards', () => {
   test('production meal redemption is a role-protected server endpoint', () => {
     assert.match(server, /app\.post\(\s*'\/api\/scans\/consume'/);
     assert.match(server, /requireAuth\(\['stand_staff', 'restaurant_admin'\]\)/);
+    assert.match(server, /createDistributedRateLimiter\('scan', 1200, 60 \* 1000\)/);
+    assert.match(server, /redis\.eval\(/);
     assert.match(server, /SELECT id, restaurant_code, member_no, card_status, card_version, key_version, data FROM customers[^\n]*FOR UPDATE/);
   });
 
