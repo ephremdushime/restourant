@@ -72,6 +72,36 @@ describe('Cloud-authoritative scanner regression guards', () => {
     assert.match(store, /if \(this\.authToken && !this\.isDemoModeActive\(\)\) return false/);
   });
 
+  test('provisional registration is server-authoritative and transactionally creates customer plus approval', () => {
+    assert.match(server, /app\.post\('\/api\/approvals\/registration'/);
+    assert.match(server, /requireAuth\(\['stand_staff', 'restaurant_admin'\]\)/);
+    assert.match(server, /INSERT INTO customers[\s\S]*?INSERT INTO pending_approvals/);
+    assert.match(server, /pg_advisory_xact_lock\(hashtext\(\$1\)\)/);
+    assert.match(server, /PROVISIONAL_CUSTOMER_REGISTERED/);
+    assert.match(store, /registerProvisionalCustomerAuthoritative/);
+    assert.match(readRepoFile('src/components/restaurant/RestaurantAdminView.tsx'), /registerProvisionalCustomerAuthoritative/);
+  });
+
+  test('boss approval, high-value independent co-sign and rejection are transactional', () => {
+    assert.match(server, /app\.post\('\/api\/approvals\/:approvalId\/approve'/);
+    assert.match(server, /app\.post\('\/api\/approvals\/:approvalId\/cosign'/);
+    assert.match(server, /app\.post\('\/api\/approvals\/:approvalId\/reject'/);
+    assert.match(server, /requireAuth\(\['restaurant_admin'\]\)/);
+    assert.match(server, /requireAuth\(\['super_admin'\]\)/);
+    assert.match(server, /bossApprovedByUserId === user\.userId/);
+    assert.match(server, /Number\(approval\.platesRequested\) > 120/);
+    assert.match(server, /commitPendingApproval/);
+    assert.match(server, /approval:\$\{approval\.id\}:purchase/);
+    assert.match(server, /approval:\$\{approval\.id\}:grace/);
+    assert.match(server, /INSERT INTO payments/);
+    assert.match(server, /APPROVAL_ENTITLEMENT_COMMITTED/);
+    assert.match(store, /approvePendingRequestAuthoritative/);
+    assert.match(store, /coSignPendingRequestAuthoritative/);
+    assert.match(store, /rejectPendingRequestAuthoritative/);
+    assert.match(readRepoFile('src/components/restaurant/BossApprovalsManager.tsx'), /approvePendingRequestAuthoritative/);
+    assert.match(readRepoFile('src/components/superadmin/SuperAdminView.tsx'), /coSignPendingRequestAuthoritative/);
+  });
+
   test('customer subscription payments remain disabled until provider onboarding is complete', () => {
     assert.match(server, /PAYMENT_PROVIDER_NOT_CONFIGURED/);
     assert.match(server, /Mobile Money checkout is not available yet/);
