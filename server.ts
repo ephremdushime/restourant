@@ -332,6 +332,7 @@ function createRateLimiter(bucketName: string, maxRequests: number, windowMs: nu
 const authRateLimiter = createRateLimiter('auth', 20, 60 * 1000); // 20 attempts per minute
 const apiRateLimiter = createRateLimiter('api', 120, 60 * 1000); // 120 requests per minute
 const syncRateLimiter = createRateLimiter('sync', 40, 60 * 1000); // 40 syncs per minute
+const scanRateLimiter = createRateLimiter('scan', 1200, 60 * 1000); // 20 scans/second per public IP for shared campus networks
 
 // Request body parser with scoped limits (supports patron portrait uploads)
 app.use(express.json({ limit: '10mb' }));
@@ -1297,7 +1298,7 @@ app.post(
 // The database transaction is the authority; the browser must not deduct balances optimistically.
 app.post(
   '/api/scans/consume',
-  apiRateLimiter,
+  scanRateLimiter,
   requireAuth(['stand_staff', 'restaurant_admin']),
   async (req, res) => {
     const user = req.user!;
