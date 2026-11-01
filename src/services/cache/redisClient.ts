@@ -3,7 +3,7 @@
  * 
  * Provides distributed, atomic token replay protection across horizontally scaled cloud instances.
  * Uses atomic SETNX with a 30-45s TTL to prevent duplicate scans of rotating QR tokens.
- * Falls back to an in-memory TTL map when REDIS_URL is not configured (offline laptop mode).
+ * In production, Redis failure is fail-closed: replay protection must never silently become process-local.
  */
 
 import Redis from 'ioredis';
@@ -40,10 +40,10 @@ export function getRedisClient(): Redis | null {
       });
 
       redisInstance.connect().catch((err) => {
-        console.warn('[Redis Replay Guard] Initial connection failed, falling back to in-memory mode:', err.message);
+        console.error('[Redis Replay Guard] Initial connection failed; replay-protected actions will be rejected:', err.message);
       });
     } catch (err: any) {
-      console.warn('[Redis Replay Guard] Failed to initialize Redis client:', err.message);
+      console.error('[Redis Replay Guard] Failed to initialize Redis client:', err.message);
       redisInstance = null;
     }
   }
@@ -70,39 +70,23 @@ export async function recordTokenScan(
   tokenKey: string,
   ttlSeconds = 45
 ): Promise<{ allowed: boolean; reason?: string }> {
+  if (!Number.isInteger(ttlSeconds) || ttlSeconds < 1 || ttlSeconds > 600) {
+    return { allowed: false, reason: 'INVALID_TTL' };
+  }
   const client = getRedisClient();
-
-  if (client && client.status === 'ready') {
-    try {
-      const redisKey = `qr_pass:${tokenKey}`;
-      // SET key value EX seconds NX (atomic write if Not eXists)
-      const res = await client.set(redisKey, '1', 'EX', ttlSeconds, 'NX');
-      if (res === 'OK') {
-        return { allowed: true };
-      }
-      return {
-        allowed: false,
-        reason: 'REPLAY_DETECTED',
-      };
-    } catch (err: any) {
-      console.warn('[Redis Replay Guard] Redis query failed, using memory fallback:', err.message);
-    }
+  if (!client || client.status !== 'ready') {
+    return { allowed: false, reason: 'REPLAY_GUARD_UNAVAILABLE' };
   }
-
-  // In-memory fallback
-  const now = Date.now();
-  pruneMemoryCache(now);
-
-  const existingExpire = memoryReplayCache.get(tokenKey);
-  if (existingExpire && now < existingExpire) {
-    return {
-      allowed: false,
-      reason: 'REPLAY_DETECTED',
-    };
+  try {
+    const redisKey = `qr_pass:${tokenKey}`;
+    const res = await client.set(redisKey, '1', 'EX', ttlSeconds, 'NX');
+    return res === 'OK'
+      ? { allowed: true }
+      : { allowed: false, reason: 'REPLAY_DETECTED' };
+  } catch (err: any) {
+    console.error('[Redis Replay Guard] Atomic SET NX failed:', err.message);
+    return { allowed: false, reason: 'REPLAY_GUARD_UNAVAILABLE' };
   }
-
-  memoryReplayCache.set(tokenKey, now + ttlSeconds * 1000);
-  return { allowed: true };
 }
 
 /**
@@ -110,18 +94,14 @@ export async function recordTokenScan(
  */
 export async function isTokenUsed(tokenKey: string): Promise<boolean> {
   const client = getRedisClient();
-  if (client && client.status === 'ready') {
-    try {
-      const exists = await client.exists(`qr_pass:${tokenKey}`);
-      return exists === 1;
-    } catch {
-      // Fall through to memory check
-    }
+  if (!client || client.status !== 'ready') {
+    throw new Error('REPLAY_GUARD_UNAVAILABLE');
   }
-
-  const now = Date.now();
-  const exp = memoryReplayCache.get(tokenKey);
-  return Boolean(exp && now < exp);
+  try {
+    return (await client.exists(`qr_pass:${tokenKey}`)) === 1;
+  } catch {
+    throw new Error('REPLAY_GUARD_UNAVAILABLE');
+  }
 }
 
 /**
