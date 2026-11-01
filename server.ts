@@ -1828,9 +1828,11 @@ app.post('/api/approvals/topup', apiRateLimiter, requireAuth(['stand_staff', 're
       gracePlatesAllowed: 3, gracePlatesConsumed: 0, createdAt: now, status: 'pending',
       requiresSuperAdminCoSign: plates > 120, coSignStatus: plates > 120 ? 'pending_super_admin' : 'not_required'
     };
-    const pendingGrace = (serverDbState?.pendingApprovals || [])
-      .filter((a: any) => a.customerId === customerId && a.status === 'pending')
-      .reduce((sum: number, a: any) => sum + Number(a.gracePlatesConsumed || 0), 0);
+    const pendingRows = await client.query(
+      "SELECT data FROM pending_approvals WHERE customer_id=$1 AND status='pending' ORDER BY created_at ASC FOR UPDATE",
+      [customerId]
+    );
+    const pendingGrace = pendingRows.rows.reduce((sum: number, row: any) => sum + Number(row.data?.gracePlatesConsumed || 0), 0);
     customer.provisionalStatus = customer.provisionalStatus || 'approved';
     customer.gracePlatesConsumed = Math.max(Number(customer.gracePlatesConsumed || 0), pendingGrace);
     customer.gracePlatesRemaining = Math.max(0, 3 - customer.gracePlatesConsumed);
