@@ -2282,17 +2282,18 @@ export class RestoStore {
     }
     const stationId = this.state.currentStationId;
     let retryKey = `${stationId}:${payload}`;
+    let storageKey: string | null = null;
     try {
       if (typeof crypto !== 'undefined' && crypto.subtle) {
         const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(retryKey));
         retryKey = Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+        storageKey = `restopass_pending_scan_${stationId}_${retryKey}`;
       }
     } catch {
       // The in-memory key below remains a safe fallback for this page lifetime.
     }
-    const storageKey = `restopass_pending_scan_${stationId}_${retryKey}`;
     let idempotencyKey = this.pendingAuthoritativeScanKeys.get(retryKey);
-    if (!idempotencyKey && typeof localStorage !== 'undefined') {
+    if (!idempotencyKey && storageKey && typeof localStorage !== 'undefined') {
       try { idempotencyKey = localStorage.getItem(storageKey) || undefined; } catch {}
     }
     if (!idempotencyKey) {
@@ -2306,7 +2307,7 @@ export class RestoStore {
         this.pendingAuthoritativeScanKeys.delete(oldestKey);
       }
       this.pendingAuthoritativeScanKeys.set(retryKey, idempotencyKey);
-      if (typeof localStorage !== 'undefined') {
+      if (storageKey && typeof localStorage !== 'undefined') {
         try { localStorage.setItem(storageKey, idempotencyKey); } catch {}
       }
     }
@@ -2327,7 +2328,7 @@ export class RestoStore {
       const event = result.scanEvent as ScanEvent;
       const ledgerEntry = result.ledgerEntry as LedgerEntry | null;
       this.pendingAuthoritativeScanKeys.delete(retryKey);
-      if (typeof localStorage !== 'undefined') { try { localStorage.removeItem(storageKey); } catch {} }
+      if (storageKey && typeof localStorage !== 'undefined') { try { localStorage.removeItem(storageKey); } catch {} }
       if (ledgerEntry) this.appendLedgerEntry(ledgerEntry);
       if (!this.state.scanEvents.some((item) => item.id === event.id)) {
         this.state.scanEvents.unshift(event);
