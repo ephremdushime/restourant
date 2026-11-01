@@ -185,6 +185,16 @@ CREATE TABLE IF NOT EXISTS used_tokens (
     expires_at TIMESTAMPTZ NOT NULL
 );
 
+-- 18. Atomic scan request idempotency: stores the committed response for safe retries.
+CREATE TABLE IF NOT EXISTS scan_requests (
+    idempotency_key VARCHAR(128) PRIMARY KEY,
+    customer_id VARCHAR(64) NOT NULL,
+    restaurant_code VARCHAR(32) NOT NULL,
+    response JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_scan_requests_created ON scan_requests (created_at);
+
 -- Production Performance Indexes
 CREATE INDEX IF NOT EXISTS idx_ledger_customer_time ON ledger_entries (customer_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_ledger_resto ON ledger_entries (restaurant_code);
