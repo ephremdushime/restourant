@@ -86,7 +86,14 @@ export async function uploadPatronPhoto(
     'image/png': 'png',
     'image/webp': 'webp',
   };
-  const ext = extMap[mimeType] || 'jpg';
+  if (!Object.prototype.hasOwnProperty.call(extMap, mimeType) || buffer.length < 12 || buffer.length > 5 * 1024 * 1024) {
+    throw new Error('Unsupported photo format or size');
+  }
+  const isJpeg = mimeType === 'image/jpeg' && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  const isPng = mimeType === 'image/png' && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const isWebp = mimeType === 'image/webp' && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP';
+  if (!isJpeg && !isPng && !isWebp) throw new Error('Photo content does not match its declared image format');
+  const ext = extMap[mimeType];
   const safeFilenameHint = String(filenameHint || 'patron').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) || 'patron';
   const randomSuffix = crypto.randomBytes(8).toString('hex');
   const filename = `${safeFilenameHint}-${Date.now()}-${randomSuffix}.${ext}`;
