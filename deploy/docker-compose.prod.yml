@@ -107,6 +107,29 @@ services:
     networks:
       - backend
 
+  backup:
+    build:
+      context: ..
+      dockerfile: deploy/backup.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB:-restopass}
+      PGUSER: ${POSTGRES_USER:-restopass}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      RESTOPASS_BACKUP_ENCRYPTION_KEY: ${RESTOPASS_BACKUP_ENCRYPTION_KEY:?RESTOPASS_BACKUP_ENCRYPTION_KEY is required}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - ${RESTOPASS_BACKUP_DIR:-./backups}:/backups
+      - app_uploads:/uploads:ro
+    networks:
+      - backend
+
   caddy:
     image: caddy:2-alpine
     container_name: restopass-caddy
