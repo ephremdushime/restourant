@@ -1700,7 +1700,7 @@ app.post('/api/approvals/registration', apiRateLimiter, requireAuth(['stand_staf
       registeredByStaffId: user.userId, registeredByStaffName: user.username, stationId,
       stationName: station.name || station.stationName || 'Reception POS Desk',
       gracePlatesAllowed: 3, gracePlatesConsumed: 0, createdAt: now, status: 'pending',
-      requiresSuperAdminCoSign: plates > 120, coSignStatus: plates > 120 ? 'pending_super_admin' : 'not_required'
+      requiresSuperAdminCoSign: plates > 120, coSignStatus: plates > 120 ? 'awaiting_boss' : 'not_required'
     };
     await client.query(
       'INSERT INTO customers (id,restaurant_code,member_no,name,phone,card_status,card_version,key_version,is_student,pin_hash,photo_url,data) VALUES ($1,$2,$3,$4,$5,$6,1,1,$7,NULL,$8,$9)',
@@ -1835,7 +1835,7 @@ app.post('/api/approvals/topup', apiRateLimiter, requireAuth(['stand_staff', 're
       paymentMethod: b.paymentMethod, paymentReference: reference, registeredByStaffId: user.userId,
       registeredByStaffName: user.username, stationId, stationName: station.name || 'Reception POS Desk',
       gracePlatesAllowed: 3, gracePlatesConsumed: 0, createdAt: now, status: 'pending',
-      requiresSuperAdminCoSign: plates > 120, coSignStatus: plates > 120 ? 'pending_super_admin' : 'not_required'
+      requiresSuperAdminCoSign: plates > 120, coSignStatus: plates > 120 ? 'awaiting_boss' : 'not_required'
     };
     const pendingRows = await client.query(
       "SELECT data FROM pending_approvals WHERE customer_id=$1 AND status='pending' ORDER BY created_at ASC FOR UPDATE",
