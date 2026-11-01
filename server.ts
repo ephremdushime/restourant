@@ -1652,7 +1652,7 @@ app.post('/api/approvals/registration', apiRateLimiter, requireAuth(['stand_staf
     await client.query('BEGIN');
     const referenceLock = 'approval-ref:' + user.restaurantCode + ':' + crypto.createHash('sha256').update(reference.toUpperCase()).digest('hex');
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [referenceLock]);
-    const duplicateRef = await client.query("SELECT id FROM pending_approvals WHERE restaurant_code=$1 AND data->>'paymentReference'=$2 LIMIT 1", [user.restaurantCode, reference]);
+    const duplicateRef = await client.query("SELECT id FROM pending_approvals WHERE restaurant_code=$1 AND data->>'paymentReference'=$2 UNION ALL SELECT id FROM payments WHERE restaurant_code=$1 AND data->>'reference'=$2 LIMIT 1", [user.restaurantCode, reference]);
     if (duplicateRef.rows[0]) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Payment reference has already been submitted.' }); }
     const studentReg = typeof b.studentProfile?.registrationNumber === 'string' ? b.studentProfile.registrationNumber.trim() : '';
     const identityLocks = [
@@ -1815,7 +1815,7 @@ app.post('/api/approvals/topup', apiRateLimiter, requireAuth(['stand_staff', 're
     await client.query('BEGIN');
     const lockKey = 'approval-ref:' + user.restaurantCode + ':' + crypto.createHash('sha256').update(reference.toUpperCase()).digest('hex');
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockKey]);
-    const duplicateRef = await client.query("SELECT id FROM pending_approvals WHERE restaurant_code=$1 AND data->>'paymentReference'=$2 LIMIT 1", [user.restaurantCode, reference]);
+    const duplicateRef = await client.query("SELECT id FROM pending_approvals WHERE restaurant_code=$1 AND data->>'paymentReference'=$2 UNION ALL SELECT id FROM payments WHERE restaurant_code=$1 AND data->>'reference'=$2 LIMIT 1", [user.restaurantCode, reference]);
     if (duplicateRef.rows[0]) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Payment reference has already been submitted.' }); }
     const cr = await client.query('SELECT data,card_status FROM customers WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [customerId, user.restaurantCode]);
     if (!cr.rows[0] || cr.rows[0].card_status !== 'active') { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Active customer not found in this restaurant.' }); }
