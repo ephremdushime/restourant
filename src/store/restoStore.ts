@@ -3229,6 +3229,7 @@ export class RestoStore {
     batchLabel?: string;
     adminStaffName: string;
   }): Customer[] {
+    if (this.authToken && !this.isDemoModeActive()) return [];
     const created: Customer[] = [];
     const now = new Date(this.getGuardedTime(data.restaurantCode)).toISOString();
     const pkg = data.packageId ? this.state.packages.find((p) => p.id === data.packageId) : undefined;
@@ -3470,6 +3471,7 @@ export class RestoStore {
     adminStaffId: string;
     adminStaffName: string;
   }): void {
+    if (this.authToken && !this.isDemoModeActive()) return;
     const customer = this.state.customers.find((c) => c.id === data.customerId);
     if (!customer) return;
 
@@ -3538,6 +3540,7 @@ export class RestoStore {
    * Reissue Card: Increments cardVersion, instantly invalidating the prior physical card
    */
   public reissueCard(customerId: string, adminStaffName: string): Customer | null {
+    if (this.authToken && !this.isDemoModeActive()) return null;
     const customer = this.state.customers.find((c) => c.id === customerId);
     if (!customer) return null;
 
@@ -3836,6 +3839,9 @@ export class RestoStore {
     reason: string;
     adminStaffName: string;
   }): { success: boolean; error?: string; newBalance?: number } {
+    if (this.authToken && !this.isDemoModeActive()) {
+      return { success: false, error: 'Balance adjustments require a server-authoritative transaction endpoint. No balance was changed.' };
+    }
     const customer = this.state.customers.find((c) => c.id === data.customerId);
     if (!customer) return { success: false, error: 'Member not found' };
 
