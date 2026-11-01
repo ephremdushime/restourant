@@ -35,3 +35,6 @@ jobs:
 
       - name: Dependency vulnerability audit
         run: npm audit --audit-level=high
+
+      - name: Build production Docker image
+        run: docker build --tag restopass-ci .
