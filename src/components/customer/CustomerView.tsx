@@ -435,7 +435,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                 }`}
               >
                 <div className="font-medium">{subCheckoutMessage.text}</div>
-                {subCheckoutMessage.ref && (
+                {subCheckoutMessage.ref && restoStore.isDemoModeActive() && (
                   <button
                     type="button"
                     onClick={() => {
@@ -479,11 +479,11 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                   });
                 }
               }}
-              disabled={subCheckoutLoading || !momoPhone}
+              disabled={subCheckoutLoading || !momoPhone || !restoStore.isDemoModeActive()}
               className="w-full py-3.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-sm flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer disabled:opacity-50"
             >
               <Smartphone className="w-5 h-5" />
-              <span>{subCheckoutLoading ? 'Sending USSD Prompt...' : 'Pay 500 RWF & Unlock Dashboard'}</span>
+              <span>{subCheckoutLoading ? 'Preparing checkout...' : (restoStore.isDemoModeActive() ? 'Simulate 500 RWF Payment' : 'Mobile Money Payments Coming Soon')}</span>
             </button>
           </div>
         </div>
@@ -738,7 +738,13 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                   <Smartphone className="w-5 h-5" />
                 </div>
                 <div>
-                  <div className="text-sm font-bold text-white flex items-center gap-2">
+                            {!restoStore.isDemoModeActive() && (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+              Mobile Money checkout is being prepared. MTN MoMo and Airtel Money will be enabled after provider API registration, credential verification, and secure callback testing. No payment will be requested or recorded yet.
+            </div>
+          )}
+
+<div className="text-sm font-bold text-white flex items-center gap-2">
                     <span>Student Digital Pass (500 RWF/mo)</span>
                     <span
                       className={`text-xs px-2 py-0.5 rounded font-mono font-bold uppercase ${
