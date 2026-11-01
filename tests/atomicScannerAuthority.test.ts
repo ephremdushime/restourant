@@ -20,6 +20,7 @@ describe('Cloud-authoritative scanner regression guards', () => {
 
   test('ledger deduction, scan event and idempotency response share one transaction', () => {
     assert.match(server, /await client\.query\('BEGIN'\)/);
+    assert.match(server, /pg_advisory_xact_lock\(hashtext\(\$1\)\)/);
     assert.match(server, /INSERT INTO ledger_entries/);
     assert.match(server, /INSERT INTO scan_events/);
     assert.match(server, /INSERT INTO scan_requests/);
