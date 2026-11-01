@@ -19,16 +19,16 @@ services:
     container_name: restopass-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-restopass}
-      POSTGRES_USER: ${POSTGRES_USER:-restopass_app}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ChangeThisInProdToStrongPassword32Char!}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-restopass_app} -d ${POSTGRES_DB:-restopass}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:?POSTGRES_USER is required} -d ${POSTGRES_DB:?POSTGRES_DB is required}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -45,13 +45,13 @@ services:
     image: redis:7-alpine
     container_name: restopass-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-ChangeRedisProdPassword32Char!}"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"]
     volumes:
       - redis_data:/data
     ports:
       - "127.0.0.1:6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-ChangeRedisProdPassword32Char!}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -71,18 +71,22 @@ services:
     container_name: restopass-app
     restart: unless-stopped
     ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     environment:
       NODE_ENV: production
+      RESTOPASS_SUPERADMIN_PASSWORD: ${RESTOPASS_SUPERADMIN_PASSWORD:?RESTOPASS_SUPERADMIN_PASSWORD is required}
+      RESTOPASS_BOSS_PASSWORD: ${RESTOPASS_BOSS_PASSWORD:?RESTOPASS_BOSS_PASSWORD is required}
+      RESTOPASS_STAFF_DEFAULT_PIN: ${RESTOPASS_STAFF_DEFAULT_PIN:?RESTOPASS_STAFF_DEFAULT_PIN is required}
       PORT: 3000
       # Relational persistence connection
-      DATABASE_URL: postgres://${POSTGRES_USER:-restopass_app}:${POSTGRES_PASSWORD:-ChangeThisInProdToStrongPassword32Char!}@postgres:5432/${POSTGRES_DB:-restopass}
+      DATABASE_URL: postgres://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
       PGSSLMODE: disable
       # Distributed Redis cache
-      REDIS_URL: redis://:${REDIS_PASSWORD:-ChangeRedisProdPassword32Char!}@redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379
       # Production Secrets (Mandatory >= 32 chars)
-      SESSION_SECRET: ${SESSION_SECRET:-CHANGE_ME_PRODUCTION_SESSION_SECRET_32_CHARS_LONG}
-      RESTOPASS_MASTER_SECRET: ${RESTOPASS_MASTER_SECRET:-CHANGE_ME_PRODUCTION_MASTER_SECRET_32_CHARS_LONG}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+      RESTOPASS_MASTER_SECRET: ${RESTOPASS_MASTER_SECRET:?RESTOPASS_MASTER_SECRET is required}
       # S3 / DigitalOcean Spaces / Cloudflare R2 Object Storage
       S3_BUCKET: ${S3_BUCKET:-}
       S3_REGION: ${S3_REGION:-us-east-1}
@@ -97,8 +101,36 @@ services:
         condition: service_healthy
     volumes:
       - app_uploads:/app/public/uploads
+    networks:
+      - backend
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: restopass-caddy
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is required}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    networks:
+      - backend
+
+networks:
+  backend:
+    driver: bridge
 
 volumes:
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local
   postgres_data:
     driver: local
   redis_data:
