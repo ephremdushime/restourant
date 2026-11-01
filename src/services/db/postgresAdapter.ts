@@ -36,7 +36,7 @@ export function getPostgresPool(): Pool | null {
     if (sslMode === 'disable' || isLocalhost) {
       poolConfig.ssl = false;
     } else {
-      poolConfig.ssl = { rejectUnauthorized: false };
+      poolConfig.ssl = { rejectUnauthorized: true };
     }
 
     pool = new Pool(poolConfig);
