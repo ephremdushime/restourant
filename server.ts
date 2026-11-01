@@ -13,6 +13,8 @@ import { recordTokenScan, isRedisConfigured } from './src/services/cache/redisCl
 import { uploadBase64Photo } from './src/services/storage/objectStorage';
 
 const app = express();
+// Exactly one trusted reverse-proxy hop (Caddy) in the production Compose topology.
+app.set('trust proxy', 1);
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 // Cryptographic secrets for session signing & data integrity
@@ -300,6 +302,19 @@ function createRateLimiter(bucketName: string, maxRequests: number, windowMs: nu
   return (req: Request, res: Response, next: NextFunction) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
     const now = Date.now();
+
+    // Bound memory growth under high-cardinality IP traffic.
+    if (store!.size > 10000) {
+      for (const [key, value] of store!.entries()) {
+        if (now > value.resetTime) store!.delete(key);
+      }
+      while (store!.size > 10000) {
+        const oldestKey = store!.keys().next().value;
+        if (oldestKey === undefined) break;
+        store!.delete(oldestKey);
+      }
+    }
+
     let record = store!.get(ip);
 
     if (!record || now > record.resetTime) {
