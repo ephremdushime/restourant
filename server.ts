@@ -1599,6 +1599,302 @@ app.post(
   }
 );
 
+// Transactional customer registration and approval authority.
+async function writeApprovalAudit(client: any, restaurantCode: string, user: UserSession, action: string, details: any) {
+  await client.query(
+    'INSERT INTO audit_logs (id, restaurant_code, user_id, action, data) VALUES ($1,$2,$3,$4,$5)',
+    ['aud_' + crypto.randomUUID(), restaurantCode, user.userId, action,
+      JSON.stringify({ actorRole: user.role, actorName: user.username, details, timestamp: new Date().toISOString() })]
+  );
+}
+
+function updateApprovalCache(customer: any, approval: any) {
+  if (Array.isArray(serverDbState?.customers)) {
+    const i = serverDbState.customers.findIndex((x: any) => x.id === customer.id);
+    if (i < 0) serverDbState.customers.push(customer); else serverDbState.customers[i] = customer;
+  }
+  if (Array.isArray(serverDbState?.pendingApprovals)) {
+    const i = serverDbState.pendingApprovals.findIndex((x: any) => x.id === approval.id);
+    if (i < 0) serverDbState.pendingApprovals.unshift(approval); else serverDbState.pendingApprovals[i] = approval;
+  }
+}
+
+app.post('/api/approvals/registration', apiRateLimiter, requireAuth(['stand_staff', 'restaurant_admin']), async (req, res) => {
+  const user = req.user!;
+  const b = req.body || {};
+  const name = typeof b.name === 'string' ? b.name.trim() : '';
+  const phone = typeof b.phone === 'string' ? b.phone.trim() : '';
+  const idType = typeof b.idType === 'string' ? b.idType.trim() : 'Student ID';
+  const idNumber = typeof b.idNumber === 'string' ? b.idNumber.trim() : '';
+  const plates = Number(b.platesRequested);
+  const amount = Number(b.amountRwf);
+  const reference = typeof b.paymentReference === 'string' ? b.paymentReference.trim() : '';
+  const stationId = typeof b.stationId === 'string' ? b.stationId.trim() : '';
+  if (name.length < 2 || name.length > 120 || phone.length < 7 || phone.length > 32 ||
+      idNumber.length < 3 || idNumber.length > 128 || !Number.isSafeInteger(plates) || plates < 1 || plates > 10000 ||
+      !Number.isSafeInteger(amount) || amount < 1 || amount > 10000000 ||
+      !['cash', 'momo', 'mtn_momo', 'airtel_money', 'bank_transfer'].includes(b.paymentMethod) ||
+      reference.length < 4 || reference.length > 128 || !stationId) {
+    return res.status(400).json({ success: false, error: 'Valid customer identity, station, plate quantity, amount, payment method and reference are required.' });
+  }
+  if (user.role === 'stand_staff' && (!user.stationId || user.stationId !== stationId)) {
+    return res.status(403).json({ success: false, error: 'Staff account is not assigned to this station.' });
+  }
+  const station = (serverDbState?.scanPoints || []).find((p: any) =>
+    p.id === stationId && p.restaurantCode === user.restaurantCode && p.status === 'active' && p.isPaired
+  );
+  if (!station) return res.status(403).json({ success: false, error: 'Station is not paired and active.' });
+  const pool = getPostgresPool();
+  if (!pool || !isPostgresConfigured()) return res.status(503).json({ success: false, error: 'Registration requires PostgreSQL.' });
+  const idHash = crypto.createHash('sha256').update('ID_SALT_RESTOPASS_RWANDA:' + idType + ':' + idNumber.replace(/[\s-]/g, '').toUpperCase()).digest('hex');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const referenceLock = 'approval-ref:' + user.restaurantCode + ':' + crypto.createHash('sha256').update(reference.toUpperCase()).digest('hex');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [referenceLock]);
+    const duplicateRef = await client.query("SELECT id FROM pending_approvals WHERE restaurant_code=$1 AND data->>'paymentReference'=$2 LIMIT 1", [user.restaurantCode, reference]);
+    if (duplicateRef.rows[0]) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Payment reference has already been submitted.' }); }
+    const duplicate = await client.query(
+      "SELECT member_no FROM customers WHERE restaurant_code=$1 AND (phone=$2 OR data->>'idHash'=$3 OR ($4<>'' AND data->'studentProfile'->>'registrationNumber'=$4)) LIMIT 1",
+      [user.restaurantCode, phone, idHash, typeof b.studentProfile?.registrationNumber === 'string' ? b.studentProfile.registrationNumber.trim() : '']
+    );
+    if (duplicate.rows[0]) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Customer identity already exists as #' + duplicate.rows[0].member_no + '.' }); }
+    const restaurant = (serverDbState?.restaurants || []).find((r: any) => r.code === user.restaurantCode && r.status === 'active');
+    if (!restaurant) { await client.query('ROLLBACK'); return res.status(403).json({ success: false, error: 'Restaurant is inactive.' }); }
+    const pkg = b.packageId ? (serverDbState?.packages || []).find((p: any) => p.id === b.packageId && p.restaurantCode === user.restaurantCode) : null;
+    if (b.packageId && (!pkg || Number(pkg.platesCount) !== plates || Number(pkg.priceRwf) !== amount)) {
+      await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Package price or plate count does not match server records.' });
+    }
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['member-sequence:' + user.restaurantCode]);
+    const latest = await client.query("SELECT member_no FROM customers WHERE restaurant_code=$1 ORDER BY created_at DESC,id DESC LIMIT 1", [user.restaurantCode]);
+    const lastNo = Number.parseInt(String(latest.rows[0]?.member_no || '28490'), 10);
+    const memberNo = String(Math.max(28490, Number.isFinite(lastNo) ? lastNo : 28490) + 1);
+    const now = new Date().toISOString();
+    const customerId = 'cust_' + crypto.randomUUID();
+    const approvalId = 'appr_' + crypto.randomUUID();
+    const customer = {
+      id: customerId, memberNo, restaurantCode: user.restaurantCode, branchId: b.branchId || station.branchId,
+      branchName: b.branchName || station.branchName, name, phone,
+      photoUrl: typeof b.photoUrl === 'string' ? b.photoUrl.slice(0, 2000000) : '',
+      idType, idHash, idNumberMasked: idNumber.length > 5 ? idNumber.slice(0, 5) + '****' : '****',
+      isStudent: Boolean(b.isStudent), studentProfile: b.isStudent && b.studentProfile && typeof b.studentProfile === 'object' ? b.studentProfile : undefined,
+      cardVersion: 1, keyVersion: 1, cardStatus: 'active', pinHash: null, hasCustomPin: false,
+      provisionalStatus: 'pending_approval', activationStatus: 'pending_approval', cardReadyForPrint: false,
+      failedLoginAttempts: 0, gracePlatesConsumed: 0, gracePlatesRemaining: 3, pendingApprovalId: approvalId,
+      createdAt: now, onboardingToken: 'OB-' + memberNo + '-PROV', consentSigned: true
+    };
+    const approval = {
+      id: approvalId, restaurantCode: user.restaurantCode, branchId: customer.branchId, branchName: customer.branchName,
+      type: 'new_customer', customerId, customerName: name, customerPhone: phone, customerPhoto: customer.photoUrl,
+      memberNo, packageId: b.packageId || undefined, packageName: pkg?.name || (plates + ' Custom Plates'),
+      platesRequested: plates, amountRwf: amount, paymentMethod: b.paymentMethod, paymentReference: reference,
+      registeredByStaffId: user.userId, registeredByStaffName: user.username, stationId,
+      stationName: station.name || station.stationName || 'Reception POS Desk',
+      gracePlatesAllowed: 3, gracePlatesConsumed: 0, createdAt: now, status: 'pending',
+      requiresSuperAdminCoSign: plates > 120, coSignStatus: plates > 120 ? 'pending_super_admin' : 'not_required'
+    };
+    await client.query(
+      'INSERT INTO customers (id,restaurant_code,member_no,name,phone,card_status,card_version,key_version,is_student,pin_hash,photo_url,data) VALUES ($1,$2,$3,$4,$5,$6,1,1,$7,NULL,$8,$9)',
+      [customerId, user.restaurantCode, memberNo, name, phone, 'active', Boolean(b.isStudent), customer.photoUrl, JSON.stringify(customer)]
+    );
+    await client.query(
+      'INSERT INTO pending_approvals (id,restaurant_code,customer_id,type,status,data) VALUES ($1,$2,$3,$4,$5,$6)',
+      [approvalId, user.restaurantCode, customerId, 'new_customer', 'pending', JSON.stringify(approval)]
+    );
+    await writeApprovalAudit(client, user.restaurantCode, user, 'PROVISIONAL_CUSTOMER_REGISTERED', { approvalId, customerId, memberNo, plates, amountRwf: amount });
+    await client.query('COMMIT');
+    updateApprovalCache(customer, approval);
+    return res.status(201).json({ success: true, customer, approval });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    console.error('[Approval Registration] Transaction failed:', error);
+    return res.status(503).json({ success: false, error: 'Registration was not committed. Retry after checking the approval queue.' });
+  } finally { client.release(); }
+});
+
+async function commitPendingApproval(client: any, approval: any, customer: any, actor: UserSession) {
+  const purchaseKey = 'approval:' + approval.id + ':purchase';
+  const prior = await client.query('SELECT id FROM ledger_entries WHERE idempotency_key=$1 FOR UPDATE', [purchaseKey]);
+  if (prior.rows[0]) throw new Error('APPROVAL_ALREADY_CREDITED');
+  const now = new Date();
+  const grace = Math.max(0, Math.min(Number(approval.gracePlatesConsumed || 0), Number(approval.gracePlatesAllowed || 3)));
+  const purchaseId = 'led_' + crypto.randomUUID();
+  const purchase = {
+    id: purchaseId, customerId: customer.id, restaurantCode: approval.restaurantCode, type: 'purchase',
+    platesDelta: Number(approval.platesRequested), timestamp: now.toISOString(), staffId: actor.userId,
+    reason: 'Approved purchase: +' + approval.platesRequested + ' plates', reference: approval.paymentReference,
+    idempotencyKey: purchaseKey, amountRwf: Number(approval.amountRwf), approvalId: approval.id
+  };
+  await client.query(
+    "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,amount_rwf,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'purchase',$4,$5,$6,$7,$8)",
+    [purchaseId, approval.restaurantCode, customer.id, Number(approval.platesRequested), Number(approval.amountRwf), purchaseKey, now, JSON.stringify(purchase)]
+  );
+  let graceEntry: any = null;
+  if (grace > 0) {
+    const graceKey = 'approval:' + approval.id + ':grace';
+    graceEntry = {
+      id: 'led_' + crypto.randomUUID(), customerId: customer.id, restaurantCode: approval.restaurantCode,
+      type: 'scan', platesDelta: -grace, timestamp: now.toISOString(), staffId: actor.userId,
+      reason: 'Reconcile grace meals consumed while approval was pending', reference: 'GRACE-' + approval.id,
+      idempotencyKey: graceKey, approvalId: approval.id
+    };
+    await client.query(
+      "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'scan',$4,$5,$6,$7)",
+      [graceEntry.id, approval.restaurantCode, customer.id, -grace, graceKey, now, JSON.stringify(graceEntry)]
+    );
+  }
+  const payment = {
+    id: 'pay_' + crypto.randomUUID(), restaurantCode: approval.restaurantCode, customerId: customer.id,
+    customerName: customer.name, memberNo: customer.memberNo, packageId: approval.packageId,
+    platesAdded: Number(approval.platesRequested), amountRwf: Number(approval.amountRwf),
+    paymentMethod: approval.paymentMethod, reference: approval.paymentReference,
+    adminStaffId: actor.userId, adminStaffName: actor.username, isProvisional: false,
+    approvalId: approval.id, timestamp: now.toISOString()
+  };
+  await client.query('INSERT INTO payments (id,restaurant_code,customer_id,amount_rwf,data) VALUES ($1,$2,$3,$4,$5)',
+    [payment.id, approval.restaurantCode, customer.id, Number(approval.amountRwf), JSON.stringify(payment)]);
+  customer.provisionalStatus = 'approved';
+  customer.cardStatus = 'active';
+  customer.gracePlatesConsumed = 0;
+  customer.gracePlatesRemaining = 3;
+  customer.pendingApprovalId = undefined;
+  customer.activationStatus = customer.hasCustomPin ? 'active' : 'ready_for_activation';
+  if (approval.type === 'new_customer') customer.cardReadyForPrint = true;
+  approval.status = 'approved';
+  approval.gracePlatesConsumed = grace;
+  approval.reviewedAt = now.toISOString();
+  approval.reviewedByAdminName = approval.bossApprovedByName || actor.username;
+  approval.committedAt = now.toISOString();
+  await client.query('UPDATE customers SET card_status=$2,data=$3,updated_at=NOW() WHERE id=$1',
+    [customer.id, customer.cardStatus, JSON.stringify(customer)]);
+  await client.query("UPDATE pending_approvals SET status='approved',data=$2,updated_at=NOW() WHERE id=$1",
+    [approval.id, JSON.stringify(approval)]);
+  await writeApprovalAudit(client, approval.restaurantCode, actor, 'APPROVAL_ENTITLEMENT_COMMITTED',
+    { approvalId: approval.id, customerId: customer.id, plates: approval.platesRequested, graceConsumed: grace });
+  return { customer, approval, payment, purchase, graceEntry };
+}
+
+app.post('/api/approvals/:approvalId/approve', apiRateLimiter, requireAuth(['restaurant_admin']), async (req, res) => {
+  const user = req.user!;
+  const pool = getPostgresPool();
+  if (!pool || !isPostgresConfigured()) return res.status(503).json({ success: false, error: 'Approval requires PostgreSQL.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query('SELECT data FROM pending_approvals WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [req.params.approvalId, user.restaurantCode]);
+    if (!result.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Approval not found.' }); }
+    const approval = result.rows[0].data;
+    if (approval.status !== 'pending') { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Approval is no longer pending.' }); }
+    const cr = await client.query('SELECT data FROM customers WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [approval.customerId, user.restaurantCode]);
+    if (!cr.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Customer not found.' }); }
+    const customer = cr.rows[0].data;
+    if (Number(approval.platesRequested) > 120) {
+      approval.requiresSuperAdminCoSign = true;
+      approval.coSignStatus = 'pending_super_admin';
+      approval.bossApprovedAt = new Date().toISOString();
+      approval.bossApprovedByUserId = user.userId;
+      approval.bossApprovedByName = user.username;
+      await client.query('UPDATE pending_approvals SET data=$2,updated_at=NOW() WHERE id=$1', [approval.id, JSON.stringify(approval)]);
+      await writeApprovalAudit(client, user.restaurantCode, user, 'BOSS_APPROVED_AWAITING_COSIGN', { approvalId: approval.id, plates: approval.platesRequested });
+      await client.query('COMMIT');
+      updateApprovalCache(customer, approval);
+      return res.json({ success: true, awaitingCoSign: true, approval });
+    }
+    const committed = await commitPendingApproval(client, approval, customer, user);
+    await client.query('COMMIT');
+    updateApprovalCache(committed.customer, committed.approval);
+    if (Array.isArray(serverDbState?.payments)) serverDbState.payments.unshift(committed.payment);
+    if (Array.isArray(serverDbState?.ledgerEntries)) {
+      serverDbState.ledgerEntries.push(committed.purchase);
+      if (committed.graceEntry) serverDbState.ledgerEntries.push(committed.graceEntry);
+    }
+    return res.json({ success: true, customer: committed.customer, approval: committed.approval, payment: committed.payment });
+  } catch (error: any) {
+    try { await client.query('ROLLBACK'); } catch {}
+    if (error?.message === 'APPROVAL_ALREADY_CREDITED') return res.status(409).json({ success: false, error: 'Approval was already credited.' });
+    console.error('[Approval Commit] Transaction failed:', error);
+    return res.status(503).json({ success: false, error: 'Approval was not committed; retry after checking the approval queue.' });
+  } finally { client.release(); }
+});
+
+app.post('/api/approvals/:approvalId/cosign', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
+  const user = req.user!;
+  const pool = getPostgresPool();
+  if (!pool || !isPostgresConfigured()) return res.status(503).json({ success: false, error: 'Co-signing requires PostgreSQL.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query('SELECT data FROM pending_approvals WHERE id=$1 FOR UPDATE', [req.params.approvalId]);
+    if (!result.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Approval not found.' }); }
+    const approval = result.rows[0].data;
+    if (approval.status !== 'pending' || Number(approval.platesRequested) <= 120 ||
+        !approval.bossApprovedAt || approval.coSignStatus !== 'pending_super_admin') {
+      await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Request is not awaiting a valid high-value co-signature.' });
+    }
+    if (approval.bossApprovedByUserId === user.userId) {
+      await client.query('ROLLBACK'); return res.status(403).json({ success: false, error: 'Boss approver and co-signer must be different authenticated principals.' });
+    }
+    const cr = await client.query('SELECT data FROM customers WHERE id=$1 FOR UPDATE', [approval.customerId]);
+    if (!cr.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Customer not found.' }); }
+    approval.coSignStatus = 'co_signed';
+    approval.coSignedAt = new Date().toISOString();
+    approval.coSignedBySuperAdminUserId = user.userId;
+    approval.coSignedBySuperAdminName = user.username;
+    const committed = await commitPendingApproval(client, approval, cr.rows[0].data, user);
+    await client.query('COMMIT');
+    updateApprovalCache(committed.customer, committed.approval);
+    if (Array.isArray(serverDbState?.payments)) serverDbState.payments.unshift(committed.payment);
+    if (Array.isArray(serverDbState?.ledgerEntries)) {
+      serverDbState.ledgerEntries.push(committed.purchase);
+      if (committed.graceEntry) serverDbState.ledgerEntries.push(committed.graceEntry);
+    }
+    return res.json({ success: true, customer: committed.customer, approval: committed.approval, payment: committed.payment });
+  } catch (error: any) {
+    try { await client.query('ROLLBACK'); } catch {}
+    if (error?.message === 'APPROVAL_ALREADY_CREDITED') return res.status(409).json({ success: false, error: 'Approval was already credited.' });
+    console.error('[Approval Co-sign] Transaction failed:', error);
+    return res.status(503).json({ success: false, error: 'Co-signature was not committed.' });
+  } finally { client.release(); }
+});
+
+app.post('/api/approvals/:approvalId/reject', apiRateLimiter, requireAuth(['restaurant_admin']), async (req, res) => {
+  const user = req.user!;
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 500) : '';
+  if (!reason) return res.status(400).json({ success: false, error: 'A rejection reason is required.' });
+  const pool = getPostgresPool();
+  if (!pool || !isPostgresConfigured()) return res.status(503).json({ success: false, error: 'Rejection requires PostgreSQL.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query('SELECT data FROM pending_approvals WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [req.params.approvalId, user.restaurantCode]);
+    if (!result.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Approval not found.' }); }
+    const approval = result.rows[0].data;
+    if (approval.status !== 'pending') { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Approval is no longer pending.' }); }
+    const cr = await client.query('SELECT data FROM customers WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [approval.customerId, user.restaurantCode]);
+    if (!cr.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Customer not found.' }); }
+    const customer = cr.rows[0].data;
+    approval.status = 'rejected';
+    approval.rejectionReason = reason;
+    approval.reviewedAt = new Date().toISOString();
+    approval.reviewedByAdminName = user.username;
+    if (approval.type === 'new_customer') {
+      customer.provisionalStatus = 'rejected';
+      customer.cardStatus = 'locked';
+      customer.activationStatus = 'suspended';
+      await client.query('UPDATE customers SET card_status=$2,data=$3,updated_at=NOW() WHERE id=$1', [customer.id, 'locked', JSON.stringify(customer)]);
+    }
+    await client.query("UPDATE pending_approvals SET status='rejected',data=$2,updated_at=NOW() WHERE id=$1", [approval.id, JSON.stringify(approval)]);
+    await writeApprovalAudit(client, user.restaurantCode, user, 'APPROVAL_REJECTED', { approvalId: approval.id, reason });
+    await client.query('COMMIT');
+    updateApprovalCache(customer, approval);
+    return res.json({ success: true, customer, approval });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    console.error('[Approval Reject] Transaction failed:', error);
+    return res.status(503).json({ success: false, error: 'Rejection was not committed.' });
+  } finally { client.release(); }
+});
+
 // POST /api/topups/commit: manager-confirmed top-up, ledger and payment are one DB transaction.
 app.post(
   '/api/topups/commit',
