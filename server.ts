@@ -2296,60 +2296,16 @@ app.get('/api/state', apiRateLimiter, requireAuth(), (req, res) => {
   });
 });
 
-// POST /api/state: Restricted state modification (Finding 2 & 5)
-// Only Super Admin and authorized Restaurant Admin can invoke this.
+// POST /api/state: Full-state replacement is disabled. Financial and identity state
+// must be changed through audited, server-authoritative operations.
 app.post(
   '/api/state',
   apiRateLimiter,
   requireAuth(['super_admin', 'restaurant_admin']),
-  async (req, res) => {
-    const incoming = req.body;
-    if (!incoming || typeof incoming !== 'object') {
-      return res.status(400).json({ success: false, error: 'Invalid payload: state must be an object' });
-    }
-
-    const user = req.user!;
-
-    // Schema validation for critical collections
-    if (incoming.ledgerEntries && !Array.isArray(incoming.ledgerEntries)) {
-      return res.status(400).json({ success: false, error: 'Invalid payload: ledgerEntries must be an array' });
-    }
-    if (incoming.customers && !Array.isArray(incoming.customers)) {
-      return res.status(400).json({ success: false, error: 'Invalid payload: customers must be an array' });
-    }
-
-    if (user.role === 'super_admin') {
-      serverDbState = incoming;
-    } else if (user.role === 'restaurant_admin') {
-      // Restaurant admin can only update entities matching their restaurantCode
-      const rCode = user.restaurantCode;
-      if (!serverDbState) {
-        serverDbState = incoming;
-      } else {
-        // Replace or merge only scoped collections
-        const incomingCusts = (incoming.customers || []).filter((c: any) => c.restaurantCode === rCode);
-        const otherCusts = (serverDbState.customers || []).filter((c: any) => c.restaurantCode !== rCode);
-        serverDbState.customers = [...otherCusts, ...incomingCusts];
-
-        const incomingLedgers = (incoming.ledgerEntries || []).filter((l: any) => l.restaurantCode === rCode);
-        const otherLedgers = (serverDbState.ledgerEntries || []).filter((l: any) => l.restaurantCode !== rCode);
-        serverDbState.ledgerEntries = [...otherLedgers, ...incomingLedgers];
-      }
-    }
-
-    const savedOk = await queueDbSave(serverDbState);
-    if (!savedOk) {
-      return res.status(500).json({
-        success: false,
-        error: 'Database persistence failure: Unable to commit changes safely to disk.',
-      });
-    }
-
-    return res.json({
-      success: true,
-      savedAt: new Date().toISOString(),
-    });
-  }
+  (_req, res) => res.status(410).json({
+    success: false,
+    error: 'Full-state replacement is disabled. Use server-authoritative, audited operations.',
+  })
 );
 
 // POST /api/sync: Authenticated, validated incremental synchronization with Idempotency (Findings 5 & 6)
@@ -2375,19 +2331,19 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         const prev: any = existingCustomersMap.get(inc.id);
         if (prev) {
           if (user.role === 'customer') {
-            // Customers can only toggle their own card lock status or update PIN metadata, never privilege/version fields
+            // Customers may lock their own card, but cannot unlock it or replace server PIN hashes through sync.
             existingCustomersMap.set(inc.id, {
               ...prev,
-              cardStatus: inc.cardStatus === 'locked' || inc.cardStatus === 'active' ? inc.cardStatus : prev.cardStatus,
-              hasCustomPin: inc.hasCustomPin ?? prev.hasCustomPin,
-              pinSetAt: inc.pinSetAt ?? prev.pinSetAt,
-              pinHash: inc.pinHash ?? prev.pinHash,
+              cardStatus: inc.cardStatus === 'locked' ? 'locked' : prev.cardStatus,
             });
+          } else if (user.role === 'stand_staff') {
+            // Staff may register new customers, but existing identity, card and credential records are not writable through sync.
+            existingCustomersMap.set(inc.id, prev);
           } else {
             existingCustomersMap.set(inc.id, {
               ...prev,
               ...inc,
-              pinHash: inc.pinHash ?? prev.pinHash,
+              pinHash: prev.pinHash,
             });
           }
         } else if (user.role !== 'customer') {
@@ -2428,6 +2384,9 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
       );
 
       const incomingLedgers = (fullState.ledgerEntries || []).filter((l: any) => {
+        // Scanner and customer financial operations must use dedicated atomic endpoints.
+        // Admins retain controlled ledger posting for manually approved top-ups/adjustments.
+        if (user.role === 'stand_staff' || user.role === 'customer') return false;
         if (!l || !l.id || !l.customerId) return false;
         if (allowedRestoCode && l.restaurantCode !== allowedRestoCode) return false;
         // Schema check: amountRwf must be a valid finite number if present
@@ -2454,33 +2413,28 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
 
       serverDbState.ledgerEntries = [...(serverDbState.ledgerEntries || []), ...incomingLedgers];
 
-      // 3. Merge scan events idempotently (Only stand_staff, restaurant_admin, super_admin)
-      if (user.role !== 'customer') {
-        const existingScanIds = new Set((serverDbState.scanEvents || []).map((s: any) => s.id));
-        const incomingScans = (fullState.scanEvents || []).filter((s: any) => {
-          if (!s || !s.id) return false;
-          if (allowedRestoCode && s.restaurantCode !== allowedRestoCode) return false;
-          return !existingScanIds.has(s.id);
-        });
-        serverDbState.scanEvents = [...incomingScans, ...(serverDbState.scanEvents || [])];
-      }
+      // Scan events are written only by server-side transactional scan endpoints.
+      // Client-supplied scan events are intentionally ignored for every role.
 
       // 4. Merge notifications & operational collections with role guards
       mergeScopedCollection('notifications', true);
       mergeScopedCollection('transfers', false);
       mergeScopedCollection('auditLogs', false);
-      mergeScopedCollection('customerSubscriptions', true);
-      mergeScopedCollection('studentSubscriptionPayments', true);
+      if (user.role === 'restaurant_admin' || user.role === 'super_admin') {
+        mergeScopedCollection('customerSubscriptions', true);
+        mergeScopedCollection('studentSubscriptionPayments', true);
+      }
 
       if (user.role !== 'customer') {
         mergeScopedCollection('pendingApprovals', true);
-        mergeScopedCollection('payments', false);
         mergeScopedCollection('shifts', true);
         mergeScopedCollection('activationRequests', true);
         mergeScopedCollection('pinRecoveryRequests', true);
       }
 
       if (user.role === 'restaurant_admin' || user.role === 'super_admin') {
+        // Payment records and subscription state are manager-controlled, never staff/customer sync data.
+        mergeScopedCollection('payments', false);
         mergeScopedCollection('packages', true);
         mergeScopedCollection('menuItems', true);
         mergeScopedCollection('branches', true);
