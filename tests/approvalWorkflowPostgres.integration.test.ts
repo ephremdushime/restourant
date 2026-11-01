@@ -92,6 +92,11 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
         body: JSON.stringify({ status: 'blocked' }),
       });
       assert.equal(blocked.status, 200);
+      const sessionVersion = await pool!.query(
+        'SELECT session_version FROM restaurant_admins WHERE id=$1',
+        [created.body.administrator.id]
+      );
+      assert.equal(sessionVersion.rows[0].session_version, 2);
       const blockedLogin = await post('/api/auth/login', '', {
         role: 'restaurant_admin', restaurantCode, username: 'tenant.owner', password,
       });
@@ -299,6 +304,20 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
         restaurantCode, stationId: 'other_station',
       });
       assert.equal(wrongStation.status, 403);
+
+      const blockedSync = await post('/api/sync', bossToken, {
+        fullState: { stationUsers: [{ ...staff, status: 'blocked' }] },
+      });
+      assert.equal(blockedSync.status, 200);
+      const staleSession = await fetch(baseUrl + '/api/auth/session', {
+        headers: { Authorization: 'Bearer ' + login.body.token },
+      });
+      assert.equal(staleSession.status, 401);
+      const reactivated = await post('/api/sync', bossToken, {
+        fullState: { stationUsers: [{ ...staff, status: 'active' }] },
+      });
+      assert.equal(reactivated.status, 200);
+      assert.equal(serverModule.getServerDbState().stationUsers.find((item: any) => item.id === staff.id).sessionVersion, 3);
     });
 
     await t.test('concurrent duplicate scanner requests commit one meal deduction', async () => {
