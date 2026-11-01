@@ -58,7 +58,11 @@ describe('Cloud-authoritative scanner regression guards', () => {
     assert.match(store, /fetch\('\/api\/topups\/commit'/);
     assert.doesNotMatch(server, /mergeScopedCollection\('transfers'/);
     assert.doesNotMatch(server, /mergeScopedCollection\('auditLogs'/);
-    assert.match(server, /mergeScopedCollection\('pendingApprovals', user\.role !== 'stand_staff'\)/);
+    assert.match(server, /AUTHORITATIVE_WORKFLOW_REQUIRED/);
+    assert.match(server, /attemptedCustomerMutation/);
+    assert.match(server, /attemptedApprovalMutation/);
+    assert.match(server, /Client-side bootstrap is disabled/);
+    assert.doesNotMatch(server, /mergeScopedCollection\('pendingApprovals'/);
   });
 
   test('pending-payment grace meals are committed with the scan transaction', () => {
