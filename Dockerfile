@@ -37,10 +37,9 @@ COPY --from=builder /app/dist ./dist
 # Copy backend files and database schemas
 COPY server.ts ./
 COPY src/services ./src/services
-COPY data ./data
 
 # Ensure upload directory exists
-RUN mkdir -p public/uploads/patron-photos && chown -R node:node /app
+RUN mkdir -p /app/data && chown -R node:node /app
 
 USER node
 
