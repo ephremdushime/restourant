@@ -1470,7 +1470,7 @@ export class RestoStore {
     // Browser storage must never retain staff passwords or PINs, including demo-mode state.
     if (Array.isArray(copy.stationUsers)) {
       copy.stationUsers = copy.stationUsers.map((user) => ({
-        ...user, passwordHash: undefined, pin: undefined,
+        ...user, passwordHash: '', pin: '',
       }));
     }
     return JSON.stringify(copy);
@@ -1734,7 +1734,7 @@ export class RestoStore {
       if (!this.state.stationUsers) this.state.stationUsers = [];
       const currentStationUsers = new Map(this.state.stationUsers.map((user) => [user.id, user]));
       for (const serverUser of serverState.stationUsers) {
-        const safeUser = { ...serverUser, passwordHash: undefined, pin: undefined };
+        const safeUser = { ...serverUser, passwordHash: '', pin: '' };
         const existing = currentStationUsers.get(serverUser.id);
         if (!existing) {
           this.state.stationUsers.push(safeUser as any);
@@ -1945,7 +1945,7 @@ export class RestoStore {
             ? (isDemo
                 ? parsed.stationUsers
                 : parsed.stationUsers.filter((u: any) => !DEMO_SEED_USER_IDS.has(u.id) && !DEMO_SEED_RESTO_CODES.has(u.restaurantCode)))
-                .map((u: any) => ({ ...u, passwordHash: undefined, pin: undefined }))
+                .map((u: any) => ({ ...u, passwordHash: '', pin: '' }))
             : baseState.stationUsers,
           pendingApprovals: Array.isArray(parsed.pendingApprovals)
             ? (isDemo
