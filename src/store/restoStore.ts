@@ -1731,7 +1731,8 @@ export class RestoStore {
 
     // 5. Merge station accounts without hydrating credential material into the browser.
     if (serverState.stationUsers && Array.isArray(serverState.stationUsers)) {
-      const currentStationUsers = new Map((this.state.stationUsers || []).map((user) => [user.id, user]));
+      if (!this.state.stationUsers) this.state.stationUsers = [];
+      const currentStationUsers = new Map(this.state.stationUsers.map((user) => [user.id, user]));
       for (const serverUser of serverState.stationUsers) {
         const safeUser = { ...serverUser, passwordHash: undefined, pin: undefined };
         const existing = currentStationUsers.get(serverUser.id);
