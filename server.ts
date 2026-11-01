@@ -8,6 +8,7 @@ import {
   loadStateFromPostgres,
   saveStateToPostgres,
   insertLedgerEntryPostgres,
+  getPostgresPool,
 } from './src/services/db/postgresAdapter';
 import { recordTokenScan, isRedisConfigured } from './src/services/cache/redisClient';
 import { uploadBase64Photo } from './src/services/storage/objectStorage';
@@ -1323,6 +1324,208 @@ app.post(
     }
 
     return res.json({ success: true, valid: false, error: `Unknown token protocol: ${versionPrefix}` });
+  }
+);
+
+// POST /api/scans/consume: atomic, server-authoritative meal redemption.
+// The database transaction is the authority; the browser must not deduct balances optimistically.
+app.post(
+  '/api/scans/consume',
+  apiRateLimiter,
+  requireAuth(['stand_staff', 'restaurant_admin', 'super_admin']),
+  async (req, res) => {
+    const user = req.user!;
+    const payload = typeof req.body?.payload === 'string' ? req.body.payload.trim() : '';
+    const idempotencyKey = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
+    const requestedStationId = typeof req.body?.stationId === 'string' ? req.body.stationId.trim() : '';
+    const restaurantCode = user.restaurantCode;
+    if (!payload || payload.length > 2048 || !/^[A-Za-z0-9_-]{8,128}$/.test(idempotencyKey) || !requestedStationId) {
+      return res.status(400).json({ success: false, error: 'A valid QR payload, station and idempotency key are required.' });
+    }
+    if (user.role !== 'super_admin' && user.stationId && user.stationId !== requestedStationId) {
+      return res.status(403).json({ success: false, error: 'This account is not assigned to the requested scanner station.' });
+    }
+    const station = (serverDbState?.scanPoints || []).find((p: any) =>
+      p.id === requestedStationId && p.restaurantCode === restaurantCode && p.status === 'active'
+    );
+    if (!station || !station.isPaired) {
+      return res.status(403).json({ success: false, error: 'Scanner station is not paired or active for this restaurant.' });
+    }
+    const licenseStatus = (serverDbState?.licenses || []).find((l: any) =>
+      l.restaurantCode === restaurantCode && l.id === (serverDbState?.restaurants || []).find((r: any) => r.code === restaurantCode)?.currentLicenseId
+    );
+    if (!licenseStatus || new Date(licenseStatus.validUntil).getTime() <= Date.now()) {
+      return res.status(403).json({ success: false, error: 'Restaurant license is inactive or expired.' });
+    }
+
+    const parts = payload.split('.');
+    if (parts.length !== 5) return res.status(400).json({ success: false, error: 'Invalid QR format.' });
+    const [version, tokenRestaurant, memberNo, stepOrVersion, mac] = parts;
+    if (tokenRestaurant.toUpperCase() !== restaurantCode.toUpperCase()) {
+      return res.status(403).json({ success: false, error: 'QR belongs to another restaurant.' });
+    }
+
+    const pool = getPostgresPool();
+    if (!pool || !isPostgresConfigured()) {
+      return res.status(503).json({ success: false, error: 'Authoritative scanning requires the production database.' });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Idempotent retries return the exact original committed result.
+      const prior = await client.query(
+        'SELECT response FROM scan_requests WHERE idempotency_key = $1 FOR UPDATE',
+        [idempotencyKey]
+      );
+      if (prior.rows[0]?.response) {
+        await client.query('COMMIT');
+        return res.json(prior.rows[0].response);
+      }
+
+      const customerResult = await client.query(
+        'SELECT id, restaurant_code, member_no, card_status, card_version, key_version, data FROM customers WHERE restaurant_code = $1 AND member_no = $2 FOR UPDATE',
+        [restaurantCode, memberNo]
+      );
+      const customerRow = customerResult.rows[0];
+      if (!customerRow) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, error: 'Customer record not found.' });
+      }
+      const customer = customerRow.data || {};
+      if (customerRow.card_status === 'locked' || customer.activationStatus === 'suspended' || customer.provisionalStatus === 'rejected') {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ success: false, error: 'Customer account or card is inactive.' });
+      }
+
+      let tokenStep: number | null = null;
+      if (version === 'c1') {
+        const cardVersion = Number(stepOrVersion);
+        const expected = serverHmac(deriveServerRestaurantKey(restaurantCode), `CARD:${memberNo}:V${cardVersion}`).slice(0, 16);
+        if (!Number.isSafeInteger(cardVersion) || cardVersion !== customerRow.card_version || !timingSafeCompare(mac, expected)) {
+          await client.query('ROLLBACK');
+          return res.status(403).json({ success: false, error: 'Card signature or version is invalid.' });
+        }
+      } else if (version === 'v1') {
+        tokenStep = Number(stepOrVersion);
+        const currentStep = getCurrentServerTimeStep();
+        if (!Number.isSafeInteger(tokenStep) || Math.abs(tokenStep - currentStep) > 10) {
+          await client.query('ROLLBACK');
+          return res.status(403).json({ success: false, error: 'Digital QR expired. Refresh the customer QR.' });
+        }
+        const entitlement = checkServerStudentEntitlement(customerRow.id, 'digital_qr');
+        if (!entitlement.allowed) {
+          await client.query('ROLLBACK');
+          return res.status(403).json({ success: false, error: 'Digital QR access requires an active subscription.' });
+        }
+        const customerKey = deriveServerCustomerKey(deriveServerRestaurantKey(restaurantCode), memberNo, customerRow.key_version || 1);
+        const expected = serverHmac(customerKey, `STEP:${tokenStep}`).slice(0, 16);
+        if (!timingSafeCompare(mac, expected)) {
+          await client.query('ROLLBACK');
+          return res.status(403).json({ success: false, error: 'Digital QR signature is invalid.' });
+        }
+        // Unique database key makes replay prevention atomic across all app instances.
+        const replay = await client.query(
+          `INSERT INTO used_tokens (token_key, used_at, station_id, member_no, expires_at)
+           VALUES ($1, $2, $3, $4, NOW() + INTERVAL '15 minutes')
+           ON CONFLICT (token_key) DO NOTHING RETURNING token_key`,
+          [`${customerKey}:${tokenStep}`, Date.now(), requestedStationId, memberNo]
+        );
+        if ((replay.rowCount || 0) !== 1) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ success: false, error: 'This digital QR has already been used.' });
+        }
+      } else {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, error: 'Unsupported QR protocol.' });
+      }
+
+      const checkpoint = await client.query(
+        'SELECT balance, cutoff_timestamp FROM balance_checkpoints WHERE customer_id = $1 ORDER BY cutoff_timestamp DESC LIMIT 1',
+        [customerRow.id]
+      );
+      const cutoff = checkpoint.rows[0]?.cutoff_timestamp || new Date(0);
+      const baseBalance = Number(checkpoint.rows[0]?.balance || 0);
+      const ledger = await client.query(
+        'SELECT COALESCE(SUM(plates_delta), 0)::int AS delta FROM ledger_entries WHERE customer_id = $1 AND timestamp > $2',
+        [customerRow.id, cutoff]
+      );
+      const balanceBefore = Math.max(0, baseBalance + Number(ledger.rows[0]?.delta || 0));
+      if (balanceBefore < 1) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, error: 'No approved meal balance. Grace-meal redemption is not enabled in this authoritative scanner yet.' });
+      }
+
+      const restaurant = (serverDbState?.restaurants || []).find((r: any) => r.code === restaurantCode);
+      const plan = (serverDbState?.plans || []).find((p: any) => p.id === restaurant?.planId) || (serverDbState?.plans || [])[0];
+      const terms = { ...(plan?.terms || {}), ...(restaurant?.termsOverride || {}) };
+      const windowMinutes = Math.max(1, Number(terms.servingWindowMinutes || 120));
+      const plateLimit = Math.max(1, Number(terms.plateLimitPerWindow || 3));
+      const windowStart = new Date(Date.now() - windowMinutes * 60000);
+      const recent = await client.query(
+        'SELECT data FROM scan_events WHERE customer_id = $1 AND restaurant_code = $2 AND created_at >= $3 ORDER BY created_at DESC',
+        [customerRow.id, restaurantCode, windowStart]
+      );
+      const recentEvents = recent.rows.map((r: any) => r.data || {});
+      const platesInWindow = recentEvents.reduce((sum: number, ev: any) =>
+        sum + ((ev.status === 'approved' || ev.status === 'warning_confirmed') ? Number(ev.platesDeducted || 0) : 0), 0);
+      if (recentEvents.some((ev: any) => ev.scanPointId === requestedStationId && (ev.status === 'approved' || ev.status === 'warning_confirmed'))) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, error: 'Consecutive scans at this station are not allowed. Scan another customer first.' });
+      }
+      if (platesInWindow >= plateLimit) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, error: `Meal limit reached: maximum ${plateLimit} meals in ${windowMinutes} minutes.` });
+      }
+
+      const now = new Date();
+      const ledgerId = `led_${crypto.randomUUID()}`;
+      const scanId = `scan_${crypto.randomUUID()}`;
+      const ledgerEntry = {
+        id: ledgerId, customerId: customerRow.id, restaurantCode, type: 'scan',
+        platesDelta: -1, timestamp: now.toISOString(), scanPointId: requestedStationId,
+        staffId: user.userId, reference: `SCAN-${memberNo}`, idempotencyKey: `scan:${idempotencyKey}`,
+      };
+      const event = {
+        id: scanId, restaurantCode, customerId: customerRow.id,
+        customerName: customer.name || 'Customer', customerPhoto: customer.photoUrl || '',
+        memberNo, scanPointId: requestedStationId, scanPointName: station.name || 'Scanner',
+        staffId: user.userId, staffName: user.username, timestamp: now.toISOString(),
+        platesInWindow: platesInWindow + 1, platesDeducted: 1,
+        photoCheckRequired: version === 'c1' || platesInWindow > 0,
+        photoCheckReason: version === 'c1' ? 'physical_card' : (platesInWindow > 0 ? 'repeat_scan_in_window' : 'none'),
+        photoCheckResult: 'none', status: platesInWindow > 0 ? 'warning_confirmed' : 'approved',
+        isGracePlate: false,
+      };
+      await client.query(
+        `INSERT INTO ledger_entries (id, restaurant_code, customer_id, type, plates_delta, idempotency_key, timestamp, data)
+         VALUES ($1, $2, $3, 'scan', -1, $4, $5, $6)`,
+        [ledgerId, restaurantCode, customerRow.id, ledgerEntry.idempotencyKey, now, JSON.stringify(ledgerEntry)]
+      );
+      await client.query(
+        `INSERT INTO scan_events (id, restaurant_code, customer_id, station_id, status, data, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [scanId, restaurantCode, customerRow.id, requestedStationId, event.status, JSON.stringify(event), now]
+      );
+      const response = { success: true, accepted: true, scanEvent: event, ledgerEntry, balanceBefore, balanceAfter: balanceBefore - 1 };
+      await client.query(
+        'INSERT INTO scan_requests (idempotency_key, customer_id, restaurant_code, response, created_at) VALUES ($1, $2, $3, $4, $5)',
+        [idempotencyKey, customerRow.id, restaurantCode, JSON.stringify(response), now]
+      );
+      await client.query('COMMIT');
+
+      // Update process cache only after the durable transaction has committed.
+      if (Array.isArray(serverDbState?.ledgerEntries)) serverDbState.ledgerEntries.push(ledgerEntry);
+      if (Array.isArray(serverDbState?.scanEvents)) serverDbState.scanEvents.unshift(event);
+      return res.json(response);
+    } catch (error: any) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('[Atomic Scan] Transaction failed:', error);
+      return res.status(503).json({ success: false, error: 'Scan could not be committed. Retry using the same idempotency key.' });
+    } finally {
+      client.release();
+    }
   }
 );
 
