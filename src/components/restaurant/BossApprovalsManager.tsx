@@ -80,36 +80,30 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
     setTimeout(() => setCopiedRefId(null), 2000);
   };
 
-  const handleConfirmApproval = (approval: PendingApproval) => {
-    const res = restoStore.approvePendingRequest(approval.id, 'Restaurant Boss (Executive)');
-    if (res.success && res.customer) {
-      setApprovedModalData({
-        customer: res.customer,
-        approval,
-      });
-
-      setToastMessage(
-        approval.type === 'new_customer'
-          ? `Approved registration for #${res.customer.memberNo}! Account active for Customer Portal PIN setup.`
-          : `Approved top-up for #${res.customer.memberNo}! Plates added to permanent card.`
-      );
+  const handleConfirmApproval = async (approval: PendingApproval) => {
+    const res = await restoStore.approvePendingRequestAuthoritative(approval.id);
+    if (res.success && res.awaitingCoSign) {
+      setToastMessage('Boss approval recorded. This request remains uncredited until an independent Super Admin co-signature.');
+      setTimeout(() => setToastMessage(null), 5000);
+    } else if (res.success && res.customer) {
+      setApprovedModalData({ customer: res.customer, approval: res.approval || approval });
+      setToastMessage(approval.type === 'new_customer'
+        ? `Approved registration for #${res.customer.memberNo}! Complete customer PIN activation at reception.`
+        : `Approved top-up for #${res.customer.memberNo}! Plates committed to the ledger.`);
       setTimeout(() => setToastMessage(null), 4000);
     } else {
-      setToastMessage(res.error || 'Approval was not committed. Please retry after the secure approval workflow is available.');
+      setToastMessage(res.error || 'Approval was not committed. No balance or account status was changed.');
       setTimeout(() => setToastMessage(null), 5000);
     }
   };
 
-  const handleExecuteReject = () => {
+  const handleExecuteReject = async () => {
     if (!selectedApprovalToReject) return;
-    const res = restoStore.rejectPendingRequest(
-      selectedApprovalToReject.id,
-      rejectReason,
-      'Restaurant Boss (Executive)'
-    );
+    const rejected = selectedApprovalToReject;
+    const res = await restoStore.rejectPendingRequestAuthoritative(rejected.id, rejectReason);
     if (res.success) {
       setSelectedApprovalToReject(null);
-      setToastMessage(`Rejected approval for #${selectedApprovalToReject.memberNo}. Customer card access locked.`);
+      setToastMessage(`Rejected approval for #${rejected.memberNo}. The server committed the decision.`);
       setTimeout(() => setToastMessage(null), 4000);
     } else {
       setToastMessage(res.error || 'Rejection was not committed. No account status was changed.');
