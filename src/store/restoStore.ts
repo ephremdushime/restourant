@@ -2864,6 +2864,8 @@ export class RestoStore {
    * Undo Serving - Only permitted while current customer result is on screen
    */
   public undoScan(scanEventId: string): boolean {
+    if (this.authToken && !this.isDemoModeActive()) return false;
+
     const scanEvent = this.state.scanEvents.find((e) => e.id === scanEventId);
     if (!scanEvent || scanEvent.status === 'undone') return false;
 
@@ -3112,6 +3114,8 @@ export class RestoStore {
    * Register customer with live photo, student details, and strict duplicate check
    */
   public registerCustomer(data: {
+    if (this.authToken && !this.isDemoModeActive()) return { success: false, error: 'Customer registration requires the server-authoritative registration endpoint.' };
+
     restaurantCode: string;
     name: string;
     phone: string;
@@ -3757,6 +3761,8 @@ export class RestoStore {
    * Adds reversing ledger entries to restore balances; NEVER deletes original entries!
    */
   public reverseTransfer(transferId: string, adminStaffName: string): boolean {
+    if (this.authToken && !this.isDemoModeActive()) return false;
+
     const transfer = this.state.transfers.find((t) => t.id === transferId);
     if (!transfer || transfer.status === 'reversed') return false;
 
@@ -3811,6 +3817,8 @@ export class RestoStore {
    * Requires PIN authentication
    */
   public transferPlates(data: {
+    if (this.authToken && !this.isDemoModeActive()) return { success: false, error: 'Plate transfers are disabled until the server-authoritative transfer endpoint is deployed.' };
+
     senderCustomerId: string;
     recipientIdentifier: string; // member number or phone
     plates: number;
@@ -5606,6 +5614,8 @@ export class RestoStore {
    */
   public registerProvisionalCustomer(
     data: {
+    if (this.authToken && !this.isDemoModeActive()) throw new Error('Provisional registration is disabled until the server-authoritative approval endpoint is deployed. No customer was registered.');
+
       restaurantCode: string;
       branchId?: string;
       branchName?: string;
@@ -5877,7 +5887,9 @@ export class RestoStore {
   public approvePendingRequest(
     approvalId: string,
     bossName = 'Restaurant Boss'
-  ): { success: boolean; customer?: Customer; error?: string } {
+  ): {
+    if (this.authToken && !this.isDemoModeActive()) return { success: false, error: 'Approval requires the server-authoritative PostgreSQL approval workflow. No balance or account status was changed.' };
+ success: boolean; customer?: Customer; error?: string } {
     if (!this.state.pendingApprovals) return { success: false, error: 'No approvals found' };
     const approval = this.state.pendingApprovals.find((a) => a.id === approvalId);
     if (!approval) return { success: false, error: 'Approval request not found' };
@@ -6097,7 +6109,9 @@ export class RestoStore {
   public coSignPendingRequest(
     approvalId: string,
     superAdminName = 'Ephrem (Founder & Super Admin)'
-  ): { success: boolean; customer?: Customer; error?: string } {
+  ): {
+    if (this.authToken && !this.isDemoModeActive()) return { success: false, error: 'Dual authorization requires the server-authoritative PostgreSQL co-sign endpoint. No approval was committed.' };
+ success: boolean; customer?: Customer; error?: string } {
     if (!this.state.pendingApprovals) return { success: false, error: 'No approvals found' };
     const approval = this.state.pendingApprovals.find((a) => a.id === approvalId);
     if (!approval) return { success: false, error: 'Approval request not found' };
@@ -6133,7 +6147,9 @@ export class RestoStore {
     approvalId: string,
     reason: string,
     bossName = 'Restaurant Boss'
-  ): { success: boolean; error?: string } {
+  ): {
+    if (this.authToken && !this.isDemoModeActive()) return { success: false, error: 'Rejection requires the server-authoritative PostgreSQL approval workflow. No account status was changed.' };
+ success: boolean; error?: string } {
     if (!this.state.pendingApprovals) return { success: false, error: 'No approvals found' };
     const approval = this.state.pendingApprovals.find((a) => a.id === approvalId);
     if (!approval) return { success: false, error: 'Approval request not found' };
