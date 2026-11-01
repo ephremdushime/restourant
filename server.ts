@@ -1373,6 +1373,8 @@ app.post(
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      // Serialize concurrent requests that reuse the same idempotency key before checking its result.
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [idempotencyKey]);
 
       // Idempotent retries return the exact original committed result.
       const prior = await client.query(
