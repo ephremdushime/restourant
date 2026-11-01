@@ -144,3 +144,34 @@ export async function closeRedis(): Promise<void> {
   memoryReplayCache.clear();
 }
 
+
+
+/**
+ * Waits for the shared Redis service to become ready before production accepts scans.
+ * A configured URL alone is not proof that distributed rate limiting is operational.
+ */
+export async function ensureRedisReady(timeoutMs = 10000): Promise<boolean> {
+  const client = getRedisClient();
+  if (!client) return false;
+  if (client.status === 'ready') return true;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ready: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      client.removeListener('ready', onReady);
+      client.removeListener('end', onEnd);
+      resolve(ready);
+    };
+    const onReady = () => finish(true);
+    const onEnd = () => finish(false);
+    const timer = setTimeout(() => finish(client.status === 'ready'), timeoutMs);
+    client.once('ready', onReady);
+    client.once('end', onEnd);
+    if (client.status === 'wait') {
+      client.connect().catch(() => finish(false));
+    }
+  });
+}
