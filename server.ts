@@ -1780,8 +1780,10 @@ async function commitPendingApproval(client: any, approval: any, customer: any, 
   customer.gracePlatesConsumed = remainingGraceUsed;
   customer.gracePlatesRemaining = Math.max(0, 3 - remainingGraceUsed);
   customer.pendingApprovalId = remainingPending.rows[0]?.data?.id;
-  customer.activationStatus = customer.hasCustomPin ? 'active' : 'ready_for_activation';
-  if (approval.type === 'new_customer') customer.cardReadyForPrint = true;
+  if (approval.type === 'new_customer') {
+    customer.activationStatus = customer.hasCustomPin ? 'active' : 'ready_for_activation';
+    customer.cardReadyForPrint = true;
+  }
   await client.query('UPDATE customers SET card_status=$2,data=$3,updated_at=NOW() WHERE id=$1',
     [customer.id, customer.cardStatus, JSON.stringify(customer)]);
   await writeApprovalAudit(client, approval.restaurantCode, actor, 'APPROVAL_ENTITLEMENT_COMMITTED',
