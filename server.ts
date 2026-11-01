@@ -693,11 +693,17 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       });
       return res.json({ success: true, token: legacyToken, user: { role: 'restaurant_admin', username: username.trim(), restaurantCode } });
     }
-    const adminResult = await pool.query(
-      `SELECT id, username, display_name, password_hash, status, session_version
-       FROM restaurant_admins WHERE restaurant_code=$1 AND username=$2 LIMIT 1`,
-      [restaurantCode, username.trim().toLowerCase()]
-    );
+    let adminResult: any;
+    try {
+      adminResult = await pool.query(
+        `SELECT id, username, display_name, password_hash, status, session_version
+         FROM restaurant_admins WHERE restaurant_code=$1 AND username=$2 LIMIT 1`,
+        [restaurantCode, username.trim().toLowerCase()]
+      );
+    } catch (error) {
+      console.error('[Tenant Admin Login] Database lookup failed:', error);
+      return res.status(503).json({ success: false, error: 'Administrator identity service is temporarily unavailable.' });
+    }
     const admin = adminResult.rows[0];
     let validPassword = false;
     if (admin?.status === 'active' && typeof admin.password_hash === 'string' && admin.password_hash.startsWith('scrypt$')) {
