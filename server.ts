@@ -1599,6 +1599,111 @@ app.post(
   }
 );
 
+// POST /api/topups/commit: manager-confirmed top-up, ledger and payment are one DB transaction.
+app.post(
+  '/api/topups/commit',
+  apiRateLimiter,
+  requireAuth(['restaurant_admin']),
+  async (req, res) => {
+    const user = req.user!;
+    const restaurantCode = user.restaurantCode;
+    const customerId = typeof req.body?.customerId === 'string' ? req.body.customerId.trim() : '';
+    const plates = Number(req.body?.plates);
+    const amountRwf = Number(req.body?.amountRwf);
+    const paymentMethod = req.body?.paymentMethod;
+    const reference = typeof req.body?.reference === 'string' ? req.body.reference.trim() : '';
+    const packageId = typeof req.body?.packageId === 'string' ? req.body.packageId : undefined;
+    const allowedMethods = ['cash', 'mtn_momo', 'airtel_money', 'bank_transfer'];
+    if (!customerId || !Number.isSafeInteger(plates) || plates < 1 || plates > 120 ||
+        !Number.isSafeInteger(amountRwf) || amountRwf < 1 || amountRwf > 10000000 ||
+        !allowedMethods.includes(paymentMethod) || reference.length < 4 || reference.length > 128) {
+      return res.status(400).json({ success: false, error: 'Valid customer, 1–120 plates, amount, payment method and payment reference are required. Top-ups above 120 plates require the approval workflow.' });
+    }
+    const pool = getPostgresPool();
+    if (!pool || !isPostgresConfigured()) {
+      return res.status(503).json({ success: false, error: 'Authoritative top-ups require the production database.' });
+    }
+    const referenceKey = crypto.createHash('sha256').update(reference.toUpperCase()).digest('hex');
+    const idempotencyKey = `topup:${restaurantCode}:${referenceKey}`.slice(0, 128);
+    const requestFingerprint = crypto.createHash('sha256').update(JSON.stringify({
+      restaurantCode, customerId, plates, amountRwf, paymentMethod, packageId: packageId || null, actorId: user.userId,
+    })).digest('hex');
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [idempotencyKey]);
+      const prior = await client.query(
+        'SELECT data FROM ledger_entries WHERE idempotency_key = $1 FOR UPDATE',
+        [idempotencyKey]
+      );
+      if (prior.rows[0]) {
+        const priorData = prior.rows[0].data || {};
+        if (priorData.requestFingerprint !== requestFingerprint) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ success: false, error: 'This payment reference has already been used for a different top-up.' });
+        }
+        const paymentId = priorData.paymentId;
+        const paymentResult = await client.query('SELECT data FROM payments WHERE id = $1', [paymentId]);
+        await client.query('COMMIT');
+        return res.json({ success: true, ledgerEntry: priorData.ledgerEntry, payment: paymentResult.rows[0]?.data, idempotent: true });
+      }
+
+      const customerResult = await client.query(
+        'SELECT id, restaurant_code, member_no, card_status, data FROM customers WHERE id = $1 AND restaurant_code = $2 FOR UPDATE',
+        [customerId, restaurantCode]
+      );
+      const customerRow = customerResult.rows[0];
+      if (!customerRow || customerRow.card_status !== 'active') {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, error: 'Active customer not found in this restaurant.' });
+      }
+      if (packageId) {
+        const pkg = (serverDbState?.packages || []).find((item: any) => item.id === packageId && item.restaurantCode === restaurantCode);
+        if (!pkg || Number(pkg.platesCount) !== plates || Number(pkg.priceRwf) !== amountRwf) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ success: false, error: 'Selected package no longer matches the server price. Refresh and retry.' });
+        }
+      }
+      const customer = customerRow.data || {};
+      const now = new Date();
+      const ledgerId = `led_${crypto.randomUUID()}`;
+      const paymentId = `pay_${crypto.randomUUID()}`;
+      const ledgerEntry = {
+        id: ledgerId, customerId, restaurantCode, type: 'purchase', platesDelta: plates,
+        timestamp: now.toISOString(), staffId: user.userId,
+        reason: `Manager-confirmed top-up: +${plates} plates (${paymentMethod})`,
+        reference, idempotencyKey, amountRwf, requestFingerprint, paymentId,
+      };
+      const payment = {
+        id: paymentId, restaurantCode, customerId, customerName: customer.name || 'Customer',
+        memberNo: customerRow.member_no, packageId, platesAdded: plates, amountRwf,
+        paymentMethod, reference, adminStaffId: user.userId, adminStaffName: user.username || user.userId,
+        timestamp: now.toISOString(),
+      };
+      await client.query(
+        `INSERT INTO ledger_entries (id, restaurant_code, customer_id, type, plates_delta, amount_rwf, idempotency_key, timestamp, data)
+         VALUES ($1, $2, $3, 'purchase', $4, $5, $6, $7, $8)`,
+        [ledgerId, restaurantCode, customerId, plates, amountRwf, idempotencyKey, now, JSON.stringify(ledgerEntry)]
+      );
+      await client.query(
+        'INSERT INTO payments (id, restaurant_code, customer_id, amount_rwf, data) VALUES ($1, $2, $3, $4, $5)',
+        [paymentId, restaurantCode, customerId, amountRwf, JSON.stringify(payment)]
+      );
+      await client.query('COMMIT');
+
+      if (Array.isArray(serverDbState?.ledgerEntries)) serverDbState.ledgerEntries.push(ledgerEntry);
+      if (Array.isArray(serverDbState?.payments)) serverDbState.payments.unshift(payment);
+      return res.json({ success: true, ledgerEntry, payment, idempotent: false });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error('[Atomic Top-up] Transaction failed:', error);
+      return res.status(503).json({ success: false, error: 'Top-up could not be committed. Retry with the same payment reference.' });
+    } finally {
+      client.release();
+    }
+  }
+);
+
 // POST /api/licenses/sign: Authoritative License Signer for Super Admin (Finding 1)
 app.post(
   '/api/licenses/sign',
@@ -2386,9 +2491,10 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
           .map((l: any) => l.idempotencyKey)
       );
 
-      const incomingLedgers = (fullState.ledgerEntries || []).filter((l: any) => {
-        // Scanner and customer financial operations must use dedicated atomic endpoints.
-        // Admins retain controlled ledger posting for manually approved top-ups/adjustments.
+      const incomingLedgers = (fullState.ledgerEntries || []).filter((_l: any) => {
+        // Financial ledger entries are written only by transactional server endpoints.
+        return false;
+        /* legacy validation intentionally unreachable:
         if (user.role === 'stand_staff' || user.role === 'customer') return false;
         if (!l || !l.id || !l.customerId) return false;
         if (allowedRestoCode && l.restaurantCode !== allowedRestoCode) return false;
