@@ -317,11 +317,15 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `GET /api/state` | Authenticated | Returns role-scoped application state (`customer` receives only their own record & ledger). |
 | `POST /api/sync` | Authenticated | Syncs permitted non-financial operational state. Customer creation/identity changes and pending-approval writes are rejected until dedicated transactional endpoints are available; ledger, payments and scan events are server-authoritative. |
 | `GET /api/customer/subscription` | Authenticated | Checks student digital subscription status and entitlement (`500 RWF/month`). |
-| `POST /api/customer/subscription/checkout` | `customer` | Initiates an integer-safe `500 RWF` MTN MoMo / Airtel Money subscription payment. |
+| `POST /api/customer/subscription/checkout` | `customer` | Disabled with `503 PAYMENT_PROVIDER_NOT_CONFIGURED` until merchant onboarding, provider credentials, and callback verification are complete. No payment prompt is claimed or recorded. |
 | `POST /api/payments/mobile-money/callback` | Disabled (503) | Fails closed until provider-specific webhook authentication and server-to-server transaction verification are configured. No subscription is activated. |
 | `POST /api/upload/photo` | Authenticated | Uploads patron photos to AWS S3, DigitalOcean Spaces, Cloudflare R2, or local disk fallback. |
 
 ---
+
+
+
+Future customer dashboard Mobile Money subscription architecture, merchant registration/onboarding runbook, provider adapter contract, database requirements, and activation checklist: [`docs/architecture/mobile-money-subscription-integration.md`](docs/architecture/mobile-money-subscription-integration.md).
 
 ### Production workflow limitations (must be closed before launch)
 
