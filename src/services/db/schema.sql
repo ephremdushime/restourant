@@ -138,11 +138,13 @@ CREATE TABLE IF NOT EXISTS restaurant_admins (
     display_name VARCHAR(255) NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'active',
+    session_version INT NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_restaurant_admin_username UNIQUE (restaurant_code, username)
 );
 CREATE INDEX IF NOT EXISTS idx_restaurant_admins_status ON restaurant_admins (restaurant_code, status);
+ALTER TABLE restaurant_admins ADD COLUMN IF NOT EXISTS session_version INT NOT NULL DEFAULT 1;
 
 -- 12. Notifications & System Dispatch
 CREATE TABLE IF NOT EXISTS notifications (
