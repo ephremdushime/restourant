@@ -86,6 +86,9 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
         { id: 'a1', restaurantCode: 'RW01', details: 'Secret log RW01' },
         { id: 'a2', restaurantCode: 'RW02', details: 'Secret log RW02' },
       ],
+      stationUsers: [
+        { id: 'staff1', restaurantCode: 'RW01', username: 'cashier', passwordHash: 'secret_password_hash', pin: '12345678' },
+      ],
     };
 
     // 1. Customer scope: receives only their own customer record and ledger, pinHash redacted
@@ -121,6 +124,9 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     assert.ok(scopedAdmin.customers.every((c: any) => c.restaurantCode === 'RW01'));
     assert.equal(scopedAdmin.ledgerEntries.length, 2);
     assert.equal(scopedAdmin.auditLogs.length, 1);
+    assert.equal(scopedAdmin.stationUsers[0].passwordHash, undefined);
+    assert.equal(scopedAdmin.stationUsers[0].pin, undefined);
+    assert.equal(scopedAdmin.customers[0].idHash, undefined);
 
     // 3. Super Admin scope: receives full global multi-tenant state
     const superSession: UserSession = {
@@ -134,6 +140,8 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     const scopedSuper = scopeStateForUser(fullMockDbState, superSession);
     assert.equal(scopedSuper.restaurants.length, 2);
     assert.equal(scopedSuper.customers.length, 3);
+    assert.ok(scopedSuper.customers.every((customer: any) => customer.pinHash === undefined && customer.idHash === undefined));
+    assert.ok(scopedSuper.stationUsers.every((staff: any) => staff.passwordHash === undefined && staff.pin === undefined));
   });
 
   test('atomicSaveDb writes atomically and maintains backup (Finding 5)', () => {
