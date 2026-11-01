@@ -1986,9 +1986,19 @@ app.post('/api/approvals/registration', apiRateLimiter, requireAuth(['stand_staf
       await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Package price or plate count does not match server records.' });
     }
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['member-sequence:' + user.restaurantCode]);
-    const latest = await client.query("SELECT member_no FROM customers WHERE restaurant_code=$1 ORDER BY created_at DESC,id DESC LIMIT 1", [user.restaurantCode]);
-    const lastNo = Number.parseInt(String(latest.rows[0]?.member_no || '28490'), 10);
-    const memberNo = String(Math.max(28490, Number.isFinite(lastNo) ? lastNo : 28490) + 1);
+    // Timestamps are not a reliable sequence: multiple registrations can share
+    // the same millisecond and UUID ordering is unrelated to member-number order.
+    // The advisory lock above serializes writers; MAX numeric member_no prevents
+    // reuse even when created_at values tie or an older record is inserted later.
+    const latest = await client.query(
+      "SELECT COALESCE(MAX(member_no::numeric), 28490) AS last_no FROM customers WHERE restaurant_code=$1 AND member_no ~ '^[0-9]+$'",
+      [user.restaurantCode]
+    );
+    const lastNo = Number(latest.rows[0]?.last_no ?? 28490);
+    if (!Number.isSafeInteger(lastNo) || lastNo < 28490) {
+      throw new Error('Customer member-number sequence is invalid.');
+    }
+    const memberNo = String(lastNo + 1);
     const now = new Date().toISOString();
     const customerId = 'cust_' + crypto.randomUUID();
     const approvalId = 'appr_' + crypto.randomUUID();
