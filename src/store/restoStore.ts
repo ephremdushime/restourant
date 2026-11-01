@@ -3350,6 +3350,30 @@ export class RestoStore {
     }
   }
 
+  public async createPendingTopupAuthoritative(data: {
+    customerId: string; platesRequested: number; amountRwf: number; paymentMethod: string;
+    paymentReference: string; stationId: string; packageId?: string;
+  }): Promise<{ success: boolean; approval?: PendingApproval; error?: string }> {
+    if (!this.authToken) return { success: false, error: 'Staff session expired. Sign in again.' };
+    try {
+      const response = await fetch('/api/approvals/topup', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.authToken },
+        body: JSON.stringify(data),
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success || !result.approval) return { success: false, error: result?.error || 'Pending top-up was not committed.' };
+      if (result.customer) {
+        const i = this.state.customers.findIndex((x) => x.id === result.customer.id);
+        if (i >= 0) this.state.customers[i] = result.customer;
+      }
+      this.state.pendingApprovals.unshift(result.approval);
+      this.notify();
+      return { success: true, approval: result.approval };
+    } catch {
+      return { success: false, error: 'Connection interrupted. Check the approval queue before retrying with the same payment reference.' };
+    }
+  }
+
   public async approvePendingRequestAuthoritative(approvalId: string): Promise<{ success: boolean; customer?: Customer; approval?: PendingApproval; awaitingCoSign?: boolean; error?: string }> {
     if (!this.authToken) return { success: false, error: 'Manager session expired. Sign in again.' };
     try {
