@@ -1645,7 +1645,7 @@ app.post(
         const paymentId = priorData.paymentId;
         const paymentResult = await client.query('SELECT data FROM payments WHERE id = $1', [paymentId]);
         await client.query('COMMIT');
-        return res.json({ success: true, ledgerEntry: priorData.ledgerEntry, payment: paymentResult.rows[0]?.data, idempotent: true });
+        return res.json({ success: true, ledgerEntry: priorData, payment: paymentResult.rows[0]?.data, idempotent: true });
       }
 
       const customerResult = await client.query(
@@ -2508,7 +2508,6 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
 
       if (user.role === 'restaurant_admin' || user.role === 'super_admin') {
         // Payment records and subscription state are manager-controlled, never staff/customer sync data.
-        mergeScopedCollection('payments', false);
         mergeScopedCollection('packages', true);
         mergeScopedCollection('menuItems', true);
         mergeScopedCollection('branches', true);
