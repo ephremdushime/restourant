@@ -522,6 +522,23 @@ function requireAuth(allowedRoles?: string[]) {
       }
     }
 
+    if (process.env.NODE_ENV === 'production' && session.role === 'restaurant_admin') {
+      const pool = getPostgresPool();
+      if (!pool) return res.status(503).json({ success: false, error: 'Administrator identity service is unavailable.' });
+      try {
+        const admin = await pool.query(
+          "SELECT status FROM restaurant_admins WHERE id=$1 AND restaurant_code=$2 LIMIT 1",
+          [session.userId, session.restaurantCode]
+        );
+        if (admin.rows[0]?.status !== 'active') {
+          return res.status(401).json({ success: false, error: 'Administrator account is inactive or no longer exists.' });
+        }
+      } catch (error) {
+        console.error('[Administrator Session Validation] Database lookup failed:', error);
+        return res.status(503).json({ success: false, error: 'Administrator identity service is unavailable.' });
+      }
+    }
+
     if (session.role === 'stand_staff') {
       const staff = (serverDbState?.stationUsers || []).find((item: any) =>
         item.id === session.userId && item.restaurantCode === session.restaurantCode &&
@@ -619,7 +636,7 @@ app.get('/api/public/restaurants', apiRateLimiter, (_req, res) => {
 // ----------------------------------------------------
 
 // POST /api/auth/login
-app.post('/api/auth/login', authRateLimiter, (req, res) => {
+app.post('/api/auth/login', authRateLimiter, async (req, res) => {
   const { role, username, password, pin, restaurantCode, stationId } = req.body;
 
   if (!role) {
@@ -653,34 +670,62 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
     });
   }
 
-  // 2. Restaurant Admin / Boss Authentication
+  // 2. Tenant-scoped restaurant administrator authentication.
   if (role === 'restaurant_admin') {
-    if (!restaurantCode) {
-      return res.status(400).json({ success: false, error: 'Restaurant code is required' });
+    if (!restaurantCode || typeof username !== 'string' || !username.trim() || typeof password !== 'string') {
+      return res.status(400).json({ success: false, error: 'Restaurant code, username and password are required.' });
     }
-    const configuredBossPassword = process.env.RESTOPASS_BOSS_PASSWORD || process.env.BOSS_PASSWORD;
-    const validPassword = Boolean(configuredBossPassword && configuredBossPassword.length >= 16 && typeof password === 'string' && timingSafeCompare(password, configuredBossPassword));
-
+    const pool = getPostgresPool();
+    if (!pool) {
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(503).json({ success: false, error: 'Tenant administrator authentication requires PostgreSQL.' });
+      }
+      const legacyPassword = process.env.RESTOPASS_BOSS_PASSWORD || process.env.BOSS_PASSWORD || '';
+      if (!legacyPassword || legacyPassword.length < 16 || !timingSafeCompare(password, legacyPassword)) {
+        return res.status(401).json({ success: false, error: 'Invalid Restaurant Administrator credentials.' });
+      }
+      const legacyToken = createSessionToken({
+        userId: `dev_admin_${restaurantCode}`, username: username.trim(),
+        role: 'restaurant_admin', restaurantCode,
+      });
+      return res.json({ success: true, token: legacyToken, user: { role: 'restaurant_admin', username: username.trim(), restaurantCode } });
+    }
+    const adminResult = await pool.query(
+      `SELECT id, username, display_name, password_hash, status
+       FROM restaurant_admins WHERE restaurant_code=$1 AND username=$2 LIMIT 1`,
+      [restaurantCode, username.trim().toLowerCase()]
+    );
+    const admin = adminResult.rows[0];
+    let validPassword = false;
+    if (admin?.status === 'active' && typeof admin.password_hash === 'string' && admin.password_hash.startsWith('scrypt$')) {
+      try {
+        const parts = admin.password_hash.split('$');
+        if (parts.length === 6 && parts[1] === '16384' && parts[2] === '8' && parts[3] === '1') {
+          const salt = Buffer.from(parts[4], 'base64url');
+          const expected = Buffer.from(parts[5], 'base64url');
+          if (salt.length === 16 && expected.length === 32) {
+            const actual = crypto.scryptSync(password, salt, 32, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+            validPassword = crypto.timingSafeEqual(actual, expected);
+          }
+        }
+      } catch { validPassword = false; }
+    }
     if (!validPassword) {
-      return res.status(401).json({ success: false, error: 'Invalid Restaurant Administrator credentials' });
+      return res.status(401).json({ success: false, error: 'Invalid Restaurant Administrator credentials.' });
     }
-
     const currentResto = (serverDbState?.restaurants || []).find((r: any) => r.code === restaurantCode);
-    const safeBossUsername = (username || `admin_${restaurantCode}@example.local`).trim();
+    if (!currentResto || currentResto.status !== 'active') {
+      return res.status(403).json({ success: false, error: 'Restaurant account is inactive.' });
+    }
     const token = createSessionToken({
-      userId: `admin_${restaurantCode}`,
-      username: safeBossUsername,
-      role: 'restaurant_admin',
-      restaurantCode,
+      userId: admin.id, username: admin.username,
+      role: 'restaurant_admin', restaurantCode,
     });
     return res.json({
-      success: true,
-      token,
+      success: true, token,
       user: {
-        role: 'restaurant_admin',
-        username: safeBossUsername,
-        restaurantCode,
-        userLabel: `${currentResto?.name || restaurantCode} Boss Admin`,
+        role: 'restaurant_admin', username: admin.username,
+        restaurantCode, userLabel: admin.display_name || `${currentResto.name || restaurantCode} Administrator`,
       },
     });
   }
@@ -786,6 +831,96 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
   }
 
   return res.status(400).json({ success: false, error: 'Unsupported role' });
+});
+
+// Super-admin-only tenant administrator provisioning and lifecycle management.
+app.get('/api/admin/restaurant-admins', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
+  const restaurantCode = typeof req.query.restaurantCode === 'string' ? req.query.restaurantCode : '';
+  if (!restaurantCode) return res.status(400).json({ success: false, error: 'restaurantCode is required.' });
+  const pool = getPostgresPool();
+  if (!pool) return res.status(503).json({ success: false, error: 'PostgreSQL is required for administrator management.' });
+  try {
+    const result = await pool.query(
+      'SELECT id, restaurant_code, username, display_name, status, created_at FROM restaurant_admins WHERE restaurant_code=$1 ORDER BY created_at ASC',
+      [restaurantCode]
+    );
+    return res.json({ success: true, administrators: result.rows });
+  } catch (error) {
+    console.error('[Restaurant Admin List] Failed:', error);
+    return res.status(503).json({ success: false, error: 'Could not retrieve tenant administrators.' });
+  }
+});
+
+app.post('/api/admin/restaurant-admins', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
+  const restaurantCode = typeof req.body?.restaurantCode === 'string' ? req.body.restaurantCode.trim() : '';
+  const username = typeof req.body?.username === 'string' ? req.body.username.trim().toLowerCase() : '';
+  const displayName = typeof req.body?.displayName === 'string' ? req.body.displayName.trim() : '';
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  if (!/^[A-Z0-9_-]{2,32}$/.test(restaurantCode) ||
+      !/^[a-zA-Z0-9._-]{3,64}$/.test(username) ||
+      displayName.length < 2 || displayName.length > 120 ||
+      password.length < 16 || password.length > 128) {
+    return res.status(400).json({ success: false, error: 'Provide a valid restaurant code, username, display name and password of 16–128 characters.' });
+  }
+  const pool = getPostgresPool();
+  if (!pool) return res.status(503).json({ success: false, error: 'PostgreSQL is required for administrator provisioning.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const restaurant = await client.query('SELECT code FROM restaurants WHERE code=$1 FOR UPDATE', [restaurantCode]);
+    if (!restaurant.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Restaurant not found.' });
+    }
+    const id = 'ra_' + crypto.randomUUID();
+    const passwordHash = hashServerStaffSecret(password);
+    const inserted = await client.query(
+      'INSERT INTO restaurant_admins (id,restaurant_code,username,display_name,password_hash,status) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id,restaurant_code,username,display_name,status,created_at',
+      [id, restaurantCode, username, displayName, passwordHash, 'active']
+    );
+    await client.query(
+      'INSERT INTO audit_logs (id,restaurant_code,user_id,action,data) VALUES ($1,$2,$3,$4,$5)',
+      ['audit_' + crypto.randomUUID(), restaurantCode, req.user!.userId, 'TENANT_ADMIN_CREATED', JSON.stringify({ administratorId: id, username })]
+    );
+    await client.query('COMMIT');
+    return res.status(201).json({ success: true, administrator: inserted.rows[0] });
+  } catch (error: any) {
+    await client.query('ROLLBACK');
+    if (error?.code === '23505') return res.status(409).json({ success: false, error: 'That username is already registered for this restaurant.' });
+    console.error('[Restaurant Admin Provisioning] Failed:', error);
+    return res.status(503).json({ success: false, error: 'Administrator account could not be provisioned.' });
+  } finally {
+    client.release();
+  }
+});
+
+app.patch('/api/admin/restaurant-admins/:id', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
+  const id = String(req.params.id || '');
+  const status = req.body?.status;
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  if (!id || (status !== undefined && !['active', 'blocked'].includes(status)) ||
+      (password && (password.length < 16 || password.length > 128)) ||
+      (status === undefined && !password)) {
+    return res.status(400).json({ success: false, error: 'Provide status active/blocked and/or a new password of at least 16 characters.' });
+  }
+  const pool = getPostgresPool();
+  if (!pool) return res.status(503).json({ success: false, error: 'PostgreSQL is required for administrator management.' });
+  const passwordHash = password ? hashServerStaffSecret(password) : null;
+  try {
+    const result = await pool.query(
+      'UPDATE restaurant_admins SET status=COALESCE($2,status), password_hash=COALESCE($3,password_hash), updated_at=NOW() WHERE id=$1 RETURNING id,restaurant_code,username,display_name,status',
+      [id, status || null, passwordHash]
+    );
+    if (!result.rows[0]) return res.status(404).json({ success: false, error: 'Administrator account not found.' });
+    await pool.query(
+      'INSERT INTO audit_logs (id,restaurant_code,user_id,action,data) VALUES ($1,$2,$3,$4,$5)',
+      ['audit_' + crypto.randomUUID(), result.rows[0].restaurant_code, req.user!.userId, 'TENANT_ADMIN_UPDATED', JSON.stringify({ administratorId: id, status: status || 'unchanged', passwordReset: Boolean(password) })]
+    );
+    return res.json({ success: true, administrator: result.rows[0] });
+  } catch (error) {
+    console.error('[Restaurant Admin Update] Failed:', error);
+    return res.status(503).json({ success: false, error: 'Administrator account could not be updated.' });
+  }
 });
 
 // GET /api/auth/session: Verify current session token
@@ -3165,7 +3300,7 @@ async function startServer() {
   if (isProduction) {
     const requiredCredentials = [
       ['RESTOPASS_SUPERADMIN_PASSWORD', process.env.RESTOPASS_SUPERADMIN_PASSWORD],
-      ['RESTOPASS_BOSS_PASSWORD', process.env.RESTOPASS_BOSS_PASSWORD || process.env.BOSS_PASSWORD],
+
 
     ] as const;
     for (const [name, value] of requiredCredentials) {
