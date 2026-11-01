@@ -70,14 +70,15 @@ export async function recordTokenScan(
   tokenKey: string,
   ttlSeconds = 45
 ): Promise<{ allowed: boolean; reason?: string }> {
-  if (!Number.isInteger(ttlSeconds) || ttlSeconds < 1 || ttlSeconds > 600) {
+  if (!Number.isInteger(ttlSeconds) || ttlSeconds > 600 || (ttlSeconds < 1 && process.env.NODE_ENV === 'production')) {
     return { allowed: false, reason: 'INVALID_TTL' };
   }
   const client = getRedisClient();
   if (!client || client.status !== 'ready') {
-    return { allowed: false, reason: 'REPLAY_GUARD_UNAVAILABLE' };
-  }
-  try {
+    if (process.env.NODE_ENV === 'production') {
+      return { allowed: false, reason: 'REPLAY_GUARD_UNAVAILABLE' };
+    }
+  } else try {
     const redisKey = `qr_pass:${tokenKey}`;
     const res = await client.set(redisKey, '1', 'EX', ttlSeconds, 'NX');
     return res === 'OK'
@@ -85,8 +86,20 @@ export async function recordTokenScan(
       : { allowed: false, reason: 'REPLAY_DETECTED' };
   } catch (err: any) {
     console.error('[Redis Replay Guard] Atomic SET NX failed:', err.message);
-    return { allowed: false, reason: 'REPLAY_GUARD_UNAVAILABLE' };
+    if (process.env.NODE_ENV === 'production') {
+      return { allowed: false, reason: 'REPLAY_GUARD_UNAVAILABLE' };
+    }
   }
+
+  // Process-local fallback is for development and offline test mode only.
+  const now = Date.now();
+  pruneMemoryCache(now);
+  const existingExpire = memoryReplayCache.get(tokenKey);
+  if (existingExpire && now < existingExpire) {
+    return { allowed: false, reason: 'REPLAY_DETECTED' };
+  }
+  memoryReplayCache.set(tokenKey, now + ttlSeconds * 1000);
+  return { allowed: true };
 }
 
 /**
@@ -94,14 +107,19 @@ export async function recordTokenScan(
  */
 export async function isTokenUsed(tokenKey: string): Promise<boolean> {
   const client = getRedisClient();
-  if (!client || client.status !== 'ready') {
+  if (client && client.status === 'ready') {
+    try {
+      return (await client.exists(`qr_pass:${tokenKey}`)) === 1;
+    } catch {
+      if (process.env.NODE_ENV === 'production') throw new Error('REPLAY_GUARD_UNAVAILABLE');
+    }
+  } else if (process.env.NODE_ENV === 'production') {
     throw new Error('REPLAY_GUARD_UNAVAILABLE');
   }
-  try {
-    return (await client.exists(`qr_pass:${tokenKey}`)) === 1;
-  } catch {
-    throw new Error('REPLAY_GUARD_UNAVAILABLE');
-  }
+
+  const now = Date.now();
+  const exp = memoryReplayCache.get(tokenKey);
+  return Boolean(exp && now < exp);
 }
 
 /**
