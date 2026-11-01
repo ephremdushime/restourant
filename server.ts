@@ -2406,8 +2406,6 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
 
       // 4. Merge notifications & operational collections with role guards
       mergeScopedCollection('notifications', true);
-      mergeScopedCollection('transfers', false);
-      mergeScopedCollection('auditLogs', false);
       if (user.role === 'restaurant_admin' || user.role === 'super_admin') {
         mergeScopedCollection('customerSubscriptions', true);
         mergeScopedCollection('studentSubscriptionPayments', true);
