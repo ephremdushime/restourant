@@ -5,14 +5,6 @@ import { translations } from '../../services/i18n';
 import { sound } from '../../services/audioService';
 import { StudentSelfRegistrationView } from '../customer/StudentSelfRegistrationView';
 import {
-  verifyPinSecure,
-  verifyPasswordSecure,
-  getCustomerPinSalt,
-  getStationUserSalt,
-  getBossPasswordSalt,
-  getSuperAdminSalt,
-} from '../../services/cryptoService';
-import {
   Shield,
   ShieldCheck,
   Lock,
