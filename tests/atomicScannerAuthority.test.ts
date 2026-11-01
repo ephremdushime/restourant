@@ -91,8 +91,8 @@ describe('Cloud-authoritative scanner regression guards', () => {
     assert.match(server, /bossApprovedByUserId === user\.userId/);
     assert.match(server, /Number\(approval\.platesRequested\) > 120/);
     assert.match(server, /commitPendingApproval/);
-    assert.match(server, /'approval:' \\+ approval\.id \\+ ':purchase'/);
-    assert.match(server, /'approval:' \\+ approval\.id \\+ ':grace'/);
+    assert.match(server, /'approval:' \+ approval\.id \+ ':purchase'/);
+    assert.match(server, /'approval:' \+ approval\.id \+ ':grace'/);
     assert.match(server, /INSERT INTO payments/);
     assert.match(server, /APPROVAL_ENTITLEMENT_COMMITTED/);
     assert.match(store, /approvePendingRequestAuthoritative/);
