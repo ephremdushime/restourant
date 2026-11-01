@@ -10,7 +10,7 @@ import {
   insertLedgerEntryPostgres,
   getPostgresPool,
 } from './src/services/db/postgresAdapter';
-import { recordTokenScan, isRedisConfigured } from './src/services/cache/redisClient';
+import { isRedisConfigured } from './src/services/cache/redisClient';
 import { uploadBase64Photo } from './src/services/storage/objectStorage';
 
 const app = express();
@@ -1157,7 +1157,7 @@ app.post(
   apiRateLimiter,
   requireAuth(['stand_staff', 'restaurant_admin', 'super_admin']),
   async (req, res) => {
-    const { payload, restaurantCode, stationId } = req.body;
+    const { payload, restaurantCode } = req.body;
     const user = req.user!;
 
     if (!payload || typeof payload !== 'string') {
@@ -1273,42 +1273,8 @@ app.post(
         });
       }
 
-      // Distributed Replay Protection (Redis cluster with atomic SETNX & memory/DB fallback)
-      const tokenKey = `${custKey}:${scannedStep}`;
-      const replayCheck = await recordTokenScan(tokenKey, 45);
-      if (!replayCheck.allowed) {
-        return res.json({
-          success: true,
-          valid: false,
-          error: 'Token already used (screenshot replay detected across terminals)',
-        });
-      }
-
-      // Shared Persistent Replay Protection across all stations & server restarts
-      if (!serverDbState.usedTokens) serverDbState.usedTokens = [];
-      const alreadyUsed = serverDbState.usedTokens.some((t: any) => t.tokenKey === tokenKey);
-
-      if (alreadyUsed) {
-        return res.json({
-          success: true,
-          valid: false,
-          error: 'Token already used (screenshot replay detected across terminals)',
-        });
-      }
-
-      // Atomically mark token as used
-      serverDbState.usedTokens.push({
-        tokenKey,
-        usedAt: Date.now(),
-        stationId: stationId || user.stationId || 'stand_pos',
-        memberNo,
-      });
-
-      // Bounded purge of used tokens older than 15 minutes
-      const cutoff = Date.now() - 15 * 60 * 1000;
-      serverDbState.usedTokens = serverDbState.usedTokens.filter((t: any) => t.usedAt > cutoff);
-
-      await queueDbSave(serverDbState);
+      // Verification is deliberately read-only. The consume endpoint records the token
+      // in the same PostgreSQL transaction as the meal deduction.
 
       return res.json({
         success: true,
