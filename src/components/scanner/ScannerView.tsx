@@ -45,6 +45,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const [inputPayload, setInputPayload] = useState('');
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanPending, setScanPending] = useState(false);
+  const scanPendingRef = useRef(false);
   const [activeScan, setActiveScan] = useState<{
     outcome?: 'ACCEPTED' | 'REJECTED';
     message?: string;
@@ -248,11 +249,12 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
   const handleExecuteScan = async (payload: string) => {
     const cleanPayload = payload.trim();
-    if (!cleanPayload || scanPending) return;
+    if (!cleanPayload || scanPendingRef.current) return;
     setScanError(null);
     sound.unlockAudio().then((ok) => {
       if (ok) setAudioUnlocked(true);
     });
+    scanPendingRef.current = true;
     setScanPending(true);
     try {
       if (isDemoMode) {
@@ -281,6 +283,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
       }
       setInputPayload('');
     } finally {
+      scanPendingRef.current = false;
       setScanPending(false);
     }
   };
