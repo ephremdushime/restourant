@@ -82,6 +82,15 @@ describe('Cloud-authoritative scanner regression guards', () => {
     assert.match(readRepoFile('src/components/restaurant/RestaurantAdminView.tsx'), /registerProvisionalCustomerAuthoritative/);
   });
 
+  test('existing-customer provisional top-ups use a server transaction and preserve grace counters', () => {
+    assert.match(server, /app\.post\('\/api\/approvals\/topup'/);
+    assert.match(server, /SELECT data,card_status FROM customers WHERE id=\$1 AND restaurant_code=\$2 FOR UPDATE/);
+    assert.match(server, /SELECT data FROM pending_approvals WHERE customer_id=\$1 AND status='pending'[\s\S]*?FOR UPDATE/);
+    assert.match(server, /customer\.gracePlatesConsumed = Math\.max\(Number\(customer\.gracePlatesConsumed \|\| 0\), pendingGrace\)/);
+    assert.match(store, /createPendingTopupAuthoritative/);
+    assert.match(readRepoFile('src/components/restaurant/RestaurantAdminView.tsx'), /createPendingTopupAuthoritative/);
+  });
+
   test('boss approval, high-value independent co-sign and rejection are transactional', () => {
     assert.match(server, /app\.post\('\/api\/approvals\/:approvalId\/approve'/);
     assert.match(server, /app\.post\('\/api\/approvals\/:approvalId\/cosign'/);
