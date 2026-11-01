@@ -130,6 +130,20 @@ CREATE TABLE IF NOT EXISTS station_users (
     CONSTRAINT uq_resto_username UNIQUE (restaurant_code, username)
 );
 
+-- 11a. Individually provisioned tenant administrators (no shared boss password).
+CREATE TABLE IF NOT EXISTS restaurant_admins (
+    id VARCHAR(64) PRIMARY KEY,
+    restaurant_code VARCHAR(32) NOT NULL REFERENCES restaurants(code) ON DELETE CASCADE,
+    username VARCHAR(128) NOT NULL,
+    display_name VARCHAR(255) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_restaurant_admin_username UNIQUE (restaurant_code, username)
+);
+CREATE INDEX IF NOT EXISTS idx_restaurant_admins_status ON restaurant_admins (restaurant_code, status);
+
 -- 12. Notifications & System Dispatch
 CREATE TABLE IF NOT EXISTS notifications (
     id VARCHAR(64) PRIMARY KEY,
