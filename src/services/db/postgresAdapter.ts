@@ -59,16 +59,11 @@ export async function initPostgres(initialStateToMigrate?: any): Promise<boolean
   }
 
   try {
-    const schemaPath = path.resolve(__dirname, 'schema.sql');
+    // Resolve from the application root so ESM/tsx runtimes do not depend on CommonJS __dirname.
+    const schemaPath = path.resolve(process.cwd(), 'src/services/db/schema.sql');
     let ddl = '';
     if (fs.existsSync(schemaPath)) {
       ddl = fs.readFileSync(schemaPath, 'utf-8');
-    } else {
-      // Fallback relative to project root
-      const fallbackPath = path.resolve(process.cwd(), 'src/services/db/schema.sql');
-      if (fs.existsSync(fallbackPath)) {
-        ddl = fs.readFileSync(fallbackPath, 'utf-8');
-      }
     }
 
     if (ddl) {
