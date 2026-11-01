@@ -3275,6 +3275,36 @@ export class RestoStore {
     return created;
   }
 
+  public async topUpCustomerAuthoritative(data: {
+    customerId: string;
+    plates: number;
+    amountRwf: number;
+    paymentMethod: PaymentRecord['paymentMethod'];
+    reference: string;
+    packageId?: string;
+  }): Promise<{ success: boolean; error?: string }> {
+    if (!this.authToken) return { success: false, error: 'Manager session expired. Sign in again.' };
+    try {
+      const response = await fetch('/api/topups/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.authToken}` },
+        body: JSON.stringify(data),
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success || !result?.ledgerEntry || !result?.payment) {
+        return { success: false, error: result?.error || 'The server did not confirm this top-up.' };
+      }
+      this.appendLedgerEntry(result.ledgerEntry as LedgerEntry);
+      const payment = result.payment as PaymentRecord;
+      if (!this.state.payments.some((item) => item.id === payment.id)) this.state.payments.unshift(payment);
+      this.scheduleSaveState();
+      this.notify();
+      return { success: true };
+    } catch {
+      return { success: false, error: 'Connection interrupted. Check the customer balance before retrying with the same payment reference.' };
+    }
+  }
+
   /**
    * Top-Up customer plates
    */
