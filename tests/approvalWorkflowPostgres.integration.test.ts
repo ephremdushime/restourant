@@ -72,8 +72,12 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
         "UPDATE pending_approvals SET data=jsonb_set(data,'{gracePlatesConsumed}','2'::jsonb) WHERE id=$1",
         [approvalId]
       );
-      const approved = await post('/api/approvals/' + approvalId + '/approve', bossToken, {});
-      assert.equal(approved.status, 200);
+      const attempts = await Promise.all([
+        post('/api/approvals/' + approvalId + '/approve', bossToken, {}),
+        post('/api/approvals/' + approvalId + '/approve', bossToken, {}),
+      ]);
+      assert.deepEqual(attempts.map((x) => x.status).sort(), [200, 409]);
+      const approved = attempts.find((x) => x.status === 200)!;
       assert.equal(approved.body.success, true);
       assert.equal(approved.body.ledgerEntries.length, 2);
       assert.equal(approved.body.ledgerEntries[0].platesDelta, 60);
@@ -84,8 +88,6 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       );
       assert.equal(Number(counts.rows[0].ledger_count), 2);
       assert.equal(Number(counts.rows[0].payment_count), 1);
-      const retry = await post('/api/approvals/' + approvalId + '/approve', bossToken, {});
-      assert.equal(retry.status, 409);
     });
 
     await t.test('high-value approval cannot credit before a different principal co-signs', async () => {
@@ -112,14 +114,21 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       const approved = await post('/api/approvals/' + created.body.approval.id + '/approve', bossToken, {});
       assert.equal(approved.status, 200);
       const customerId = created.body.customer.id;
+      await pool!.query("UPDATE customers SET data=jsonb_set(jsonb_set(data,'{hasCustomPin}','true'::jsonb),'{activationStatus}','\\"active\\"'::jsonb) WHERE id=$1", [customerId]);
       const pending = await post('/api/approvals/topup', bossToken, {
         customerId, platesRequested: 25, amountRwf: 25000, paymentMethod: 'cash',
         paymentReference: 'TOPUP-REF-C', stationId,
       });
       assert.equal(pending.status, 201);
       assert.equal(pending.body.approval.type, 'balance_topup');
-      const count = await pool!.query('SELECT COUNT(*)::int AS count FROM ledger_entries WHERE customer_id=$1', [customerId]);
-      assert.equal(count.rows[0].count, 1);
+      const before = await pool!.query('SELECT COUNT(*)::int AS count FROM ledger_entries WHERE customer_id=$1', [customerId]);
+      assert.equal(before.rows[0].count, 1);
+      await pool!.query("UPDATE pending_approvals SET data=jsonb_set(data,'{gracePlatesConsumed}','1'::jsonb) WHERE id=$1", [pending.body.approval.id]);
+      const committed = await post('/api/approvals/' + pending.body.approval.id + '/approve', bossToken, {});
+      assert.equal(committed.status, 200);
+      assert.equal(committed.body.ledgerEntries.length, 2);
+      const after = await pool!.query('SELECT data FROM customers WHERE id=$1', [customerId]);
+      assert.equal(after.rows[0].data.activationStatus, 'active');
     });
 
     await t.test('concurrent duplicate identity registration is serialized', async () => {
