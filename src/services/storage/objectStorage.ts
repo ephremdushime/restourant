@@ -6,7 +6,7 @@
  * guaranteeing offline reception laptop compatibility.
  */
 
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -153,6 +153,41 @@ export async function uploadPatronPhoto(
     storageType: 'local',
     sizeBytes: buffer.length,
   };
+}
+
+/**
+ * Retrieves a patron photo from private object storage.
+ * Keys are restricted to the generated patron-photos namespace.
+ */
+export async function downloadPatronPhoto(key: string): Promise<{ buffer: Buffer; contentType: string }> {
+  if (!/^patron-photos\/[A-Za-z0-9._-]{1,180}$/.test(key) || key.includes('..')) {
+    throw new Error('Invalid patron photo key');
+  }
+
+  const config = getObjectStorageConfig();
+  if (config) {
+    const s3 = getS3Client();
+    if (!s3) throw new Error('Private object storage is unavailable');
+    const result = await s3.send(new GetObjectCommand({ Bucket: config.bucket, Key: key }));
+    if (!result.Body) throw new Error('Photo object has no content');
+    const bytes = await result.Body.transformToByteArray();
+    return {
+      buffer: Buffer.from(bytes),
+      contentType: result.ContentType || 'application/octet-stream',
+    };
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('Private object storage is required in production');
+  }
+  const filename = key.slice('patron-photos/'.length);
+  const localPath = path.resolve(process.cwd(), 'public/uploads/patron-photos', filename);
+  const allowedRoot = path.resolve(process.cwd(), 'public/uploads/patron-photos') + path.sep;
+  if (!localPath.startsWith(allowedRoot)) throw new Error('Invalid patron photo path');
+  const buffer = fs.readFileSync(localPath);
+  const ext = path.extname(filename).toLowerCase();
+  const contentType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+  return { buffer, contentType };
 }
 
 /**
