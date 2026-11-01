@@ -10,6 +10,17 @@ set -eu
 
 BACKUP_INTERVAL_SECONDS="${BACKUP_INTERVAL_SECONDS:-86400}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
+if [ "${#RESTOPASS_BACKUP_ENCRYPTION_KEY}" -lt 32 ]; then
+  echo "[backup] encryption passphrase must contain at least 32 characters" >&2
+  exit 1
+fi
+case "$BACKUP_INTERVAL_SECONDS:$BACKUP_RETENTION_DAYS" in
+  *[!0-9:]*|:*|*:) echo "[backup] interval and retention must be positive integers" >&2; exit 1 ;;
+esac
+if [ "$BACKUP_INTERVAL_SECONDS" -lt 3600 ] || [ "$BACKUP_RETENTION_DAYS" -lt 1 ]; then
+  echo "[backup] interval must be at least 3600 seconds and retention at least 1 day" >&2
+  exit 1
+fi
 mkdir -p /backups /uploads
 
 echo "[backup] encrypted PostgreSQL and upload-volume backup worker started"
