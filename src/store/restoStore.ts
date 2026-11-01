@@ -3114,8 +3114,6 @@ export class RestoStore {
    * Register customer with live photo, student details, and strict duplicate check
    */
   public registerCustomer(data: {
-    if (this.authToken && !this.isDemoModeActive()) return { success: false, error: 'Customer registration requires the server-authoritative registration endpoint.' };
-
     restaurantCode: string;
     name: string;
     phone: string;
@@ -3131,6 +3129,7 @@ export class RestoStore {
     adminStaffId: string;
     adminStaffName: string;
   }): { success: boolean; customer?: Customer; error?: string; existingCustomer?: Customer } {
+    if (this.authToken && !this.isDemoModeActive()) return { success: false, error: 'Customer registration requires the server-authoritative registration endpoint.' };
     const phoneClean = data.phone.trim();
     const idHash = hashIdNumber(data.idType, data.idNumber);
 
@@ -3817,13 +3816,12 @@ export class RestoStore {
    * Requires PIN authentication
    */
   public transferPlates(data: {
-    if (this.authToken && !this.isDemoModeActive()) return { success: false, error: 'Plate transfers are disabled until the server-authoritative transfer endpoint is deployed.' };
-
     senderCustomerId: string;
     recipientIdentifier: string; // member number or phone
     plates: number;
     pin: string;
   }): { success: boolean; error?: string; requiresSubscription?: boolean } {
+    if (this.authToken && !this.isDemoModeActive()) return { success: false, error: 'Plate transfers are disabled until the server-authoritative transfer endpoint is deployed.' };
     const sender = this.state.customers.find((c) => c.id === data.senderCustomerId);
     if (!sender) return { success: false, error: 'Sender account not found' };
 
@@ -5614,8 +5612,6 @@ export class RestoStore {
    */
   public registerProvisionalCustomer(
     data: {
-    if (this.authToken && !this.isDemoModeActive()) throw new Error('Provisional registration is disabled until the server-authoritative approval endpoint is deployed. No customer was registered.');
-
       restaurantCode: string;
       branchId?: string;
       branchName?: string;
@@ -5638,6 +5634,7 @@ export class RestoStore {
     },
     staffName = 'Reception Desk'
   ): { customer: Customer; approval: PendingApproval } {
+    if (this.authToken && !this.isDemoModeActive()) throw new Error('Provisional registration is disabled until the server-authoritative approval endpoint is deployed. No customer was registered.');
     const now = new Date().toISOString();
     const restaurantCode = data.restaurantCode || this.state.currentRestaurantCode;
 
@@ -5887,9 +5884,8 @@ export class RestoStore {
   public approvePendingRequest(
     approvalId: string,
     bossName = 'Restaurant Boss'
-  ): {
+  ): { success: boolean; customer?: Customer; error?: string } {
     if (this.authToken && !this.isDemoModeActive()) return { success: false, error: 'Approval requires the server-authoritative PostgreSQL approval workflow. No balance or account status was changed.' };
- success: boolean; customer?: Customer; error?: string } {
     if (!this.state.pendingApprovals) return { success: false, error: 'No approvals found' };
     const approval = this.state.pendingApprovals.find((a) => a.id === approvalId);
     if (!approval) return { success: false, error: 'Approval request not found' };
@@ -6109,9 +6105,8 @@ export class RestoStore {
   public coSignPendingRequest(
     approvalId: string,
     superAdminName = 'Ephrem (Founder & Super Admin)'
-  ): {
+  ): { success: boolean; customer?: Customer; error?: string } {
     if (this.authToken && !this.isDemoModeActive()) return { success: false, error: 'Dual authorization requires the server-authoritative PostgreSQL co-sign endpoint. No approval was committed.' };
- success: boolean; customer?: Customer; error?: string } {
     if (!this.state.pendingApprovals) return { success: false, error: 'No approvals found' };
     const approval = this.state.pendingApprovals.find((a) => a.id === approvalId);
     if (!approval) return { success: false, error: 'Approval request not found' };
@@ -6147,9 +6142,8 @@ export class RestoStore {
     approvalId: string,
     reason: string,
     bossName = 'Restaurant Boss'
-  ): {
+  ): { success: boolean; error?: string } {
     if (this.authToken && !this.isDemoModeActive()) return { success: false, error: 'Rejection requires the server-authoritative PostgreSQL approval workflow. No account status was changed.' };
- success: boolean; error?: string } {
     if (!this.state.pendingApprovals) return { success: false, error: 'No approvals found' };
     const approval = this.state.pendingApprovals.find((a) => a.id === approvalId);
     if (!approval) return { success: false, error: 'Approval request not found' };
