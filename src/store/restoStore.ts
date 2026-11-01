@@ -1729,22 +1729,12 @@ export class RestoStore {
       }
     }
 
-    // 5. Merge station accounts without hydrating credential material into the browser.
-    if (serverState.stationUsers && Array.isArray(serverState.stationUsers)) {
-      if (!this.state.stationUsers) this.state.stationUsers = [];
-      const currentStationUsers = new Map(this.state.stationUsers.map((user) => [user.id, user]));
-      for (const serverUser of serverState.stationUsers) {
-        const safeUser = { ...serverUser, passwordHash: '', pin: '' };
-        const existing = currentStationUsers.get(serverUser.id);
-        if (!existing) {
-          this.state.stationUsers.push(safeUser as any);
-          currentStationUsers.set(serverUser.id, safeUser as any);
-          hasChanges = true;
-        } else {
-          Object.assign(existing, safeUser);
-          hasChanges = true;
-        }
-      }
+    // 5. Server state is authoritative for station accounts; credential fields stay blank in the browser.
+    if (Array.isArray(serverState.stationUsers)) {
+      this.state.stationUsers = serverState.stationUsers.map((serverUser: any) => ({
+        ...serverUser, passwordHash: '', pin: '',
+      }));
+      hasChanges = true;
     }
 
     // 6. Merge notifications
