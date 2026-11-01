@@ -482,8 +482,8 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
   };
 
   // Handle Top-Up Execution
-  const handleExecuteTopUp = () => {
-    if (!topUpCustomer) return;
+  const handleExecuteTopUp = async () => {
+    if (!topUpCustomer || topUpSubmitting) return;
     const currentRestoPackages = restoStore.getRestaurantPackages(state.currentRestaurantCode);
 
     let plates = 0;
@@ -503,17 +503,21 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
 
     if (plates <= 0 || amount <= 0) return;
 
-    restoStore.topUpCustomer({
-      restaurantCode: state.currentRestaurantCode,
+    setTopUpSubmitting(true);
+    const result = await restoStore.topUpCustomerAuthoritative({
       customerId: topUpCustomer.id,
       plates,
       amountRwf: amount,
       paymentMethod: topUpMethod,
       reference: topUpRef,
       packageId: packageIdToRecord,
-      adminStaffId: state.currentStaffId,
-      adminStaffName: 'Claire Mukamurenzi (Cashier)',
     });
+    setTopUpSubmitting(false);
+    if (!result.success) {
+      setActionToast(result.error || 'Top-up was not confirmed by the server.');
+      setTimeout(() => setActionToast(null), 5000);
+      return;
+    }
     setTopUpModalOpen(false);
     setIsCustomTopUp(false);
     setTopUpRef('MOMO-' + Math.floor(1000000 + Math.random() * 9000000));
@@ -4397,9 +4401,10 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
             <div className="pt-2">
               <button
                 onClick={handleExecuteTopUp}
+                disabled={topUpSubmitting}
                 className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-sm transition-colors cursor-pointer"
               >
-                Confirm Payment &amp; Credit Plates
+                {topUpSubmitting ? 'Confirming with server…' : 'Confirm Payment &amp; Credit Plates'}
               </button>
             </div>
           </div>
