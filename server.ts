@@ -2426,10 +2426,10 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
       }
 
       if (user.role !== 'customer') {
-        mergeScopedCollection('pendingApprovals', true);
+        mergeScopedCollection('pendingApprovals', user.role !== 'stand_staff');
         mergeScopedCollection('shifts', true);
-        mergeScopedCollection('activationRequests', true);
-        mergeScopedCollection('pinRecoveryRequests', true);
+        mergeScopedCollection('activationRequests', user.role !== 'stand_staff');
+        mergeScopedCollection('pinRecoveryRequests', user.role !== 'stand_staff');
       }
 
       if (user.role === 'restaurant_admin' || user.role === 'super_admin') {
