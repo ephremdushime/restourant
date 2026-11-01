@@ -2,7 +2,7 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
-import { isPostgresConfigured, getPostgresPool } from '../src/services/db/postgresAdapter';
+import { isPostgresConfigured, getPostgresPool, recordUsedTokenPostgres } from '../src/services/db/postgresAdapter';
 import {
   isRedisConfigured,
   recordTokenScan,
@@ -79,6 +79,28 @@ describe('Production Scalability & Cloud Infrastructure Verification (50,000 DAU
         } else {
           delete process.env.DATABASE_URL;
         }
+      }
+    });
+  });
+
+  describe('2. PostgreSQL replay protection failure behavior', () => {
+    it('fails closed in production when the durable replay store is not configured', async () => {
+      const originalNodeEnv = process.env.NODE_ENV;
+      const originalDatabaseUrl = process.env.DATABASE_URL;
+      const originalPostgresUrl = process.env.POSTGRES_URL;
+      process.env.NODE_ENV = 'production';
+      delete process.env.DATABASE_URL;
+      delete process.env.POSTGRES_URL;
+      try {
+        const result = await recordUsedTokenPostgres('test-token', 'test-station', 'test-member');
+        assert.deepEqual(result, { allowed: false });
+      } finally {
+        if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = originalNodeEnv;
+        if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+        else process.env.DATABASE_URL = originalDatabaseUrl;
+        if (originalPostgresUrl === undefined) delete process.env.POSTGRES_URL;
+        else process.env.POSTGRES_URL = originalPostgresUrl;
       }
     });
   });
