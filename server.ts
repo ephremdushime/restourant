@@ -562,6 +562,45 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+// Readiness is separate from liveness: production traffic is ready only when
+// both authoritative PostgreSQL and shared Redis security are reachable.
+app.get('/api/health/ready', async (_req, res) => {
+  const production = process.env.NODE_ENV === 'production';
+  const checks: Record<string, string> = { database: 'not_configured', redis: 'not_configured' };
+
+  if (isPostgresConfigured()) {
+    try {
+      const pool = getPostgresPool();
+      if (!pool) throw new Error('PostgreSQL pool unavailable');
+      await pool.query('SELECT 1');
+      checks.database = 'ok';
+    } catch {
+      checks.database = 'unavailable';
+    }
+  }
+
+  if (isRedisConfigured()) {
+    try {
+      const redis = getRedisClient();
+      if (!redis || redis.status !== 'ready' || await redis.ping() !== 'PONG') {
+        throw new Error('Redis unavailable');
+      }
+      checks.redis = 'ok';
+    } catch {
+      checks.redis = 'unavailable';
+    }
+  }
+
+  const ready = !production || (checks.database === 'ok' && checks.redis === 'ok');
+  res.setHeader('Cache-Control', 'no-store');
+  return res.status(ready ? 200 : 503).json({
+    status: ready ? 'ready' : 'not_ready',
+    checks,
+    uptimeSeconds: Math.floor(process.uptime()),
+    serverTime: new Date().toISOString(),
+  });
+});
+
 // Safe public restaurants endpoint for initial portal dropdown (No sensitive customer/financial data)
 app.get('/api/public/restaurants', apiRateLimiter, (_req, res) => {
   const restaurants = serverDbState?.restaurants || [];
