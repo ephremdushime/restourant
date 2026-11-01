@@ -1456,9 +1456,47 @@ app.post(
         [customerRow.id, cutoff]
       );
       const balanceBefore = Math.max(0, baseBalance + Number(ledger.rows[0]?.delta || 0));
+      let isGraceMeal = false;
+      let gracePlateNumber: number | undefined;
+      let pendingApprovalRows: any[] = [];
       if (balanceBefore < 1) {
-        await client.query('ROLLBACK');
-        return res.status(409).json({ success: false, error: 'No approved meal balance. Grace-meal redemption is not enabled in this authoritative scanner yet.' });
+        const pendingResult = await client.query(
+          "SELECT id, data FROM pending_approvals WHERE customer_id = $1 AND restaurant_code = $2 AND status = 'pending' ORDER BY created_at ASC FOR UPDATE",
+          [customerRow.id, restaurantCode]
+        );
+        pendingApprovalRows = pendingResult.rows;
+        const totalGraceConsumed = pendingApprovalRows.reduce(
+          (sum: number, row: any) => sum + Number(row.data?.gracePlatesConsumed || 0), 0
+        );
+        const effectiveGraceConsumed = Math.max(
+          totalGraceConsumed,
+          customer.provisionalStatus === 'pending_approval' ? Number(customer.gracePlatesConsumed || 0) : 0
+        );
+        const hasPendingPayment = pendingApprovalRows.length > 0 || customer.provisionalStatus === 'pending_approval';
+        if (!hasPendingPayment || effectiveGraceConsumed >= 3) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ success: false, error: hasPendingPayment ? 'Grace meal limit reached (3/3). Await payment approval.' : 'No approved meal balance. Please top up or await payment approval.' });
+        }
+        const targetApproval = pendingApprovalRows.find((row: any) =>
+          Number(row.data?.gracePlatesConsumed || 0) < Number(row.data?.gracePlatesAllowed || 3)
+        );
+        if (targetApproval) {
+          const updatedApproval = {
+            ...targetApproval.data,
+            gracePlatesConsumed: Number(targetApproval.data?.gracePlatesConsumed || 0) + 1,
+          };
+          await client.query('UPDATE pending_approvals SET data = $2, updated_at = NOW() WHERE id = $1', [
+            targetApproval.id, JSON.stringify(updatedApproval),
+          ]);
+          targetApproval.data = updatedApproval;
+        }
+        isGraceMeal = true;
+        gracePlateNumber = effectiveGraceConsumed + 1;
+        customer.gracePlatesConsumed = gracePlateNumber;
+        customer.gracePlatesRemaining = Math.max(0, 3 - gracePlateNumber);
+        await client.query('UPDATE customers SET data = $2, updated_at = NOW() WHERE id = $1', [
+          customerRow.id, JSON.stringify(customer),
+        ]);
       }
 
       const restaurant = (serverDbState?.restaurants || []).find((r: any) => r.code === restaurantCode);
@@ -1488,7 +1526,7 @@ app.post(
       }
 
       const now = new Date();
-      const ledgerId = `led_${crypto.randomUUID()}`;
+      const ledgerId = isGraceMeal ? null : `led_${crypto.randomUUID()}`;
       const scanId = `scan_${crypto.randomUUID()}`;
       const ledgerEntry = {
         id: ledgerId, customerId: customerRow.id, restaurantCode, type: 'scan',
@@ -1503,20 +1541,23 @@ app.post(
         platesInWindow: platesInWindow + 1, platesDeducted: 1,
         photoCheckRequired: version === 'c1' || platesInWindow > 0,
         photoCheckReason: version === 'c1' ? 'physical_card' : (platesInWindow > 0 ? 'repeat_scan_in_window' : 'none'),
-        photoCheckResult: 'none', status: platesInWindow > 0 ? 'warning_confirmed' : 'approved',
-        isGracePlate: false,
+        photoCheckResult: 'none', status: (platesInWindow > 0 || isGraceMeal) ? 'warning_confirmed' : 'approved',
+        isGracePlate: isGraceMeal, gracePlateNumber,
+        overrideReason: isGraceMeal ? `Authorized grace meal (#${gracePlateNumber}/3). Awaiting manager payment approval.` : undefined,
       };
-      await client.query(
-        `INSERT INTO ledger_entries (id, restaurant_code, customer_id, type, plates_delta, idempotency_key, timestamp, data)
-         VALUES ($1, $2, $3, 'scan', -1, $4, $5, $6)`,
-        [ledgerId, restaurantCode, customerRow.id, ledgerEntry.idempotencyKey, now, JSON.stringify(ledgerEntry)]
-      );
+      if (!isGraceMeal) {
+        await client.query(
+          `INSERT INTO ledger_entries (id, restaurant_code, customer_id, type, plates_delta, idempotency_key, timestamp, data)
+           VALUES ($1, $2, $3, 'scan', -1, $4, $5, $6)`,
+          [ledgerId, restaurantCode, customerRow.id, ledgerEntry.idempotencyKey, now, JSON.stringify(ledgerEntry)]
+        );
+      }
       await client.query(
         `INSERT INTO scan_events (id, restaurant_code, customer_id, station_id, status, data, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [scanId, restaurantCode, customerRow.id, requestedStationId, event.status, JSON.stringify(event), now]
       );
-      const response = { success: true, accepted: true, scanEvent: event, ledgerEntry, balanceBefore, balanceAfter: balanceBefore - 1 };
+      const response = { success: true, accepted: true, scanEvent: event, ledgerEntry: isGraceMeal ? null : ledgerEntry, isGraceMeal, balanceBefore, balanceAfter: isGraceMeal ? 0 : balanceBefore - 1 };
       await client.query(
         'INSERT INTO scan_requests (idempotency_key, customer_id, restaurant_code, response, created_at) VALUES ($1, $2, $3, $4, $5)',
         [idempotencyKey, customerRow.id, restaurantCode, JSON.stringify(response), now]
@@ -1524,7 +1565,18 @@ app.post(
       await client.query('COMMIT');
 
       // Update process cache only after the durable transaction has committed.
-      if (Array.isArray(serverDbState?.ledgerEntries)) serverDbState.ledgerEntries.push(ledgerEntry);
+      if (!isGraceMeal && Array.isArray(serverDbState?.ledgerEntries)) serverDbState.ledgerEntries.push(ledgerEntry);
+      if (isGraceMeal) {
+        const cachedCustomer = (serverDbState?.customers || []).find((c: any) => c.id === customerRow.id);
+        if (cachedCustomer) {
+          cachedCustomer.gracePlatesConsumed = customer.gracePlatesConsumed;
+          cachedCustomer.gracePlatesRemaining = customer.gracePlatesRemaining;
+        }
+        for (const updated of pendingApprovalRows) {
+          const cachedApproval = (serverDbState?.pendingApprovals || []).find((a: any) => a.id === updated.id);
+          if (cachedApproval) cachedApproval.gracePlatesConsumed = updated.data.gracePlatesConsumed;
+        }
+      }
       if (Array.isArray(serverDbState?.scanEvents)) serverDbState.scanEvents.unshift(event);
       return res.json(response);
     } catch (error: any) {
