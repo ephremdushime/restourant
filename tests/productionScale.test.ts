@@ -15,6 +15,7 @@ import {
   getObjectStorageConfig,
   uploadPatronPhoto,
   uploadBase64Photo,
+  downloadPatronPhoto,
   resetS3Client,
 } from '../src/services/storage/objectStorage';
 import {
@@ -162,6 +163,14 @@ describe('Production Scalability & Cloud Infrastructure Verification (50,000 DAU
         assert.equal(uploadResult.storageType, 'local');
         assert.ok(uploadResult.url.startsWith('/uploads/patron-photos/test-patron-'));
         assert.equal(uploadResult.sizeBytes, sampleBuffer.length);
+        const retrieved = await downloadPatronPhoto(uploadResult.key);
+        assert.equal(retrieved.contentType, 'image/png');
+        assert.deepEqual(retrieved.buffer, sampleBuffer);
+
+        await assert.rejects(
+          () => uploadPatronPhoto(sampleBuffer, 'image/jpeg', 'mismatched-photo'),
+          /does not match its declared image format/
+        );
 
         // Verify the file was written to disk
         const localFilePath = path.resolve(process.cwd(), `public${uploadResult.url}`);
