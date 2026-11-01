@@ -2264,6 +2264,60 @@ export class RestoStore {
 
   private activeScanLocks: Set<string> = new Set();
 
+  private pendingAuthoritativeScanKeys = new Map<string, string>();
+
+  /**
+   * Redeem a meal through the cloud authority. The local balance is updated only
+   * after the server confirms its PostgreSQL transaction has committed.
+   */
+  public async processScanAuthoritative(payload: string): Promise<{
+    success: boolean;
+    scanEvent?: ScanEvent;
+    balanceAfter?: number;
+    error?: string;
+  }> {
+    if (!this.authToken) return { success: false, error: 'Scanner session expired. Sign in again.' };
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return { success: false, error: 'Cloud connection is unavailable. No meal was deducted; reconnect before scanning.' };
+    }
+    const stationId = this.state.currentStationId;
+    const retryKey = `${stationId}:${payload}`;
+    let idempotencyKey = this.pendingAuthoritativeScanKeys.get(retryKey);
+    if (!idempotencyKey) {
+      idempotencyKey = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `scan_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      this.pendingAuthoritativeScanKeys.set(retryKey, idempotencyKey);
+    }
+    try {
+      const response = await fetch('/api/scans/consume', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.authToken}`,
+        },
+        body: JSON.stringify({ payload, stationId, idempotencyKey }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success || !result?.scanEvent || !result?.ledgerEntry) {
+        return { success: false, error: result?.error || 'The server did not authorize this meal.' };
+      }
+
+      const event = result.scanEvent as ScanEvent;
+      const ledgerEntry = result.ledgerEntry as LedgerEntry;
+      this.pendingAuthoritativeScanKeys.delete(retryKey);
+      this.appendLedgerEntry(ledgerEntry);
+      if (!this.state.scanEvents.some((item) => item.id === event.id)) {
+        this.state.scanEvents.unshift(event);
+      }
+      this.notify();
+      return { success: true, scanEvent: event, balanceAfter: Number(result.balanceAfter) };
+    } catch {
+      // Keep the same idempotency key so a retry after a lost response cannot double-charge.
+      return { success: false, error: 'Connection interrupted. Retry the same scan; the server will safely deduplicate it.' };
+    }
+  }
+
   public processScan(payload: string): {
     outcome: 'ACCEPTED' | 'REJECTED';
     accepted: boolean;
