@@ -2890,6 +2890,8 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         mergeScopedCollection('packages', true);
         mergeScopedCollection('menuItems', true);
         mergeScopedCollection('branches', true);
+        // Station records must be merged before staff accounts are validated against them.
+        mergeScopedCollection('scanPoints', true);
         // Staff credentials are write-once through sync: new accounts are hashed here,
         // while existing credentials cannot be overwritten by a browser state payload.
         if (Array.isArray(fullState.stationUsers)) {
@@ -5363,8 +5365,6 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         mergeScopedCollection('packages', true);
         mergeScopedCollection('menuItems', true);
         mergeScopedCollection('branches', true);
-        mergeScopedCollection('stationUsers', true);
-        mergeScopedCollection('scanPoints', true);
         mergeScopedCollection('cashierSessions', true);
         mergeScopedCollection('expenses', true);
 
