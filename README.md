@@ -315,13 +315,20 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `POST /api/station/pair` | Public (Brute-force locked) | Pairs a scanner terminal using a valid `PAIR-XXXX` station key and opens a `CashierSession`. |
 | `POST /api/station/revoke` | `restaurant_admin`, `super_admin` | Remotely revokes a station's pairing and closes active cashier sessions. |
 | `GET /api/state` | Authenticated | Returns role-scoped application state (`customer` receives only their own record & ledger). |
-| `POST /api/sync` | Authenticated | Merges client outbox & state changes with strict role guards and ledger `idempotencyKey` deduplication. |
+| `POST /api/sync` | Authenticated | Syncs permitted non-financial operational state. Customer creation/identity changes and pending-approval writes are rejected until dedicated transactional endpoints are available; ledger, payments and scan events are server-authoritative. |
 | `GET /api/customer/subscription` | Authenticated | Checks student digital subscription status and entitlement (`500 RWF/month`). |
 | `POST /api/customer/subscription/checkout` | `customer` | Initiates an integer-safe `500 RWF` MTN MoMo / Airtel Money subscription payment. |
-| `POST /api/payments/mobile-money/callback` | Webhook | Processes Mobile Money provider callbacks idempotently and activates 30-day + 72h grace access. |
+| `POST /api/payments/mobile-money/callback` | Disabled (503) | Fails closed until provider-specific webhook authentication and server-to-server transaction verification are configured. No subscription is activated. |
 | `POST /api/upload/photo` | Authenticated | Uploads patron photos to AWS S3, DigitalOcean Spaces, Cloudflare R2, or local disk fallback. |
 
 ---
+
+### Production workflow limitations (must be closed before launch)
+
+- Browser sync cannot create or modify customer identity records or pending approvals. Attempts return `409 AUTHORITATIVE_WORKFLOW_REQUIRED`; client-side bootstrap is disabled. This intentionally prevents forged registrations, payment approvals, and customer identity changes from entering the authority database.
+- The approval UI must be migrated to dedicated PostgreSQL transactions before registration and recharge approvals can be used in production. Large top-ups require a genuine second, independent super-admin authorization.
+- Mobile Money subscription callbacks currently return `503` and never activate subscriptions. Provider-specific signature validation and server-to-server payment status verification are not yet implemented.
+- Production scanning requires live connectivity to the cloud authority. Offline scanning is not implemented and scans fail closed when the cloud cannot be reached.
 
 ## 12. Production Cloud Deployment & Dual-Path Failover Architecture (50,000 DAU)
 
