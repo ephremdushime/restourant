@@ -233,9 +233,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           restaurantCode: selectedRestoCode,
         });
 
-        const isValid = serverAuth.success || (password && password.length >= 6);
-
-        if (serverAuth.success || isValid) {
+        if (serverAuth.success) {
           setFailedAttempts(0);
           restoStore.setRestaurantCode(selectedRestoCode);
           restoStore.setRole('restaurant_admin');
@@ -272,25 +270,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           stationId: selectedStationId,
         });
 
-        const stationUsers = restoStore.getRestaurantStationUsers(selectedRestoCode);
-        const stationUser =
-          stationUsers.find(
-            (u) =>
-              u.username.toLowerCase() === username.toLowerCase().trim() ||
-              (selectedStationId && u.stationId === selectedStationId)
-          ) || stationUsers[0];
-
-        const stationSalt = getStationUserSalt(
-          stationUser?.id || selectedStationId || 'station_default',
-          stationUser?.username || username || 'stand_operator'
-        );
-        const expectedPin = stationUser?.pin || '1234';
-        const expectedPassword = stationUser?.passwordHash || 'EastHub#2026';
-
-        const isPinValid = await verifyPinSecure(entered, stationSalt, expectedPin);
-        const isPwdValid = await verifyPasswordSecure(entered, stationSalt, expectedPassword);
-
-        if (serverAuth.success || isPinValid || isPwdValid) {
+        if (serverAuth.success) {
           setFailedAttempts(0);
           restoStore.setRestaurantCode(selectedRestoCode);
           if (selectedStationId) restoStore.setStation(selectedStationId);
@@ -384,9 +364,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           password,
         });
 
-        const isValid = serverAuth.success || (password && password.length >= 8);
-
-        if (serverAuth.success || isValid) {
+        if (serverAuth.success) {
           setFailedAttempts(0);
           restoStore.setRole('super_admin');
           restoStore.logAudit({
