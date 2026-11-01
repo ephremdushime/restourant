@@ -114,7 +114,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       const approved = await post('/api/approvals/' + created.body.approval.id + '/approve', bossToken, {});
       assert.equal(approved.status, 200);
       const customerId = created.body.customer.id;
-      await pool!.query("UPDATE customers SET data=jsonb_set(jsonb_set(data,'{hasCustomPin}','true'::jsonb),'{activationStatus}','\\"active\\"'::jsonb) WHERE id=$1", [customerId]);
+      await pool!.query("UPDATE customers SET data=jsonb_set(jsonb_set(data,'{hasCustomPin}','true'::jsonb),'{activationStatus}',to_jsonb('active'::text)) WHERE id=$1", [customerId]);
       const pending = await post('/api/approvals/topup', bossToken, {
         customerId, platesRequested: 25, amountRwf: 25000, paymentMethod: 'cash',
         paymentReference: 'TOPUP-REF-C', stationId,
