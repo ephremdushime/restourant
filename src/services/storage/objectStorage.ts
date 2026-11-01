@@ -87,8 +87,9 @@ export async function uploadPatronPhoto(
     'image/webp': 'webp',
   };
   const ext = extMap[mimeType] || 'jpg';
+  const safeFilenameHint = String(filenameHint || 'patron').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) || 'patron';
   const randomSuffix = crypto.randomBytes(8).toString('hex');
-  const filename = `${filenameHint}-${Date.now()}-${randomSuffix}.${ext}`;
+  const filename = `${safeFilenameHint}-${Date.now()}-${randomSuffix}.${ext}`;
   const key = `patron-photos/${filename}`;
 
   const config = getObjectStorageConfig();
