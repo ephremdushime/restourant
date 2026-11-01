@@ -31,6 +31,10 @@ describe('Cloud-authoritative scanner regression guards', () => {
     assert.match(server, /await client\.query\('ROLLBACK'\)/);
     assert.match(schema, /CREATE TABLE IF NOT EXISTS scan_requests/);
     assert.match(schema, /idempotency_key VARCHAR\(128\) PRIMARY KEY/);
+    assert.match(schema, /request_hash VARCHAR\(64\)/);
+    assert.match(server, /requestFingerprint/);
+    assert.match(server, /prior\.rows\[0\]\.request_hash !== requestFingerprint/);
+    assert.match(server, /user\.role === 'stand_staff' && \(!user\.stationId \|\| user\.stationId !== requestedStationId\)/);
   });
 
   test('dynamic QR replay protection is database-unique and physical cards remain reusable', () => {
