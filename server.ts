@@ -1904,6 +1904,10 @@ app.post('/api/approvals/:approvalId/cosign', apiRateLimiter, requireAuth(['supe
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const initial = await client.query('SELECT customer_id FROM pending_approvals WHERE id=$1', [req.params.approvalId]);
+    if (!initial.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Approval not found.' }); }
+    const cr = await client.query('SELECT data FROM customers WHERE id=$1 FOR UPDATE', [initial.rows[0].customer_id]);
+    if (!cr.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Customer not found.' }); }
     const result = await client.query('SELECT data FROM pending_approvals WHERE id=$1 FOR UPDATE', [req.params.approvalId]);
     if (!result.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Approval not found.' }); }
     const approval = result.rows[0].data;
@@ -1914,8 +1918,6 @@ app.post('/api/approvals/:approvalId/cosign', apiRateLimiter, requireAuth(['supe
     if (approval.bossApprovedByUserId === user.userId) {
       await client.query('ROLLBACK'); return res.status(403).json({ success: false, error: 'Boss approver and co-signer must be different authenticated principals.' });
     }
-    const cr = await client.query('SELECT data FROM customers WHERE id=$1 FOR UPDATE', [approval.customerId]);
-    if (!cr.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Customer not found.' }); }
     approval.coSignStatus = 'co_signed';
     approval.coSignedAt = new Date().toISOString();
     approval.coSignedBySuperAdminUserId = user.userId;
@@ -1946,12 +1948,14 @@ app.post('/api/approvals/:approvalId/reject', apiRateLimiter, requireAuth(['rest
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const initial = await client.query('SELECT customer_id FROM pending_approvals WHERE id=$1 AND restaurant_code=$2', [req.params.approvalId, user.restaurantCode]);
+    if (!initial.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Approval not found.' }); }
+    const cr = await client.query('SELECT data FROM customers WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [initial.rows[0].customer_id, user.restaurantCode]);
+    if (!cr.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Customer not found.' }); }
     const result = await client.query('SELECT data FROM pending_approvals WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [req.params.approvalId, user.restaurantCode]);
     if (!result.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Approval not found.' }); }
     const approval = result.rows[0].data;
     if (approval.status !== 'pending') { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Approval is no longer pending.' }); }
-    const cr = await client.query('SELECT data FROM customers WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [approval.customerId, user.restaurantCode]);
-    if (!cr.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Customer not found.' }); }
     const customer = cr.rows[0].data;
     approval.status = 'rejected';
     approval.rejectionReason = reason;
