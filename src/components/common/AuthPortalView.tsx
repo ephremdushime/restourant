@@ -71,7 +71,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   const [selectedStationId, setSelectedStationId] = useState(state.currentStationId);
 
   // Form input fields
-  const [username, setUsername] = useState('boss@example.local');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [pin, setPin] = useState('');
   const [phoneOrMember, setPhoneOrMember] = useState(isDemoMode ? '28491' : '');
@@ -130,10 +130,10 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   useEffect(() => {
     setErrorMessage(null);
     if (activeRole === 'restaurant_admin') {
-      setUsername('boss@example.local');
+      setUsername('');
       setPassword('');
     } else if (activeRole === 'stand_staff') {
-      setUsername('eric.n');
+      setUsername('');
       setPin('');
       setPassword('');
       const branches = restoStore.getRestaurantBranches(selectedRestoCode);
@@ -377,6 +377,10 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   };
 
   const handleDemoFillAndSubmit = async (role: UserRole) => {
+    if (import.meta.env.PROD) {
+      setErrorMessage('Demo sign-in is disabled in production. Use your provisioned account.');
+      return;
+    }
     setActiveRole(role);
     onRoleSelect(role);
     setErrorMessage(null);
@@ -694,10 +698,13 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
                 <label className="font-semibold text-slate-300">{t.auth.pin}</label>
                 <input
                   type="password"
-                  maxLength={6}
+                  maxLength={12}
+                  minLength={8}
+                  pattern="[0-9]{8,12}"
+                  inputMode="numeric"
                   value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  placeholder="Enter 4-digit POS PIN..."
+                  onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
+                  placeholder="Enter 8–12 digit POS PIN..."
                   className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-white outline-hidden font-mono text-center tracking-widest text-base"
                 />
               </div>
@@ -916,7 +923,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
         </form>
 
         {/* 1-Click Demo Evaluation Shortcut Banner (Only shown when Demo Mode is explicitly ON) */}
-        {isDemoMode && (
+        {isDemoMode && !import.meta.env.PROD && (
           <div className="pt-4 border-t border-slate-800 space-y-3">
             <div className="flex items-center justify-between text-[11px] text-slate-400 font-semibold">
               <span className="flex items-center gap-1.5 text-amber-400">
