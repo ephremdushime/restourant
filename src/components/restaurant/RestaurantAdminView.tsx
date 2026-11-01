@@ -169,6 +169,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
 
   // Top-Up Modal State
   const [topUpModalOpen, setTopUpModalOpen] = useState(false);
+  const [topUpSubmitting, setTopUpSubmitting] = useState(false);
   const [topUpCustomer, setTopUpCustomer] = useState<Customer | null>(null);
   const [topUpPackageId, setTopUpPackageId] = useState('pkg_30');
   const [topUpMethod, setTopUpMethod] = useState<PaymentRecord['paymentMethod']>('mtn_momo');
