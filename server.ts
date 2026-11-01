@@ -8,7 +8,6 @@ import {
   loadStateFromPostgres,
   saveStateToPostgres,
   insertLedgerEntryPostgres,
-  getPostgresPool,
 } from './src/services/db/postgresAdapter';
 import { recordTokenScan, isRedisConfigured } from './src/services/cache/redisClient';
 import { uploadBase64Photo } from './src/services/storage/objectStorage';
