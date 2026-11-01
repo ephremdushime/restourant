@@ -10,7 +10,7 @@ import {
   insertLedgerEntryPostgres,
   getPostgresPool,
 } from './src/services/db/postgresAdapter';
-import { getRedisClient, isRedisConfigured } from './src/services/cache/redisClient';
+import { ensureRedisReady, getRedisClient, isRedisConfigured } from './src/services/cache/redisClient';
 import { uploadBase64Photo } from './src/services/storage/objectStorage';
 
 const app = express();
@@ -2570,7 +2570,8 @@ async function startServer() {
       const minimumLength = name === 'RESTOPASS_STAFF_DEFAULT_PIN' ? 8 : 16;
       if (!value || value.length < minimumLength) throw new Error(`[FATAL] ${name} must be configured with at least ${minimumLength} characters in production.`);
     }
-    if (!isRedisConfigured()) throw new Error('[FATAL] REDIS_URL is required in production for distributed QR replay protection.');
+    if (!isRedisConfigured()) throw new Error('[FATAL] REDIS_URL is required in production for distributed scanner rate limiting.');
+    if (!(await ensureRedisReady(10000))) throw new Error('[FATAL] Redis did not become ready; production startup is aborted so scanner protection cannot silently degrade.');
     if (!isPostgresConfigured()) throw new Error('[FATAL] DATABASE_URL is required in production. Refusing to start with local JSON persistence.');
   }
   if (isPostgresConfigured()) {
