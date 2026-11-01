@@ -45,6 +45,8 @@ describe('Cloud-authoritative scanner regression guards', () => {
     assert.match(server, /Full-state replacement is disabled/);
     assert.match(server, /if \(user\.role === 'stand_staff' \|\| user\.role === 'customer'\) return false/);
     assert.match(server, /Scan events are written only by server-side transactional scan endpoints/);
+    assert.doesNotMatch(server, /mergeScopedCollection\('transfers'/);
+    assert.doesNotMatch(server, /mergeScopedCollection\('auditLogs'/);
     assert.match(server, /mergeScopedCollection\('pendingApprovals', user\.role !== 'stand_staff'\)/);
   });
 
