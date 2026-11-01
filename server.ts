@@ -212,7 +212,7 @@ function atomicSaveDb(state: any): boolean {
   }
 }
 
-if (serverDbState) {
+if (serverDbState && process.env.NODE_ENV !== 'production') {
   atomicSaveDb(serverDbState);
 }
 
@@ -229,7 +229,7 @@ function queueDbSave(state: any): Promise<boolean> {
         if (isPostgresConfigured()) {
           pgOk = await saveStateToPostgres(state);
         }
-        const fileOk = atomicSaveDb(state);
+        const fileOk = isPostgresConfigured() ? true : atomicSaveDb(state);
         const ok = isPostgresConfigured() ? pgOk : fileOk;
         resolve(ok);
         return ok;
@@ -273,7 +273,7 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
   res.setHeader('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()');
   res.setHeader(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https: blob:; connect-src 'self' ws: wss:; object-src 'none'; frame-ancestors 'none';"
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https: blob:; connect-src 'self' ws: wss:; object-src 'none'; frame-ancestors 'none';"
   );
   if (process.env.NODE_ENV === 'production') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
