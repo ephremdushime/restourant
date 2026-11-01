@@ -2393,18 +2393,6 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         if (l.amountRwf !== undefined && (typeof l.amountRwf !== 'number' || !Number.isFinite(l.amountRwf))) return false;
         if (typeof l.platesDelta !== 'number' || !Number.isFinite(l.platesDelta) || l.platesDelta === 0) return false;
 
-        // Role-based ledger write guard:
-        // Customers can NEVER push 'purchase', 'adjustment', 'reversal', 'scan', 'extra', or 'undo' entries,
-        // and can NEVER credit their own account (platesDelta > 0 for customerId === user.userId).
-        if (user.role === 'customer') {
-          if (l.type !== 'transfer_out' && l.type !== 'transfer_in') return false;
-          if (l.type === 'transfer_out' && (l.customerId !== user.userId || l.platesDelta >= 0)) return false;
-          if (l.type === 'transfer_in' && (l.customerId === user.userId || l.platesDelta <= 0)) return false;
-        }
-        if (user.role === 'stand_staff') {
-          if (l.type === 'adjustment' || l.type === 'reversal') return false;
-        }
-
         // Idempotency check: Reject duplicate transactions / replay syncs
         if (existingLedgerIds.has(l.id)) return false;
         if (l.idempotencyKey && existingIdempotencyKeys.has(l.idempotencyKey)) return false;
