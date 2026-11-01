@@ -301,6 +301,28 @@ curl -X POST https://YOUR_DOMAIN/api/admin/restaurant-admins \
 
 Each POS operator is provisioned from the restaurant's Station Operators screen. Passwords and optional 8–12 digit POS PINs are hashed server-side; credential hashes are never returned in state responses.
 
+### Encrypted backups and recovery
+
+The production Compose stack runs a backup worker that:
+- Takes an encrypted PostgreSQL custom-format dump and an archive of the local uploads volume immediately at startup, then every 24 hours by default.
+- Uses AES-256-CBC with PBKDF2 (200,000 iterations) and a dedicated passphrase of at least 32 characters.
+- Retains 14 days of local backups by default and marks the worker unhealthy if no backup has been produced within 48 hours.
+
+Set `RESTOPASS_BACKUP_ENCRYPTION_KEY` and `RESTOPASS_BACKUP_DIR` before deployment. Point `RESTOPASS_BACKUP_DIR` to a protected host path that is also replicated to independent off-site storage; a backup stored only on the application host is not disaster recovery. Restrict access to the encryption key and test restores in a separate staging environment before launch and on a scheduled basis.
+
+To decrypt an archive for a restore drill:
+
+```bash
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
+  -pass env:RESTOPASS_BACKUP_ENCRYPTION_KEY \
+  -in restopass-YYYYMMDDTHHMMSSZ.tar.gz.enc \
+  -out restopass-restore.tar.gz
+mkdir -p ./restore
+tar -xzf restopass-restore.tar.gz -C ./restore
+```
+
+The archive contains `database.dump` (PostgreSQL custom format) and `uploads.tar.gz`. Restore into an isolated PostgreSQL instance with `pg_restore`; restore uploads into the corresponding private uploads volume. Never test a restore over the live production database.
+
 Generate cryptographically strong secrets using Node.js:
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
