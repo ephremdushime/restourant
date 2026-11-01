@@ -94,6 +94,9 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
           : `Approved top-up for #${res.customer.memberNo}! Plates added to permanent card.`
       );
       setTimeout(() => setToastMessage(null), 4000);
+    } else {
+      setToastMessage(res.error || 'Approval was not committed. Please retry after the secure approval workflow is available.');
+      setTimeout(() => setToastMessage(null), 5000);
     }
   };
 
@@ -108,6 +111,9 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
       setSelectedApprovalToReject(null);
       setToastMessage(`Rejected approval for #${selectedApprovalToReject.memberNo}. Customer card access locked.`);
       setTimeout(() => setToastMessage(null), 4000);
+    } else {
+      setToastMessage(res.error || 'Rejection was not committed. No account status was changed.');
+      setTimeout(() => setToastMessage(null), 5000);
     }
   };
 
