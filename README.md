@@ -268,6 +268,8 @@ This launches the Express authority server and Vite middleware together on **`ht
 
 ## 10. Production Environment & Security Configuration
 
+> **Release gate:** This branch is not approved for live production until the external items in [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md) are closed. A green CI run alone is not production approval.
+
 > [!IMPORTANT]
 > In `NODE_ENV=production`, [`server.ts`](file:///c:/Users/ADMIN/Restourant/restourant/server.ts) enforces `validateProductionSecrets()` at startup and **will refuse to boot** if `SESSION_SECRET` or `RESTOPASS_MASTER_SECRET` is missing, shorter than 32 characters, or set to a development default.
 
@@ -362,7 +364,8 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `GET /api/customer/subscription` | Authenticated | Checks student digital subscription status and entitlement (`500 RWF/month`). |
 | `POST /api/customer/subscription/checkout` | `customer` | Disabled with `503 PAYMENT_PROVIDER_NOT_CONFIGURED` until merchant onboarding, provider credentials, and callback verification are complete. No payment prompt is claimed or recorded. |
 | `POST /api/payments/mobile-money/callback` | Disabled (503) | Fails closed until provider-specific webhook authentication and server-to-server transaction verification are configured. No subscription is activated. |
-| `POST /api/upload/photo` | Authenticated | Uploads patron photos to AWS S3, DigitalOcean Spaces, Cloudflare R2, or local disk fallback. |
+| `POST /api/upload/photo` | `stand_staff`, `restaurant_admin`, `super_admin` | Validates and uploads patron photos to private S3-compatible object storage (local storage is development-only). |
+| `GET /api/customer/photo?key=...` | Authenticated, tenant-scoped | Serves a private patron photo only when it is attached to an authorized customer record. |
 
 ---
 
@@ -370,27 +373,23 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 Future customer dashboard Mobile Money subscription architecture, merchant registration/onboarding runbook, provider adapter contract, database requirements, and activation checklist: [`docs/architecture/mobile-money-subscription-integration.md`](docs/architecture/mobile-money-subscription-integration.md).
 
-### Production workflow limitations (must be closed before launch)
+### Production feature gates and explicit limitations
 
-- Browser sync cannot create or modify customer identity records or pending approvals. Attempts return `409 AUTHORITATIVE_WORKFLOW_REQUIRED`; client-side bootstrap is disabled. This intentionally prevents forged registrations, payment approvals, and customer identity changes from entering the authority database.
-- New-customer provisional registration, boss approval/rejection, and independent high-value co-sign now use dedicated PostgreSQL transactions. Complete DB-backed race tests, individual staff credential provisioning, and production identity/photo handling remain open; do not treat the approval workflow as launch-ready until those are closed.
-- Mobile Money subscription callbacks currently return `503` and never activate subscriptions. Provider-specific signature validation and server-to-server payment status verification are not yet implemented.
-- Production scanning requires live connectivity to the cloud authority. Offline scanning is not implemented and scans fail closed when the cloud cannot be reached.
+- Customer creation, identity changes, approvals, payment records, ledger entries, scan events and subscription entitlements are server-authoritative. Browser sync cannot create or modify these records.
+- Registration, approval/rejection, high-value co-sign and top-up workflows use PostgreSQL transactions and have database-backed integration tests. Tenant administrators and POS operators have individual accounts; credential hashes are not returned to clients or persisted in browser storage.
+- Transfers, refunds, scan reversals, second-plate authorization and supervisor/photo overrides are not enabled for production. Their legacy local-only mutations are blocked; do not expose them until dedicated transactional endpoints and concurrency tests exist.
+- Student subscription checkout and mobile-money callbacks return `503` until MTN MoMo/Airtel Money merchant onboarding, provider credentials, callback authentication and settlement verification are completed.
+- Scanning is cloud-authoritative. If the reception laptop is powered off, paired scanners can still reach the cloud directly. If internet or cloud dependencies are unavailable, scans fail closed. Offline meal redemption is intentionally disabled.
+- Encrypted local backups and dependency-aware readiness are implemented. Off-site replication, a staging restore drill, external penetration testing, production alerting and load testing remain release gates.
 
-## 12. Production Cloud Deployment & Dual-Path Failover Architecture (50,000 DAU)
+## 12. Cloud-Authoritative Production Deployment
 
-RestoPass employs a **Canonical Cloud Authority + Dual-Path Failover Architecture**:
+RestoPass uses one canonical cloud authority for customer accounts, tenant administration, approvals, payments and meal balances.
 
-- **Core Design Principle**: The Central Cloud Authority (`app.restopass.rw`) remains the **sole canonical source of truth** for customer accounts, payments, approvals, and meal balances. The on-premises reception laptop acts as a **controlled, provisional scanning authority** during internet outages, but never issues credits or approves accounts independently.
-- **Dual-Path Scanning Architecture**:
-  1. **Primary Online Path (Direct Cloud Scanning)**: Scanner stations (smartphones, tablets, USB terminals) verify and deduct meals directly against the cloud API when internet connectivity is present—even if the reception laptop is powered off.
-  2. **Local Fallback Path (Provisional Edge Authority)**: When campus internet drops, scanners automatically fail over to the reception laptop edge service over the local Wi-Fi router (LAN).
-- **Provisional Offline Scanning Safeguards**:
-  - **15-Minute Freshness Guard**: Laptops must have synchronized within 15 minutes prior to entering offline mode.
-  - **4-Hour Maximum Window**: Maximum 4-hour offline operating window per dining service.
-  - **Rolling 120-Minute Window Limit**: Maximum 3 successful meals in any rolling 120-minute window, enforced across all 2–3 buffet counters.
-  - **Durable Write Before Display**: Scans are persisted to the durable local outbox with `idempotencyKey` before showing success signals.
-- **Multi-Tenant Direct URLs**:
+- Paired scanner devices connect directly to the cloud API and PostgreSQL-backed transaction workflows. The reception laptop is an optional management terminal, not a local transaction server; switching it off must not stop scanners that still have internet access.
+- A successful meal deduction is displayed only after the cloud transaction commits. If the scanner cannot reach the cloud API, PostgreSQL or Redis security dependencies, the scan fails closed. There is no offline balance deduction or local fallback authority.
+- The current Compose topology is an initial single-application deployment with PostgreSQL, Redis, Caddy and an encrypted backup worker. Do not claim 50,000-DAU capacity or horizontally scale the app until shared operational state is coherent across replicas and load testing has validated the target.
+- Multi-tenant direct URLs can be configured after DNS and tenant onboarding, for example `https://app.restopass.rw/rw01`.
   - `https://app.restopass.rw/rw01` (ULK Main Campus)
   - `https://app.restopass.rw/rw02` (Kigali Heights Dining)
   - `https://app.restopass.rw/rw03` (UR Huye Dining)
