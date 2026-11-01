@@ -1354,7 +1354,7 @@ app.post(
     const currentRestaurant = (serverDbState?.restaurants || []).find((r: any) => r.code === restaurantCode);
     const restaurantLicenses = (serverDbState?.licenses || []).filter((l: any) => l.restaurantCode === restaurantCode);
     const licenseStatus = restaurantLicenses.find((l: any) => l.id === currentRestaurant?.currentLicenseId) || restaurantLicenses[restaurantLicenses.length - 1];
-    if (!licenseStatus || new Date(licenseStatus.validUntil).getTime() <= Date.now()) {
+    if (!currentRestaurant || currentRestaurant.status !== 'active' || !licenseStatus || new Date(licenseStatus.validUntil).getTime() <= Date.now()) {
       return res.status(403).json({ success: false, error: 'Restaurant license is inactive or expired.' });
     }
 
@@ -1398,7 +1398,7 @@ app.post(
         return res.status(404).json({ success: false, error: 'Customer record not found.' });
       }
       const customer = customerRow.data || {};
-      if (customerRow.card_status === 'locked' || customer.activationStatus === 'suspended' || customer.provisionalStatus === 'rejected') {
+      if (customerRow.card_status !== 'active' || customer.activationStatus === 'suspended' || customer.provisionalStatus === 'rejected') {
         await client.query('ROLLBACK');
         return res.status(403).json({ success: false, error: 'Customer account or card is inactive.' });
       }
