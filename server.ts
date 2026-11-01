@@ -2423,9 +2423,52 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
 
   if (fullState && typeof fullState === 'object') {
     if (!serverDbState) {
-      serverDbState = fullState;
+      // Never let an authenticated browser initialize the authoritative database.
+      // Initial state must be provisioned by a trusted migration/bootstrap process.
+      return res.status(503).json({
+        success: false,
+        error: 'Authoritative server state is not initialized. Client-side bootstrap is disabled.',
+      });
     } else {
       const allowedRestoCode = user.role === 'super_admin' ? null : user.restaurantCode;
+
+      // Identity creation and approval decisions are financial/security boundaries.
+      // Until dedicated PostgreSQL transaction endpoints are available, reject those
+      // writes instead of accepting browser-supplied customer or approval records.
+      const currentCustomersById = new Map((serverDbState.customers || []).map((c: any) => [c.id, c]));
+      const incomingCustomersForGuard = (fullState.customers || []).filter((c: any) =>
+        c && c.id && (!allowedRestoCode || c.restaurantCode === allowedRestoCode)
+      );
+      const attemptedCustomerMutation = incomingCustomersForGuard.some((incoming: any) => {
+        const previous: any = currentCustomersById.get(incoming.id);
+        if (!previous) return user.role !== 'customer';
+        if (user.role === 'customer' && incoming.id === user.userId) {
+          return Object.keys(incoming).some((key) =>
+            key !== 'cardStatus' && JSON.stringify(incoming[key]) !== JSON.stringify(previous[key])
+          );
+        }
+        const merged = { ...previous, ...incoming, pinHash: previous.pinHash };
+        return JSON.stringify(merged) !== JSON.stringify(previous);
+      });
+
+      const currentApprovalsById = new Map((serverDbState.pendingApprovals || []).map((a: any) => [a.id, a]));
+      const incomingApprovalsForGuard = user.role === 'customer'
+        ? []
+        : (fullState.pendingApprovals || []).filter((a: any) =>
+            a && a.id && (!allowedRestoCode || a.restaurantCode === allowedRestoCode)
+          );
+      const attemptedApprovalMutation = incomingApprovalsForGuard.some((incoming: any) => {
+        const previous: any = currentApprovalsById.get(incoming.id);
+        return !previous || JSON.stringify({ ...previous, ...incoming }) !== JSON.stringify(previous);
+      });
+
+      if (attemptedCustomerMutation || attemptedApprovalMutation) {
+        return res.status(409).json({
+          success: false,
+          code: 'AUTHORITATIVE_WORKFLOW_REQUIRED',
+          error: 'Customer registration, identity changes and pending-payment approvals cannot be written through client sync. Use the server-authoritative approval workflow; this operation is not enabled yet.',
+        });
+      }
 
       // 1. Merge & update customers with strict role & tenant ownership validation
       const incomingCustomers = (fullState.customers || []).filter((c: any) => {
