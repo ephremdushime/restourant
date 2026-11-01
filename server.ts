@@ -2483,30 +2483,9 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         serverDbState[key] = Array.from(map.values());
       };
 
-      // 2. Merge ledger entries with Idempotency, Role Authorization, and Schema Validation (append-only)
-      const existingLedgerIds = new Set((serverDbState.ledgerEntries || []).map((l: any) => l.id));
-      const existingIdempotencyKeys = new Set(
-        (serverDbState.ledgerEntries || [])
-          .filter((l: any) => l.idempotencyKey)
-          .map((l: any) => l.idempotencyKey)
-      );
-
-      const incomingLedgers = (fullState.ledgerEntries || []).filter((_l: any) => {
-        // Financial ledger entries are written only by transactional server endpoints.
-        return false;
-        /* legacy validation intentionally unreachable:
-        if (user.role === 'stand_staff' || user.role === 'customer') return false;
-        if (!l || !l.id || !l.customerId) return false;
-        if (allowedRestoCode && l.restaurantCode !== allowedRestoCode) return false;
-        // Schema check: amountRwf must be a valid finite number if present
-        if (l.amountRwf !== undefined && (typeof l.amountRwf !== 'number' || !Number.isFinite(l.amountRwf))) return false;
-        if (typeof l.platesDelta !== 'number' || !Number.isFinite(l.platesDelta) || l.platesDelta === 0) return false;
-
-        // Idempotency check: Reject duplicate transactions / replay syncs
-        if (existingLedgerIds.has(l.id)) return false;
-        if (l.idempotencyKey && existingIdempotencyKeys.has(l.idempotencyKey)) return false;
-        return true;
-      });
+      // Financial ledger entries are written only by server-authoritative transactions.
+      // Client-supplied entries are ignored for every role.
+      const incomingLedgers: any[] = [];
 
       serverDbState.ledgerEntries = [...(serverDbState.ledgerEntries || []), ...incomingLedgers];
 
