@@ -57,6 +57,47 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
   });
 
   try {
+    await t.test('super-admin provisions tenant-specific administrator credentials', async () => {
+      const password = 'Tenant-Admin-Strong-Password-2026';
+      const created = await post('/api/admin/restaurant-admins', superToken, {
+        restaurantCode,
+        username: 'tenant.owner',
+        displayName: 'Tenant Owner',
+        password,
+      });
+      assert.equal(created.status, 201);
+      assert.equal(created.body.administrator.username, 'tenant.owner');
+      const stored = await pool!.query(
+        'SELECT password_hash,status FROM restaurant_admins WHERE id=$1',
+        [created.body.administrator.id]
+      );
+      assert.equal(stored.rowCount, 1);
+      assert.match(stored.rows[0].password_hash, /^scrypt\$/);
+      assert.notEqual(stored.rows[0].password_hash, password);
+
+      const login = await post('/api/auth/login', '', {
+        role: 'restaurant_admin', restaurantCode, username: 'tenant.owner', password,
+      });
+      assert.equal(login.status, 200);
+      assert.equal(login.body.user.username, 'tenant.owner');
+
+      const invalidLogin = await post('/api/auth/login', '', {
+        role: 'restaurant_admin', restaurantCode, username: 'tenant.owner', password: 'incorrect-password',
+      });
+      assert.equal(invalidLogin.status, 401);
+
+      const blocked = await fetch(baseUrl + '/api/admin/restaurant-admins/' + created.body.administrator.id, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + superToken },
+        body: JSON.stringify({ status: 'blocked' }),
+      });
+      assert.equal(blocked.status, 200);
+      const blockedLogin = await post('/api/auth/login', '', {
+        role: 'restaurant_admin', restaurantCode, username: 'tenant.owner', password,
+      });
+      assert.equal(blockedLogin.status, 401);
+    });
+
     await t.test('registration creates customer and approval atomically; grace usage reconciles once', async () => {
       const created = await post('/api/approvals/registration', bossToken, registration('A', 60, '+250780000001'));
       assert.equal(created.status, 201);
@@ -349,6 +390,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
     await pool!.query('DELETE FROM scan_events WHERE restaurant_code=$1', [restaurantCode]);
     await pool!.query('DELETE FROM used_tokens WHERE station_id=$1', [stationId]);
     await pool!.query('DELETE FROM balance_checkpoints WHERE customer_id IN (SELECT id FROM customers WHERE restaurant_code=$1)', [restaurantCode]);
+    await pool!.query('DELETE FROM restaurant_admins WHERE restaurant_code=$1', [restaurantCode]);
     await pool!.query('DELETE FROM audit_logs WHERE restaurant_code=$1', [restaurantCode]);
     await pool!.query('DELETE FROM station_users WHERE restaurant_code=$1', [restaurantCode]);
     await pool!.query('DELETE FROM payments WHERE restaurant_code=$1', [restaurantCode]);
