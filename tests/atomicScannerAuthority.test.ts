@@ -72,6 +72,18 @@ describe('Cloud-authoritative scanner regression guards', () => {
     assert.match(store, /if \(this\.authToken && !this\.isDemoModeActive\(\)\) return false/);
   });
 
+  test('customer subscription payments remain disabled until provider onboarding is complete', () => {
+    assert.match(server, /PAYMENT_PROVIDER_NOT_CONFIGURED/);
+    assert.match(server, /Mobile Money checkout is not available yet/);
+    assert.match(server, /app\.post\('\/api\/payments\/mobile-money\/callback',[\s\S]*?status\(503\)/);
+    assert.doesNotMatch(server, /USSD payment push sent via/);
+    assert.match(store, /Mobile Money checkout is not connected yet/);
+    assert.match(store, /Client-side payment simulation is disabled/);
+    assert.match(readRepoFile('src/components/customer/CustomerView.tsx'), /Mobile Money Payments Coming Soon/);
+    assert.match(readRepoFile('docs/architecture/mobile-money-subscription-integration.md'), /Provider registration and API onboarding runbook/);
+    assert.match(readRepoFile('docs/architecture/mobile-money-subscription-integration.md'), /independently queries the provider/);
+  });
+
   test('pending-payment grace meals are committed with the scan transaction', () => {
     assert.match(server, /gracePlatesConsumed/);
     assert.match(server, /gracePlatesRemaining/);
