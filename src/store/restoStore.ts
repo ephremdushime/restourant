@@ -6819,6 +6819,9 @@ export class RestoStore {
     phoneNumber: string;
     provider: 'mtn_momo' | 'airtel_money';
   }): { success: boolean; payment?: StudentSubscriptionPayment; instructions?: string; error?: string } {
+    if (this.authToken && !this.isDemoModeActive()) {
+      return { success: false, error: 'Mobile Money checkout is not connected yet. Dashboard payments will be enabled after RestoPass completes provider API onboarding.' };
+    }
     const cust = this.state.customers.find((c) => c.id === params.customerId);
     if (!cust) return { success: false, error: 'Customer not found' };
 
@@ -6892,6 +6895,9 @@ export class RestoStore {
     internalReference: string,
     providerTransactionId?: string
   ): { success: boolean; subscription?: CustomerSubscription; error?: string } {
+    if (this.authToken && !this.isDemoModeActive()) {
+      return { success: false, error: 'Subscription activation is controlled by verified server-side Mobile Money callbacks. Client-side payment simulation is disabled.' };
+    }
     if (!this.state.studentSubscriptionPayments) return { success: false, error: 'No payments found' };
     const payment = this.state.studentSubscriptionPayments.find(
       (p) => p.internalReference === internalReference
