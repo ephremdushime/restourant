@@ -5538,7 +5538,7 @@ export {
         return crypto.timingSafeEqual(actual, expected);
       } catch { return false; }
     };
-    if (!staff || !verifyStaffSecret(entered, staff.passwordHash || staff.pin)) {
+    if (!staff || (!verifyStaffSecret(entered, staff.passwordHash) && !verifyStaffSecret(entered, staff.pin))) {
       return res.status(401).json({ success: false, error: 'Invalid staff username or password/PIN.' });
     }
     const assignedStation = (serverDbState?.scanPoints || []).find((point: any) =>
