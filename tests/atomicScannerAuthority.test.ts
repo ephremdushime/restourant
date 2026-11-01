@@ -76,5 +76,7 @@ describe('Cloud-authoritative scanner regression guards', () => {
     assert.match(scanner, /isDemoMode && <button[\s\S]*?onClick=\{handleUndo\}/);
     assert.match(store, /fetch\('\/api\/scans\/consume'/);
     assert.match(store, /Keep the same idempotency key so a retry after a lost response cannot double-charge/);
+    assert.match(store, /restopass_pending_scan_/);
+    assert.match(store, /crypto\.subtle\.digest\('SHA-256'/);
   });
 });
