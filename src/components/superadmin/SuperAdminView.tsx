@@ -1208,12 +1208,12 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                             {isReadyForCoSign ? (
                               <button
                                 type="button"
-                                onClick={() => {
-                                  const res = restoStore.coSignPendingRequest(appr.id);
+                                onClick={async () => {
+                                  const res = await restoStore.coSignPendingRequestAuthoritative(appr.id);
                                   if (res.success) {
-                                    alert(`Successfully cryptographically co-signed ${appr.platesRequested} plates for #${appr.memberNo}! Ledger credit committed.`);
+                                    alert(`Independent Super Admin co-signature committed for ${appr.platesRequested} plates for #${appr.memberNo}. Ledger credit is now committed.`);
                                   } else {
-                                    alert(res.error || 'Failed to co-sign request.');
+                                    alert(res.error || 'Co-signature was not committed.');
                                   }
                                 }}
                                 className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md transition-colors cursor-pointer"
