@@ -2287,6 +2287,12 @@ export class RestoStore {
       idempotencyKey = typeof crypto !== 'undefined' && 'randomUUID' in crypto
         ? crypto.randomUUID()
         : `scan_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      // Bound retry-key memory on long-running scanner tablets.
+      while (this.pendingAuthoritativeScanKeys.size >= 500) {
+        const oldestKey = this.pendingAuthoritativeScanKeys.keys().next().value;
+        if (oldestKey === undefined) break;
+        this.pendingAuthoritativeScanKeys.delete(oldestKey);
+      }
       this.pendingAuthoritativeScanKeys.set(retryKey, idempotencyKey);
     }
     try {
