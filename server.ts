@@ -1753,22 +1753,28 @@ async function commitPendingApproval(client: any, approval: any, customer: any, 
   };
   await client.query('INSERT INTO payments (id,restaurant_code,customer_id,amount_rwf,data) VALUES ($1,$2,$3,$4,$5)',
     [payment.id, approval.restaurantCode, customer.id, Number(approval.amountRwf), JSON.stringify(payment)]);
-  customer.provisionalStatus = 'approved';
-  customer.cardStatus = 'active';
-  customer.gracePlatesConsumed = 0;
-  customer.gracePlatesRemaining = 3;
-  customer.pendingApprovalId = undefined;
-  customer.activationStatus = customer.hasCustomPin ? 'active' : 'ready_for_activation';
-  if (approval.type === 'new_customer') customer.cardReadyForPrint = true;
   approval.status = 'approved';
   approval.gracePlatesConsumed = grace;
   approval.reviewedAt = now.toISOString();
   approval.reviewedByAdminName = approval.bossApprovedByName || actor.username;
   approval.committedAt = now.toISOString();
-  await client.query('UPDATE customers SET card_status=$2,data=$3,updated_at=NOW() WHERE id=$1',
-    [customer.id, customer.cardStatus, JSON.stringify(customer)]);
   await client.query("UPDATE pending_approvals SET status='approved',data=$2,updated_at=NOW() WHERE id=$1",
     [approval.id, JSON.stringify(approval)]);
+  const remainingPending = await client.query(
+    "SELECT data FROM pending_approvals WHERE customer_id=$1 AND status='pending' ORDER BY created_at ASC FOR UPDATE",
+    [customer.id]
+  );
+  const remainingGraceUsed = remainingPending.rows.reduce((sum: number, row: any) =>
+    sum + Number(row.data?.gracePlatesConsumed || 0), 0);
+  customer.provisionalStatus = 'approved';
+  customer.cardStatus = 'active';
+  customer.gracePlatesConsumed = remainingGraceUsed;
+  customer.gracePlatesRemaining = Math.max(0, 3 - remainingGraceUsed);
+  customer.pendingApprovalId = remainingPending.rows[0]?.data?.id;
+  customer.activationStatus = customer.hasCustomPin ? 'active' : 'ready_for_activation';
+  if (approval.type === 'new_customer') customer.cardReadyForPrint = true;
+  await client.query('UPDATE customers SET card_status=$2,data=$3,updated_at=NOW() WHERE id=$1',
+    [customer.id, customer.cardStatus, JSON.stringify(customer)]);
   await writeApprovalAudit(client, approval.restaurantCode, actor, 'APPROVAL_ENTITLEMENT_COMMITTED',
     { approvalId: approval.id, customerId: customer.id, plates: approval.platesRequested, graceConsumed: grace });
   return { customer, approval, payment, purchase, graceEntry };
