@@ -204,6 +204,80 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       assert.equal(wrongStation.status, 403);
     });
 
+    await t.test('concurrent duplicate scanner requests commit one meal deduction', async () => {
+      const staffLogin = await post('/api/auth/login', '', {
+        role: 'stand_staff',
+        username: 'integration.cashier',
+        password: 'A-unique-strong-staff-password-2026',
+        restaurantCode,
+        stationId,
+      });
+      assert.equal(staffLogin.status, 200);
+      const staffToken = staffLogin.body.token;
+      const customerId = 'scan_customer_' + restaurantCode;
+      const memberNo = 'SCAN' + restaurantCode.slice(-6);
+      const licenseId = 'license_' + restaurantCode;
+      const planId = 'plan_' + restaurantCode;
+      const currentState = serverModule.getServerDbState();
+      serverModule.setServerDbState({
+        ...currentState,
+        restaurants: (currentState.restaurants || []).map((restaurant: any) =>
+          restaurant.code === restaurantCode
+            ? { ...restaurant, status: 'active', currentLicenseId: licenseId, planId }
+            : restaurant
+        ),
+        licenses: [...(currentState.licenses || []), {
+          id: licenseId, restaurantCode, status: 'active',
+          validUntil: new Date(Date.now() + 30 * 86400000).toISOString(),
+        }],
+        plans: [...(currentState.plans || []), {
+          id: planId, terms: { servingWindowMinutes: 120, plateLimitPerWindow: 3 },
+        }],
+        customers: [...(currentState.customers || []), {
+          id: customerId, restaurantCode, memberNo, name: 'Scanner Integration Customer',
+          cardStatus: 'active', cardVersion: 1, keyVersion: 1,
+          activationStatus: 'active', provisionalStatus: 'approved',
+          gracePlatesConsumed: 0, photoUrl: '',
+        }],
+      });
+      const customerData = {
+        id: customerId, restaurantCode, memberNo, name: 'Scanner Integration Customer',
+        cardStatus: 'active', cardVersion: 1, keyVersion: 1,
+        activationStatus: 'active', provisionalStatus: 'approved',
+        gracePlatesConsumed: 0, photoUrl: '',
+      };
+      await pool!.query(
+        'INSERT INTO customers (id, restaurant_code, member_no, card_status, card_version, key_version, data) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+        [customerId, restaurantCode, memberNo, 'active', 1, 1, JSON.stringify(customerData)]
+      );
+      await pool!.query(
+        'INSERT INTO ledger_entries (id, restaurant_code, customer_id, type, plates_delta, idempotency_key, timestamp, data) VALUES ($1,$2,$3,$4,$5,$6,NOW(),$7)',
+        ['initial_' + customerId, restaurantCode, customerId, 'topup', 3, 'initial_' + customerId, JSON.stringify({ platesDelta: 3 })]
+      );
+      const card = await post('/api/qr/token/card', bossToken, { restaurantCode, memberNo, cardVersion: 1 });
+      assert.equal(card.status, 200);
+      const idempotencyKey = 'scan_' + restaurantCode + '_same_request';
+      const body = { payload: card.body.token, stationId, idempotencyKey };
+      const [first, retry] = await Promise.all([
+        post('/api/scans/consume', staffToken, body),
+        post('/api/scans/consume', staffToken, body),
+      ]);
+      assert.deepEqual([first.status, retry.status], [200, 200]);
+      assert.deepEqual(first.body, retry.body);
+      assert.equal(first.body.accepted, true);
+      const counts = await pool!.query(
+        'SELECT (SELECT COUNT(*)::int FROM scan_events WHERE customer_id=$1) AS scans, (SELECT COUNT(*)::int FROM ledger_entries WHERE customer_id=$1) AS ledger, (SELECT COUNT(*)::int FROM scan_requests WHERE customer_id=$1) AS requests',
+        [customerId]
+      );
+      assert.equal(counts.rows[0].scans, 1);
+      assert.equal(counts.rows[0].ledger, 2);
+      assert.equal(counts.rows[0].requests, 1);
+      const altered = await post('/api/scans/consume', staffToken, {
+        ...body, payload: 'c1.' + restaurantCode + '.OTHER.1.invalid',
+      });
+      assert.equal(altered.status, 403);
+    });
+
     await t.test('rejection atomically locks a provisional new customer', async () => {
       const created = await post('/api/approvals/registration', bossToken, registration('E', 15, '+250780000005'));
       assert.equal(created.status, 201);
@@ -215,6 +289,10 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
     });
   } finally {
     await new Promise<void>((resolve, reject) => httpServer.close((error) => error ? reject(error) : resolve()));
+    await pool!.query('DELETE FROM scan_requests WHERE restaurant_code=$1', [restaurantCode]);
+    await pool!.query('DELETE FROM scan_events WHERE restaurant_code=$1', [restaurantCode]);
+    await pool!.query('DELETE FROM used_tokens WHERE station_id=$1', [stationId]);
+    await pool!.query('DELETE FROM balance_checkpoints WHERE customer_id IN (SELECT id FROM customers WHERE restaurant_code=$1)', [restaurantCode]);
     await pool!.query('DELETE FROM audit_logs WHERE restaurant_code=$1', [restaurantCode]);
     await pool!.query('DELETE FROM station_users WHERE restaurant_code=$1', [restaurantCode]);
     await pool!.query('DELETE FROM payments WHERE restaurant_code=$1', [restaurantCode]);
