@@ -2543,7 +2543,7 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
       }
 
       if (user.role !== 'customer') {
-        mergeScopedCollection('pendingApprovals', user.role !== 'stand_staff');
+        // Pending approvals are read-only through sync; dedicated transactional endpoints are required.
         mergeScopedCollection('shifts', true);
         mergeScopedCollection('activationRequests', user.role !== 'stand_staff');
         mergeScopedCollection('pinRecoveryRequests', user.role !== 'stand_staff');
