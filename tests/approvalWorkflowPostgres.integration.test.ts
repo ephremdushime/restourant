@@ -162,8 +162,8 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       assert.equal(sync.status, 200);
       const stored = await pool!.query('SELECT data FROM station_users WHERE id=$1', [staff.id]);
       assert.equal(stored.rowCount, 1);
-      assert.match(stored.rows[0].data.passwordHash, /^scrypt\\$/);
-      assert.match(stored.rows[0].data.pin, /^scrypt\\$/);
+      assert.match(stored.rows[0].data.passwordHash, /^scrypt\$/);
+      assert.match(stored.rows[0].data.pin, /^scrypt\$/);
       assert.notEqual(stored.rows[0].data.passwordHash, staff.passwordHash);
       const login = await post('/api/auth/login', '', {
         role: 'stand_staff', username: staff.username, password: staff.passwordHash,
