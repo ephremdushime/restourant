@@ -1461,16 +1461,17 @@ export class RestoStore {
     if (Array.isArray(copy.customers)) {
       copy.customers = copy.customers.map((c) => {
         if (!c.pinHash) return c;
-        if (/^[a-f0-9]{64}$/i.test(c.pinHash)) {
-          return c;
-        }
+        if (/^[a-f0-9]{64}$/i.test(c.pinHash)) return c;
         const salt = getCustomerPinSalt(c.id, c.memberNo);
         const saltedPayload = `RESTOPASS_SALTED_PIN_V1:${salt}:${c.pinHash.trim()}`;
-        return {
-          ...c,
-          pinHash: sha256(saltedPayload),
-        };
+        return { ...c, pinHash: sha256(saltedPayload) };
       });
+    }
+    // Production browser storage must never retain staff passwords or PINs.
+    if (!this.isDemoModeActive() && Array.isArray(copy.stationUsers)) {
+      copy.stationUsers = copy.stationUsers.map((user) => ({
+        ...user, passwordHash: undefined, pin: undefined,
+      }));
     }
     return JSON.stringify(copy);
   }
@@ -1728,7 +1729,24 @@ export class RestoStore {
       }
     }
 
-    // 5. Merge notifications
+    // 5. Merge station accounts without hydrating credential material into the browser.
+    if (serverState.stationUsers && Array.isArray(serverState.stationUsers)) {
+      const currentStationUsers = new Map((this.state.stationUsers || []).map((user) => [user.id, user]));
+      for (const serverUser of serverState.stationUsers) {
+        const safeUser = { ...serverUser, passwordHash: undefined, pin: undefined };
+        const existing = currentStationUsers.get(serverUser.id);
+        if (!existing) {
+          this.state.stationUsers.push(safeUser as any);
+          currentStationUsers.set(serverUser.id, safeUser as any);
+          hasChanges = true;
+        } else {
+          Object.assign(existing, safeUser);
+          hasChanges = true;
+        }
+      }
+    }
+
+    // 6. Merge notifications
     if (serverState.notifications && Array.isArray(serverState.notifications)) {
       if (!this.state.notifications) this.state.notifications = [];
       const currentNotifMap = new Map(this.state.notifications.map((n) => [n.id, n]));
@@ -1923,7 +1941,11 @@ export class RestoStore {
             ? (isDemo ? parsed.branches : parsed.branches.filter((b: any) => !DEMO_SEED_BRANCH_IDS.has(b.id) && !DEMO_SEED_RESTO_CODES.has(b.restaurantCode)))
             : baseState.branches,
           stationUsers: Array.isArray(parsed.stationUsers) && parsed.stationUsers.length > 0
-            ? (isDemo ? parsed.stationUsers : parsed.stationUsers.filter((u: any) => !DEMO_SEED_USER_IDS.has(u.id) && !DEMO_SEED_RESTO_CODES.has(u.restaurantCode)))
+            ? (isDemo
+                ? parsed.stationUsers
+                : parsed.stationUsers
+                    .filter((u: any) => !DEMO_SEED_USER_IDS.has(u.id) && !DEMO_SEED_RESTO_CODES.has(u.restaurantCode))
+                    .map((u: any) => ({ ...u, passwordHash: undefined, pin: undefined })))
             : baseState.stationUsers,
           pendingApprovals: Array.isArray(parsed.pendingApprovals)
             ? (isDemo
