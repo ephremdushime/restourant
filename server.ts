@@ -1858,12 +1858,15 @@ app.post('/api/approvals/:approvalId/approve', apiRateLimiter, requireAuth(['res
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const initial = await client.query('SELECT customer_id FROM pending_approvals WHERE id=$1 AND restaurant_code=$2', [req.params.approvalId, user.restaurantCode]);
+    if (!initial.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Approval not found.' }); }
+    // Global lock order is customer row, then approval rows, matching scanner grace-meal transactions.
+    const cr = await client.query('SELECT data FROM customers WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [initial.rows[0].customer_id, user.restaurantCode]);
+    if (!cr.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Customer not found.' }); }
     const result = await client.query('SELECT data FROM pending_approvals WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [req.params.approvalId, user.restaurantCode]);
     if (!result.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Approval not found.' }); }
     const approval = result.rows[0].data;
     if (approval.status !== 'pending') { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Approval is no longer pending.' }); }
-    const cr = await client.query('SELECT data FROM customers WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [approval.customerId, user.restaurantCode]);
-    if (!cr.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Customer not found.' }); }
     const customer = cr.rows[0].data;
     if (Number(approval.platesRequested) > 120) {
       approval.requiresSuperAdminCoSign = true;
