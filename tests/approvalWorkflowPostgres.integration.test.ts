@@ -1,0 +1,154 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+
+const databaseUrl = process.env.TEST_DATABASE_URL;
+test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (t) => {
+  process.env.NODE_ENV = 'test';
+  process.env.DATABASE_URL = databaseUrl!;
+  const serverModule = await import('../server.ts');
+  const adapter = await import('../src/services/db/postgresAdapter.ts');
+  assert.equal(await adapter.initPostgres(), true);
+  const pool = adapter.getPostgresPool();
+  assert.ok(pool);
+
+  const restaurantCode = 'IT' + Math.random().toString(36).slice(2, 8).toUpperCase();
+  const stationId = 'station_' + restaurantCode;
+  const bossId = 'boss_' + restaurantCode;
+  const bossToken = serverModule.createSessionToken({
+    userId: bossId, username: 'Integration Boss', role: 'restaurant_admin', restaurantCode,
+  });
+  const superToken = serverModule.createSessionToken({
+    userId: 'super_' + restaurantCode, username: 'Integration Super Admin', role: 'super_admin', restaurantCode: 'ALL',
+  });
+  const samePrincipalSuperToken = serverModule.createSessionToken({
+    userId: bossId, username: 'Same Principal', role: 'super_admin', restaurantCode: 'ALL',
+  });
+
+  await pool!.query(
+    'INSERT INTO restaurants (code,name,status,data) VALUES ($1,$2,$3,$4)',
+    [restaurantCode, 'Approval Integration Test', 'active', JSON.stringify({ code: restaurantCode, name: 'Approval Integration Test', status: 'active' })]
+  );
+  serverModule.setServerDbState({
+    restaurants: [{ code: restaurantCode, name: 'Approval Integration Test', status: 'active' }],
+    scanPoints: [{ id: stationId, restaurantCode, status: 'active', isPaired: true, name: 'Integration Scanner' }],
+    packages: [{ id: 'pkg_test_60', restaurantCode, name: '60 plates', platesCount: 60, priceRwf: 60000 }],
+    customers: [], pendingApprovals: [], ledgerEntries: [], payments: [], auditLogs: [],
+  });
+
+  const httpServer = createServer(serverModule.app);
+  await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve));
+  const address = httpServer.address();
+  assert.ok(address && typeof address !== 'string');
+  const baseUrl = 'http://127.0.0.1:' + address.port;
+  const post = async (path: string, token: string, body: unknown) => {
+    const response = await fetch(baseUrl + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify(body),
+    });
+    return { status: response.status, body: await response.json() as any };
+  };
+  const registration = (suffix: string, plates: number, phone: string) => ({
+    name: 'Integration Customer ' + suffix, phone, idType: 'Student ID', idNumber: 'TEST-ID-' + suffix,
+    isStudent: true, studentProfile: { registrationNumber: 'TEST-REG-' + suffix },
+    platesRequested: plates, amountRwf: plates * 1000, paymentMethod: 'mtn_momo',
+    paymentReference: 'TEST-REF-' + suffix, stationId,
+  });
+
+  try {
+    await t.test('registration creates customer and approval atomically; grace usage reconciles once', async () => {
+      const created = await post('/api/approvals/registration', bossToken, registration('A', 60, '+250780000001'));
+      assert.equal(created.status, 201);
+      assert.equal(created.body.success, true);
+      const customerId = created.body.customer.id;
+      const approvalId = created.body.approval.id;
+      const persisted = await pool!.query(
+        'SELECT c.id, a.id AS approval_id FROM customers c JOIN pending_approvals a ON a.customer_id=c.id WHERE c.id=$1 AND a.id=$2',
+        [customerId, approvalId]
+      );
+      assert.equal(persisted.rowCount, 1);
+      await pool!.query(
+        "UPDATE pending_approvals SET data=jsonb_set(data,'{gracePlatesConsumed}','2'::jsonb) WHERE id=$1",
+        [approvalId]
+      );
+      const approved = await post('/api/approvals/' + approvalId + '/approve', bossToken, {});
+      assert.equal(approved.status, 200);
+      assert.equal(approved.body.success, true);
+      assert.equal(approved.body.ledgerEntries.length, 2);
+      assert.equal(approved.body.ledgerEntries[0].platesDelta, 60);
+      assert.equal(approved.body.ledgerEntries[1].platesDelta, -2);
+      const counts = await pool!.query(
+        "SELECT (SELECT COUNT(*) FROM ledger_entries WHERE customer_id=$1) AS ledger_count, (SELECT COUNT(*) FROM payments WHERE customer_id=$1) AS payment_count",
+        [customerId]
+      );
+      assert.equal(Number(counts.rows[0].ledger_count), 2);
+      assert.equal(Number(counts.rows[0].payment_count), 1);
+      const retry = await post('/api/approvals/' + approvalId + '/approve', bossToken, {});
+      assert.equal(retry.status, 409);
+    });
+
+    await t.test('high-value approval cannot credit before a different principal co-signs', async () => {
+      const created = await post('/api/approvals/registration', bossToken, registration('B', 150, '+250780000002'));
+      assert.equal(created.status, 201);
+      const customerId = created.body.customer.id;
+      const approvalId = created.body.approval.id;
+      const staged = await post('/api/approvals/' + approvalId + '/approve', bossToken, {});
+      assert.equal(staged.status, 200);
+      assert.equal(staged.body.awaitingCoSign, true);
+      const before = await pool!.query('SELECT COUNT(*)::int AS count FROM ledger_entries WHERE customer_id=$1', [customerId]);
+      assert.equal(before.rows[0].count, 0);
+      const samePrincipal = await post('/api/approvals/' + approvalId + '/cosign', samePrincipalSuperToken, {});
+      assert.equal(samePrincipal.status, 403);
+      const signed = await post('/api/approvals/' + approvalId + '/cosign', superToken, {});
+      assert.equal(signed.status, 200);
+      const after = await pool!.query('SELECT COUNT(*)::int AS count FROM ledger_entries WHERE customer_id=$1', [customerId]);
+      assert.equal(after.rows[0].count, 1);
+    });
+
+    await t.test('provisional existing-customer top-up persists without changing paid balance', async () => {
+      const created = await post('/api/approvals/registration', bossToken, registration('C', 20, '+250780000003'));
+      assert.equal(created.status, 201);
+      const approved = await post('/api/approvals/' + created.body.approval.id + '/approve', bossToken, {});
+      assert.equal(approved.status, 200);
+      const customerId = created.body.customer.id;
+      const pending = await post('/api/approvals/topup', bossToken, {
+        customerId, platesRequested: 25, amountRwf: 25000, paymentMethod: 'cash',
+        paymentReference: 'TOPUP-REF-C', stationId,
+      });
+      assert.equal(pending.status, 201);
+      assert.equal(pending.body.approval.type, 'balance_topup');
+      const count = await pool!.query('SELECT COUNT(*)::int AS count FROM ledger_entries WHERE customer_id=$1', [customerId]);
+      assert.equal(count.rows[0].count, 1);
+    });
+
+    await t.test('concurrent duplicate identity registration is serialized', async () => {
+      const payloadA = registration('D1', 10, '+250780000004');
+      const payloadB = { ...registration('D2', 10, '+250780000004'), paymentReference: 'TEST-REF-D2', idNumber: payloadA.idNumber };
+      const [a, b] = await Promise.all([
+        post('/api/approvals/registration', bossToken, payloadA),
+        post('/api/approvals/registration', bossToken, payloadB),
+      ]);
+      assert.deepEqual([a.status, b.status].sort(), [201, 409]);
+    });
+
+    await t.test('rejection atomically locks a provisional new customer', async () => {
+      const created = await post('/api/approvals/registration', bossToken, registration('E', 15, '+250780000005'));
+      assert.equal(created.status, 201);
+      const rejected = await post('/api/approvals/' + created.body.approval.id + '/reject', bossToken, { reason: 'Provider statement does not show this deposit.' });
+      assert.equal(rejected.status, 200);
+      const persisted = await pool!.query('SELECT card_status,data FROM customers WHERE id=$1', [created.body.customer.id]);
+      assert.equal(persisted.rows[0].card_status, 'locked');
+      assert.equal(persisted.rows[0].data.provisionalStatus, 'rejected');
+    });
+  } finally {
+    await new Promise<void>((resolve, reject) => httpServer.close((error) => error ? reject(error) : resolve()));
+    await pool!.query('DELETE FROM audit_logs WHERE restaurant_code=$1', [restaurantCode]);
+    await pool!.query('DELETE FROM payments WHERE restaurant_code=$1', [restaurantCode]);
+    await pool!.query('DELETE FROM ledger_entries WHERE restaurant_code=$1', [restaurantCode]);
+    await pool!.query('DELETE FROM pending_approvals WHERE restaurant_code=$1', [restaurantCode]);
+    await pool!.query('DELETE FROM customers WHERE restaurant_code=$1', [restaurantCode]);
+    await pool!.query('DELETE FROM restaurants WHERE code=$1', [restaurantCode]);
+    await adapter.closePostgres();
+  }
+});
