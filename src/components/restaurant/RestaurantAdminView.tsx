@@ -421,7 +421,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
   };
 
   // Handle Registration
-  const handleRegisterSubmit = (e: React.FormEvent) => {
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setRegError(null);
     setRegSuccess(null);
@@ -430,34 +430,35 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
       setRegError('Full Name, Phone number, and ID number are required.');
       return;
     }
+    const packages = restoStore.getRestaurantPackages(state.currentRestaurantCode);
+    const selectedPackage = packages.find((item) => item.id === regPackageId);
+    const station = state.scanPoints.find((item) =>
+      item.id === state.currentStationId && item.restaurantCode === state.currentRestaurantCode && item.status === 'active' && item.isPaired
+    ) || state.scanPoints.find((item) =>
+      item.restaurantCode === state.currentRestaurantCode && item.status === 'active' && item.isPaired
+    );
+    if (!selectedPackage) {
+      setRegError('Select a valid server-configured plate package before registration.');
+      return;
+    }
+    if (!station) {
+      setRegError('No paired active scanner station is available. Pair a station before registering a customer.');
+      return;
+    }
 
-    const result = restoStore.registerCustomer({
-      restaurantCode: state.currentRestaurantCode,
-      name: regName,
-      phone: regPhone,
-      photoUrl: regPhotoUrl,
-      idType: regIdType,
-      idNumber: regIdNumber,
-      occupation: regOccupation,
+    const result = await restoStore.registerProvisionalCustomerAuthoritative({
+      name: regName, phone: regPhone, photoUrl: regPhotoUrl, idType: regIdType, idNumber: regIdNumber,
       isStudent: regIsStudent,
-      studentProfile: regIsStudent
-        ? {
-            institution: regInstitution,
-            programme: regProgramme,
-            year: Number(regYear),
-            registrationNumber: regRegNumber,
-          }
-        : undefined,
-      packageId: regPackageId,
-      paymentMethod: regPaymentMethod,
-      paymentReference: regPaymentRef,
-      adminStaffId: state.currentStaffId,
-      adminStaffName: 'Claire Mukamurenzi (Cashier)',
+      studentProfile: regIsStudent ? {
+        institution: regInstitution, programme: regProgramme, year: Number(regYear), registrationNumber: regRegNumber,
+      } : undefined,
+      packageId: selectedPackage.id, platesRequested: selectedPackage.platesCount, amountRwf: selectedPackage.priceRwf,
+      paymentMethod: regPaymentMethod, paymentReference: regPaymentRef, stationId: station.id,
+      branchId: station.branchId, branchName: station.branchName,
     });
 
     if (result.success && result.customer) {
-      setRegSuccess(`Successfully registered #${result.customer.memberNo} (${result.customer.name})! Card generated.`);
-      // Reset form
+      setRegSuccess(`Registration #${result.customer.memberNo} was recorded and sent to the Boss Approval queue. Up to 3 grace meals are available while payment is verified.`);
       setRegName('');
       setRegPhone('+250 78');
       setRegIdNumber('');
