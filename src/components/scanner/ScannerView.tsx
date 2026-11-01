@@ -43,6 +43,8 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     ) || state.scanPoints.find((sp) => sp.restaurantCode === state.currentRestaurantCode);
 
   const [inputPayload, setInputPayload] = useState('');
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [scanPending, setScanPending] = useState(false);
   const [activeScan, setActiveScan] = useState<{
     outcome?: 'ACCEPTED' | 'REJECTED';
     message?: string;
@@ -244,22 +246,43 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     };
   }, [isCameraActive]);
 
-  const handleExecuteScan = (payload: string) => {
-    if (!payload.trim()) return;
+  const handleExecuteScan = async (payload: string) => {
+    const cleanPayload = payload.trim();
+    if (!cleanPayload || scanPending) return;
+    setScanError(null);
     sound.unlockAudio().then((ok) => {
       if (ok) setAudioUnlocked(true);
     });
-    const result = restoStore.processScan(payload);
-    setActiveScan({
-      outcome: result.outcome,
-      message: result.message,
-      rejectionReason: result.rejectionReason,
-      event: result.scanEvent,
-      balanceAfter: result.balanceAfter,
-      error: result.error,
-      latencyMs: result.latencyMs,
-    });
-    setInputPayload('');
+    setScanPending(true);
+    try {
+      if (isDemoMode) {
+        const result = restoStore.processScan(cleanPayload);
+        setActiveScan({
+          outcome: result.outcome,
+          message: result.message,
+          rejectionReason: result.rejectionReason,
+          event: result.scanEvent,
+          balanceAfter: result.balanceAfter,
+          error: result.error,
+          latencyMs: result.latencyMs,
+        });
+      } else {
+        const result = await restoStore.processScanAuthoritative(cleanPayload);
+        if (!result.success || !result.scanEvent) {
+          setScanError(result.error || 'Meal redemption was not confirmed. No success should be assumed.');
+          return;
+        }
+        setActiveScan({
+          outcome: 'ACCEPTED',
+          message: 'Meal redemption committed by the server.',
+          event: result.scanEvent,
+          balanceAfter: result.balanceAfter ?? 0,
+        });
+      }
+      setInputPayload('');
+    } finally {
+      setScanPending(false);
+    }
   };
 
   // Instant trigger when a full QR token pattern is detected in keystrokes
@@ -668,6 +691,16 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           </button>
         </div>
       </form>
+      {scanError && (
+        <div role="alert" className="rounded-xl border border-rose-500/50 bg-rose-950/60 px-4 py-3 text-sm font-semibold text-rose-100">
+          {scanError}
+        </div>
+      )}
+      {scanPending && (
+        <div role="status" className="rounded-xl border border-cyan-500/40 bg-cyan-950/40 px-4 py-2 text-sm text-cyan-100">
+          Verifying and committing scan with the cloud server…
+        </div>
+      )}
 
       {/* 4. Quick Simulation Pills (Visible when Demo Mode is active) */}
       {isDemoMode && (
