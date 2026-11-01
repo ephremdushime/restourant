@@ -194,6 +194,35 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       assert.equal((state.studentSubscriptionPayments || []).length, 0);
     });
 
+    await t.test('restaurant admins cannot alter license or tenant lifecycle fields through sync', async () => {
+      const before = serverModule.getServerDbState();
+      serverModule.setServerDbState({
+        ...before,
+        restaurants: (before.restaurants || []).map((restaurant: any) =>
+          restaurant.code === restaurantCode
+            ? { ...restaurant, status: 'active', currentLicenseId: 'trusted-license', planId: 'trusted-plan' }
+            : restaurant
+        ),
+      });
+      const sync = await post('/api/sync', bossToken, {
+        fullState: {
+          restaurants: [{
+            code: restaurantCode,
+            name: 'Updated Restaurant Display Name',
+            status: 'inactive',
+            currentLicenseId: 'attacker-selected-license',
+            planId: 'unlicensed-plan',
+          }],
+        },
+      });
+      assert.equal(sync.status, 200);
+      const updated = serverModule.getServerDbState().restaurants.find((item: any) => item.code === restaurantCode);
+      assert.equal(updated.name, 'Updated Restaurant Display Name');
+      assert.equal(updated.status, 'active');
+      assert.equal(updated.currentLicenseId, 'trusted-license');
+      assert.equal(updated.planId, 'trusted-plan');
+    });
+
     await t.test('station accounts are hashed, persisted and bound to their assigned station', async () => {
       const staff = {
         id: 'staff_' + restaurantCode,
