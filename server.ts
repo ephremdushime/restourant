@@ -327,7 +327,9 @@ const syncRateLimiter = createRateLimiter('sync', 40, 60 * 1000); // 40 syncs pe
 
 // Request body parser with scoped limits (supports patron portrait uploads)
 app.use(express.json({ limit: '10mb' }));
-app.use('/uploads', express.static(path.resolve(process.cwd(), 'public/uploads')));
+if (process.env.NODE_ENV !== 'production') {
+  app.use('/uploads', express.static(path.resolve(process.cwd(), 'public/uploads')));
+}
 
 // ----------------------------------------------------
 // Cryptographic Session Engine & Token Verification (Finding 1 & 4)
