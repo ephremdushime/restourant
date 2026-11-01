@@ -155,8 +155,8 @@ describe('Production Scalability & Cloud Infrastructure Verification (50,000 DAU
       try {
         assert.equal(isObjectStorageConfigured(), false);
 
-        // 1x1 transparent GIF buffer
-        const sampleBuffer = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+        // 1x1 PNG buffer with a matching MIME signature
+        const sampleBuffer = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
         const uploadResult = await uploadPatronPhoto(sampleBuffer, 'image/png', 'test-patron');
 
         assert.equal(uploadResult.storageType, 'local');
