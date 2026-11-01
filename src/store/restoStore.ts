@@ -2441,6 +2441,11 @@ export class RestoStore {
       };
     };
 
+    // Production scans must use the cloud PostgreSQL transaction; local mutation is demo-only.
+    if (this.authToken && !this.isDemoModeActive()) {
+      return buildRejection('INVALID_QR', 'Local scanning is disabled. Use the cloud-authoritative scanner connection.');
+    }
+
     // 0. Time-Dependent Monthly License Enforcement
     const licStatus = this.getRestaurantLicenseStatus(restaurantCode);
     if (licStatus.isExpired) {
@@ -2811,6 +2816,7 @@ export class RestoStore {
    * Maximum 2 plates per serving.
    */
   public addSecondPlate(scanEventId: string): boolean {
+    if (this.authToken && !this.isDemoModeActive()) return false;
     const scanEvent = this.state.scanEvents.find((e) => e.id === scanEventId);
     if (!scanEvent || scanEvent.platesDeducted >= 2) return false;
 
@@ -2936,6 +2942,7 @@ export class RestoStore {
    * Record Staff Photo Check outcome (Match vs Reject)
    */
   public recordPhotoCheck(scanEventId: string, result: 'matched' | 'rejected') {
+    if (this.authToken && !this.isDemoModeActive()) return;
     const scanEvent = this.state.scanEvents.find((e) => e.id === scanEventId);
     if (!scanEvent) return;
 
@@ -2967,6 +2974,7 @@ export class RestoStore {
    * Admin Override for Blocked Scan
    */
   public approveScanOverride(scanEventId: string, reason: string, adminStaffId: string): boolean {
+    if (this.authToken && !this.isDemoModeActive()) return false;
     const scanEvent = this.state.scanEvents.find((e) => e.id === scanEventId);
     if (!scanEvent || scanEvent.status !== 'blocked') return false;
 
