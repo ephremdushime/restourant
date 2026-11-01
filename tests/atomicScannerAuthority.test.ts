@@ -53,7 +53,7 @@ describe('Cloud-authoritative scanner regression guards', () => {
     assert.match(server, /INSERT INTO payments/);
     assert.match(server, /ledgerEntry: priorData, payment: paymentResult\.rows\[0\]\?\.data/);
     assert.doesNotMatch(server, /mergeScopedCollection\('payments'/);
-    assert.match(server, /Financial ledger entries are written only by transactional server endpoints/);
+    assert.match(server, /Financial ledger entries are written only by server-authoritative transactions/);
     assert.match(store, /topUpCustomerAuthoritative/);
     assert.match(store, /fetch\('\/api\/topups\/commit'/);
     assert.doesNotMatch(server, /mergeScopedCollection\('transfers'/);
