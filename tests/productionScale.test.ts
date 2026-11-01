@@ -245,10 +245,10 @@ describe('Production Scalability & Cloud Infrastructure Verification (50,000 DAU
     });
 
     it('accepts authenticated photo upload and returns storage URL', async () => {
-      const staffToken = createSessionToken({
-        userId: 'usr_staff_test',
-        username: 'cashier1',
-        role: 'stand_staff',
+      const adminToken = createSessionToken({
+        userId: 'admin_photo_test',
+        username: 'photo.admin',
+        role: 'restaurant_admin',
         restaurantCode: 'RW01',
       });
 
@@ -258,17 +258,17 @@ describe('Production Scalability & Cloud Infrastructure Verification (50,000 DAU
         'POST',
         '/api/upload/photo',
         { photoBase64: sampleDataUrl, filenameHint: 'patron-api-test' },
-        { Authorization: `Bearer ${staffToken}` }
+        { Authorization: `Bearer ${adminToken}` }
       );
 
       assert.equal(response.status, 200);
       assert.equal(response.body.success, true);
-      assert.ok(response.body.url);
+      assert.ok(response.body.url.startsWith('/api/customer/photo?key='));
       assert.ok(response.body.key);
 
-      // Clean up test file if stored locally
+      // Clean up test file if stored locally.
       if (response.body.storageType === 'local') {
-        const localPath = path.resolve(process.cwd(), `public${response.body.url}`);
+        const localPath = path.resolve(process.cwd(), 'public/uploads', response.body.key);
         try { fs.unlinkSync(localPath); } catch {}
       }
     });
