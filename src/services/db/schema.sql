@@ -195,11 +195,3 @@ CREATE INDEX IF NOT EXISTS idx_scan_events_resto_time ON scan_events (restaurant
 CREATE INDEX IF NOT EXISTS idx_scan_events_customer ON scan_events (customer_id);
 CREATE INDEX IF NOT EXISTS idx_pending_approvals_resto ON pending_approvals (restaurant_code, status);
 CREATE INDEX IF NOT EXISTS idx_used_tokens_expires ON used_tokens (expires_at);
--- 18. Idempotency keys for atomic scan consumption requests
-CREATE TABLE IF NOT EXISTS scan_idempotency (
-    idempotency_key VARCHAR(128) PRIMARY KEY,
-    request_hash CHAR(64) NOT NULL,
-    response JSONB NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_scan_idempotency_created ON scan_idempotency (created_at);
