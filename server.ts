@@ -2207,7 +2207,7 @@ app.post('/api/approvals/:approvalId/approve', apiRateLimiter, requireAuth(['res
       serverDbState.ledgerEntries.push(committed.purchase);
       if (committed.graceEntry) serverDbState.ledgerEntries.push(committed.graceEntry);
     }
-    return res.json({ success: true, customer: committed.customer, approval: committed.approval, payment: committed.payment, ledgerEntries: [committed.purchase, ...(committed.graceEntry ? [committed.graceEntry] : [])] });
+    return res.json({ success: true, customer: sanitizeCustomerForResponse(committed.customer), approval: committed.approval, payment: committed.payment, ledgerEntries: [committed.purchase, ...(committed.graceEntry ? [committed.graceEntry] : [])] });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch {}
     if (error?.message === 'APPROVAL_ALREADY_CREDITED') return res.status(409).json({ success: false, error: 'Approval was already credited.' });
@@ -2249,7 +2249,7 @@ app.post('/api/approvals/:approvalId/cosign', apiRateLimiter, requireAuth(['supe
       serverDbState.ledgerEntries.push(committed.purchase);
       if (committed.graceEntry) serverDbState.ledgerEntries.push(committed.graceEntry);
     }
-    return res.json({ success: true, customer: committed.customer, approval: committed.approval, payment: committed.payment, ledgerEntries: [committed.purchase, ...(committed.graceEntry ? [committed.graceEntry] : [])] });
+    return res.json({ success: true, customer: sanitizeCustomerForResponse(committed.customer), approval: committed.approval, payment: committed.payment, ledgerEntries: [committed.purchase, ...(committed.graceEntry ? [committed.graceEntry] : [])] });
   } catch (error: any) {
     try { await client.query('ROLLBACK'); } catch {}
     if (error?.message === 'APPROVAL_ALREADY_CREDITED') return res.status(409).json({ success: false, error: 'Approval was already credited.' });
@@ -2290,7 +2290,7 @@ app.post('/api/approvals/:approvalId/reject', apiRateLimiter, requireAuth(['rest
     await writeApprovalAudit(client, user.restaurantCode, user, 'APPROVAL_REJECTED', { approvalId: approval.id, reason });
     await client.query('COMMIT');
     updateApprovalCache(customer, approval);
-    return res.json({ success: true, customer, approval });
+    return res.json({ success: true, customer: sanitizeCustomerForResponse(customer), approval });
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch {}
     console.error('[Approval Reject] Transaction failed:', error);
@@ -2906,6 +2906,12 @@ app.delete('/api/admin/customers/:customerId/entitlements/:entitlementId', apiRa
 /**
  * Sanitizes and scopes database state according to caller's role (Finding 1)
  */
+function sanitizeCustomerForResponse(customer: any): any {
+  if (!customer || typeof customer !== 'object') return customer;
+  const { pinHash, idHash, ...safeCustomer } = customer;
+  return safeCustomer;
+}
+
 function scopeStateForUser(state: any, user: UserSession): any {
   if (!state) return null;
   const redactCustomers = (items: any[]) => (items || []).map((customer: any) => ({
