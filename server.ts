@@ -2980,10 +2980,8 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
 
       // 4. Merge notifications & operational collections with role guards
       mergeScopedCollection('notifications', true);
-      if (user.role === 'restaurant_admin' || user.role === 'super_admin') {
-        mergeScopedCollection('customerSubscriptions', true);
-        mergeScopedCollection('studentSubscriptionPayments', true);
-      }
+      // Subscription entitlements and payment records are never accepted from browser sync.
+      // Only a verified provider settlement or an audited server-side complimentary grant may write them.
 
       if (user.role !== 'customer') {
         // Pending approvals are read-only through sync; dedicated transactional endpoints are required.
