@@ -9,7 +9,7 @@ import {
   saveStateToPostgres,
   insertLedgerEntryPostgres,
 } from './src/services/db/postgresAdapter';
-import { recordTokenScan } from './src/services/cache/redisClient';
+import { recordTokenScan, isRedisConfigured } from './src/services/cache/redisClient';
 import { uploadBase64Photo } from './src/services/storage/objectStorage';
 
 const app = express();
@@ -2388,6 +2388,10 @@ async function startServer() {
   let viteLoaded = false;
 
   // Cloud Relational Database Initialization
+  if (isProduction && !isRedisConfigured()) {
+    throw new Error('[FATAL] REDIS_URL is required in production for distributed QR replay protection.');
+  }
+
   if (isProduction && !isPostgresConfigured()) {
     throw new Error('[FATAL] DATABASE_URL is required in production. Refusing to start with local JSON persistence.');
   }
