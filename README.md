@@ -316,6 +316,10 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `POST /api/station/revoke` | `restaurant_admin`, `super_admin` | Remotely revokes a station's pairing and closes active cashier sessions. |
 | `GET /api/state` | Authenticated | Returns role-scoped application state (`customer` receives only their own record & ledger). |
 | `POST /api/sync` | Authenticated | Syncs permitted non-financial operational state. Customer creation/identity changes and pending-approval writes are rejected until dedicated transactional endpoints are available; ledger, payments and scan events are server-authoritative. |
+| `POST /api/approvals/registration` | `stand_staff`, `restaurant_admin` | Creates a provisional customer and pending approval in one PostgreSQL transaction; validates station, package, identity duplicates, and payment reference. |
+| `POST /api/approvals/:approvalId/approve` | `restaurant_admin` | Records boss approval; ordinary requests atomically commit customer activation, grace reconciliation, payment, and ledger; requests above 120 plates wait for co-sign. |
+| `POST /api/approvals/:approvalId/cosign` | `super_admin` | Independently co-signs boss-approved requests above 120 plates and commits the entitlement transaction. |
+| `POST /api/approvals/:approvalId/reject` | `restaurant_admin` | Transactionally rejects a pending request and locks a new-customer account. |
 | `GET /api/customer/subscription` | Authenticated | Checks student digital subscription status and entitlement (`500 RWF/month`). |
 | `POST /api/customer/subscription/checkout` | `customer` | Disabled with `503 PAYMENT_PROVIDER_NOT_CONFIGURED` until merchant onboarding, provider credentials, and callback verification are complete. No payment prompt is claimed or recorded. |
 | `POST /api/payments/mobile-money/callback` | Disabled (503) | Fails closed until provider-specific webhook authentication and server-to-server transaction verification are configured. No subscription is activated. |
@@ -330,7 +334,7 @@ Future customer dashboard Mobile Money subscription architecture, merchant regis
 ### Production workflow limitations (must be closed before launch)
 
 - Browser sync cannot create or modify customer identity records or pending approvals. Attempts return `409 AUTHORITATIVE_WORKFLOW_REQUIRED`; client-side bootstrap is disabled. This intentionally prevents forged registrations, payment approvals, and customer identity changes from entering the authority database.
-- The approval UI must be migrated to dedicated PostgreSQL transactions before registration and recharge approvals can be used in production. Large top-ups require a genuine second, independent super-admin authorization.
+- New-customer provisional registration, boss approval/rejection, and independent high-value co-sign now use dedicated PostgreSQL transactions. Existing-customer provisional recharge creation, complete DB-backed race tests, and production identity provisioning remain open; do not treat the approval workflow as launch-ready until those are closed.
 - Mobile Money subscription callbacks currently return `503` and never activate subscriptions. Provider-specific signature validation and server-to-server payment status verification are not yet implemented.
 - Production scanning requires live connectivity to the cloud authority. Offline scanning is not implemented and scans fail closed when the cloud cannot be reached.
 
