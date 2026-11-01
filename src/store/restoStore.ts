@@ -3325,6 +3325,79 @@ export class RestoStore {
     }
   }
 
+  public async approvePendingRequestAuthoritative(approvalId: string): Promise<{ success: boolean; customer?: Customer; approval?: PendingApproval; awaitingCoSign?: boolean; error?: string }> {
+    if (!this.authToken) return { success: false, error: 'Manager session expired. Sign in again.' };
+    try {
+      const response = await fetch('/api/approvals/' + encodeURIComponent(approvalId) + '/approve', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.authToken }, body: JSON.stringify({}),
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success) return { success: false, error: result?.error || 'Approval was not committed.' };
+      if (result.customer) {
+        const i = this.state.customers.findIndex((x) => x.id === result.customer.id);
+        if (i < 0) this.state.customers.push(result.customer); else this.state.customers[i] = result.customer;
+      }
+      if (result.approval) {
+        const i = this.state.pendingApprovals.findIndex((x) => x.id === result.approval.id);
+        if (i < 0) this.state.pendingApprovals.unshift(result.approval); else this.state.pendingApprovals[i] = result.approval;
+      }
+      if (result.payment && !this.state.payments.some((x) => x.id === result.payment.id)) this.state.payments.unshift(result.payment);
+      if (Array.isArray(result.ledgerEntries)) result.ledgerEntries.forEach((entry: LedgerEntry) => this.appendLedgerEntry(entry));
+      this.notify();
+      return { success: true, customer: result.customer, approval: result.approval, awaitingCoSign: Boolean(result.awaitingCoSign) };
+    } catch {
+      return { success: false, error: 'Connection interrupted. Check the approval queue before retrying.' };
+    }
+  }
+
+  public async coSignPendingRequestAuthoritative(approvalId: string): Promise<{ success: boolean; customer?: Customer; approval?: PendingApproval; error?: string }> {
+    if (!this.authToken) return { success: false, error: 'Super Admin session expired. Sign in again.' };
+    try {
+      const response = await fetch('/api/approvals/' + encodeURIComponent(approvalId) + '/cosign', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.authToken }, body: JSON.stringify({}),
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success) return { success: false, error: result?.error || 'Co-signature was not committed.' };
+      if (result.customer) {
+        const i = this.state.customers.findIndex((x) => x.id === result.customer.id);
+        if (i < 0) this.state.customers.push(result.customer); else this.state.customers[i] = result.customer;
+      }
+      if (result.approval) {
+        const i = this.state.pendingApprovals.findIndex((x) => x.id === result.approval.id);
+        if (i < 0) this.state.pendingApprovals.unshift(result.approval); else this.state.pendingApprovals[i] = result.approval;
+      }
+      if (result.payment && !this.state.payments.some((x) => x.id === result.payment.id)) this.state.payments.unshift(result.payment);
+      this.notify();
+      return { success: true, customer: result.customer, approval: result.approval };
+    } catch {
+      return { success: false, error: 'Connection interrupted. Check the approval queue before retrying.' };
+    }
+  }
+
+  public async rejectPendingRequestAuthoritative(approvalId: string, reason: string): Promise<{ success: boolean; error?: string }> {
+    if (!this.authToken) return { success: false, error: 'Manager session expired. Sign in again.' };
+    try {
+      const response = await fetch('/api/approvals/' + encodeURIComponent(approvalId) + '/reject', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.authToken },
+        body: JSON.stringify({ reason }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success) return { success: false, error: result?.error || 'Rejection was not committed.' };
+      if (result.customer) {
+        const i = this.state.customers.findIndex((x) => x.id === result.customer.id);
+        if (i >= 0) this.state.customers[i] = result.customer;
+      }
+      if (result.approval) {
+        const i = this.state.pendingApprovals.findIndex((x) => x.id === result.approval.id);
+        if (i >= 0) this.state.pendingApprovals[i] = result.approval;
+      }
+      this.notify();
+      return { success: true };
+    } catch {
+      return { success: false, error: 'Connection interrupted. Check the approval queue before retrying.' };
+    }
+  }
+
   /**
    * Top-Up customer plates
    */
