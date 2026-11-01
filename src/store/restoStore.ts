@@ -1467,8 +1467,8 @@ export class RestoStore {
         return { ...c, pinHash: sha256(saltedPayload) };
       });
     }
-    // Production browser storage must never retain staff passwords or PINs.
-    if (!this.isDemoModeActive() && Array.isArray(copy.stationUsers)) {
+    // Browser storage must never retain staff passwords or PINs, including demo-mode state.
+    if (Array.isArray(copy.stationUsers)) {
       copy.stationUsers = copy.stationUsers.map((user) => ({
         ...user, passwordHash: undefined, pin: undefined,
       }));
@@ -1944,9 +1944,8 @@ export class RestoStore {
           stationUsers: Array.isArray(parsed.stationUsers) && parsed.stationUsers.length > 0
             ? (isDemo
                 ? parsed.stationUsers
-                : parsed.stationUsers
-                    .filter((u: any) => !DEMO_SEED_USER_IDS.has(u.id) && !DEMO_SEED_RESTO_CODES.has(u.restaurantCode))
-                    .map((u: any) => ({ ...u, passwordHash: undefined, pin: undefined })))
+                : parsed.stationUsers.filter((u: any) => !DEMO_SEED_USER_IDS.has(u.id) && !DEMO_SEED_RESTO_CODES.has(u.restaurantCode)))
+                .map((u: any) => ({ ...u, passwordHash: undefined, pin: undefined }))
             : baseState.stationUsers,
           pendingApprovals: Array.isArray(parsed.pendingApprovals)
             ? (isDemo
