@@ -1726,99 +1726,13 @@ app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['cu
 });
 
 // POST /api/payments/mobile-money/callback: Webhook callback from Mobile Money provider with Idempotency
-app.post('/api/payments/mobile-money/callback', apiRateLimiter, async (req, res) => {
-  ensureServerDbDefaults(serverDbState);
-  const { internalReference, providerTransactionId, amountRwf, currency, status } = req.body;
-
-  if (!internalReference) {
-    return res.status(400).json({ success: false, error: 'internalReference is required' });
-  }
-
-  const payment = (serverDbState.studentSubscriptionPayments || []).find(
-    (p: any) => p.internalReference === internalReference
-  );
-  if (!payment) {
-    return res.status(404).json({ success: false, error: 'Payment record not found' });
-  }
-
-  // Idempotency: Duplicate callbacks must not re-activate or extend access
-  if (payment.status === 'verified') {
-    const sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.id === payment.subscriptionId);
-    return res.json({ success: true, message: 'Payment already processed (idempotent)', subscription: sub });
-  }
-
-  // Verify amount: Strictly 500 RWF
-  if (typeof amountRwf === 'number' && amountRwf !== 500) {
-    payment.status = 'failed';
-    payment.failureReason = `Amount mismatch: Expected 500 RWF, received ${amountRwf}`;
-    await queueDbSave(serverDbState);
-    return res.status(400).json({ success: false, error: 'Payment amount mismatch. Expected exactly 500 RWF.' });
-  }
-
-  if (currency && currency !== 'RWF') {
-    payment.status = 'failed';
-    payment.failureReason = `Currency mismatch: Expected RWF, received ${currency}`;
-    await queueDbSave(serverDbState);
-    return res.status(400).json({ success: false, error: 'Currency mismatch. Expected RWF.' });
-  }
-
-  if (status === 'failed') {
-    payment.status = 'failed';
-    payment.failureReason = req.body.failureReason || 'Customer declined or insufficient funds';
-    await queueDbSave(serverDbState);
-    return res.json({ success: true, message: 'Marked payment as failed' });
-  }
-
-  const nowMs = Date.now();
-  const periodEndMs = nowMs + 30 * 24 * 3600 * 1000;
-  const graceDays = serverDbState.studentSubscriptionSettings?.graceDays || 3;
-  const graceEndMs = periodEndMs + graceDays * 24 * 3600 * 1000;
-
-  payment.status = 'verified';
-  payment.verifiedAt = new Date(nowMs).toISOString();
-  payment.providerTransactionId = providerTransactionId || `MPAY_${Date.now()}`;
-
-  let sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.id === payment.subscriptionId);
-  if (!sub) {
-    sub = {
-      id: payment.subscriptionId,
-      customerId: payment.customerId,
-      memberNo: payment.memberNo,
-      restaurantCode: payment.restaurantCode,
-      status: 'active',
-      planName: 'Student Digital Pass',
-      priceRwf: 500,
-      currency: 'RWF',
-      currentPeriodStart: new Date(nowMs).toISOString(),
-      currentPeriodEnd: new Date(periodEndMs).toISOString(),
-      gracePeriodEnd: new Date(graceEndMs).toISOString(),
-      cancelAtPeriodEnd: false,
-      paymentMethod: payment.provider,
-      lastPaymentRef: payment.internalReference,
-      createdAt: new Date(nowMs).toISOString(),
-      updatedAt: new Date(nowMs).toISOString(),
-    };
-    serverDbState.customerSubscriptions.push(sub);
-  } else {
-    sub.status = 'active';
-    sub.priceRwf = 500;
-    sub.currency = 'RWF';
-    sub.currentPeriodStart = new Date(nowMs).toISOString();
-    sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
-    sub.gracePeriodEnd = new Date(graceEndMs).toISOString();
-    sub.cancelAtPeriodEnd = false;
-    sub.paymentMethod = payment.provider;
-    sub.lastPaymentRef = payment.internalReference;
-    sub.updatedAt = new Date(nowMs).toISOString();
-  }
-
-  await queueDbSave(serverDbState);
-
-  return res.json({
-    success: true,
-    status: 'active',
-    subscription: sub,
-    message: 'Mobile Money payment verified and student subscription activated successfully.',
+app.post('/api/payments/mobile-money/callback', apiRateLimiter, (_req, res) => {
+  // SECURITY: never activate a paid entitlement from caller-supplied JSON.
+  // A provider-specific signature verification + server-to-server transaction
+  // status lookup must be implemented before this endpoint can accept callbacks.
+  return res.status(503).json({
+    success: false,
+    error: 'Payment callback verification is not configured. No subscription was activated.',
   });
 });
 
