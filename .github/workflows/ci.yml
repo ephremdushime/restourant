@@ -1,10 +1,22 @@
 name: RestoPass CI Security & Quality Gate
 
 on:
+  # Validate direct changes to the production branch.
   push:
-    branches: [ main, security/production-hardening ]
+    branches: [main]
+  # Validate feature branches through their pull requests.
+  # Do not also run on feature-branch pushes: that duplicates the PR run.
   pull_request:
-    branches: [ main ]
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel obsolete runs when a newer commit is pushed to the same PR/branch.
+concurrency:
+  group: restopass-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   test-and-verify:
@@ -35,7 +47,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
