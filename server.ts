@@ -3041,11 +3041,25 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         // Allow restaurant admin to update their own restaurant branding/policies
         if (Array.isArray(fullState.restaurants)) {
           const rMap = new Map((serverDbState.restaurants || []).map((r: any) => [r.code, r]));
+          const restaurantAdminFields = [
+            'name', 'address', 'phone', 'email', 'logoUrl', 'primaryColor',
+            'secondaryColor', 'welcomeMessage', 'description', 'website',
+            'contactName', 'openingHours', 'timezone',
+          ];
           for (const incR of fullState.restaurants) {
             if (!incR || !incR.code) continue;
             if (allowedRestoCode && incR.code !== allowedRestoCode) continue;
             const prevR: any = rMap.get(incR.code);
-            rMap.set(incR.code, prevR ? { ...prevR, ...incR } : incR);
+            if (user.role !== 'super_admin' && !prevR) continue;
+            if (user.role === 'super_admin') {
+              rMap.set(incR.code, prevR ? { ...prevR, ...incR } : incR);
+            } else {
+              const safeUpdate: any = {};
+              for (const field of restaurantAdminFields) {
+                if (Object.prototype.hasOwnProperty.call(incR, field)) safeUpdate[field] = incR[field];
+              }
+              rMap.set(incR.code, { ...prevR, ...safeUpdate });
+            }
           }
           serverDbState.restaurants = Array.from(rMap.values());
         }
