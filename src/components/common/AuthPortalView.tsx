@@ -210,6 +210,12 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
 
     try {
       if (activeRole === 'restaurant_admin') {
+        if (!username.trim()) {
+          setErrorMessage('Enter your tenant administrator username.');
+          sound.playDangerAlarm();
+          setIsVerifying(false);
+          return;
+        }
         if (!password) {
           setErrorMessage(t.auth.enterPassword);
           sound.playDangerAlarm();
@@ -220,7 +226,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
         // Try server login first
         const serverAuth = await restoStore.loginToServer({
           role: 'restaurant_admin',
-          username: username || 'boss@example.local',
+          username: username.trim(),
           password,
           restaurantCode: selectedRestoCode,
         });
@@ -246,6 +252,12 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
         }
       } else if (activeRole === 'stand_staff') {
         const entered = pin.trim() || password.trim();
+        if (!username.trim()) {
+          setErrorMessage('Enter your assigned staff username.');
+          sound.playDangerAlarm();
+          setIsVerifying(false);
+          return;
+        }
         if (!entered) {
           setErrorMessage(t.auth.enterPin);
           sound.playDangerAlarm();
@@ -255,7 +267,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
 
         const serverAuth = await restoStore.loginToServer({
           role: 'stand_staff',
-          username: username || 'eric.n',
+          username: username.trim(),
           pin: entered,
           password: entered,
           restaurantCode: selectedRestoCode,
@@ -619,7 +631,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="e.g. boss@example.local"
+                  placeholder="e.g. owner.rw01"
                   className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-white outline-hidden font-mono"
                 />
               </div>
