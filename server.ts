@@ -2027,74 +2027,15 @@ app.get('/api/customer/subscription', apiRateLimiter, requireAuth(), (req, res) 
   });
 });
 
-// POST /api/customer/subscription/checkout: Initiates Mobile Money checkout (strictly 500 RWF)
-app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
-  ensureServerDbDefaults(serverDbState);
-  const { phoneNumber, provider } = req.body;
-  const user = req.user!;
-
-  const cleanPhone = (phoneNumber || '').trim();
-  if (!cleanPhone || cleanPhone.length < 8) {
-    return res.status(400).json({ success: false, error: 'Valid mobile money phone number is required' });
-  }
-
-  const customer = (serverDbState.customers || []).find((c: any) => c.id === user.userId || c.memberNo === user.username);
-  if (!customer) {
-    return res.status(404).json({ success: false, error: 'Customer record not found' });
-  }
-
-  const internalReference = `SUB-MOMO-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-  const now = new Date().toISOString();
-
-  let sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === customer.id);
-  if (!sub) {
-    sub = {
-      id: `sub_${customer.id}_${Date.now()}`,
-      customerId: customer.id,
-      memberNo: customer.memberNo,
-      restaurantCode: customer.restaurantCode,
-      status: 'pending_payment',
-      planName: 'Student Digital Pass',
-      priceRwf: 500, // Strictly 500 RWF integer safe
-      currency: 'RWF',
-      paymentMethod: provider || 'mtn_momo',
-      lastPaymentRef: internalReference,
-      createdAt: now,
-      updatedAt: now,
-    };
-    serverDbState.customerSubscriptions.push(sub);
-  } else {
-    sub.status = 'pending_payment';
-    sub.lastPaymentRef = internalReference;
-    sub.paymentMethod = provider || 'mtn_momo';
-    sub.updatedAt = now;
-  }
-
-  const payment = {
-    id: `spay_${Date.now()}`,
-    subscriptionId: sub.id,
-    customerId: customer.id,
-    memberNo: customer.memberNo,
-    restaurantCode: customer.restaurantCode,
-    internalReference,
-    provider: provider || 'mtn_momo',
-    phoneNumber: cleanPhone,
-    amountRwf: 500, // Strictly 500 RWF integer safe
-    currency: 'RWF',
-    status: 'pending',
-    initiatedAt: now,
-  };
-  serverDbState.studentSubscriptionPayments.unshift(payment);
-
-  await queueDbSave(serverDbState);
-
-  const providerLabel = provider === 'airtel_money' ? 'Airtel Money (*500#)' : 'MTN Mobile Money (*182#)';
-  return res.json({
-    success: true,
-    payment,
-    amountRwf: 500,
-    currency: 'RWF',
-    instructions: `Please approve the 500 RWF prompt sent via ${providerLabel} to ${cleanPhone}. Access will activate instantly upon confirmation.`,
+// POST /api/customer/subscription/checkout
+// Deliberately unavailable until a provider account is registered and a verified adapter is configured.
+// Do not create pending payment rows or tell customers that a USSD push was sent without provider confirmation.
+app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['customer']), (_req, res) => {
+  return res.status(503).json({
+    success: false,
+    code: 'PAYMENT_PROVIDER_NOT_CONFIGURED',
+    error: 'Mobile Money checkout is not available yet. RestoPass will enable dashboard payments after provider API onboarding and security verification.',
+    supportedProviders: ['mtn_momo', 'airtel_money'],
   });
 });
 
