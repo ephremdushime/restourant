@@ -1347,7 +1347,7 @@ app.post(
     if (!payload || payload.length > 2048 || !/^[A-Za-z0-9_-]{8,128}$/.test(idempotencyKey) || !requestedStationId) {
       return res.status(400).json({ success: false, error: 'A valid QR payload, station and idempotency key are required.' });
     }
-    if (user.role !== 'super_admin' && user.stationId && user.stationId !== requestedStationId) {
+    if (user.role === 'stand_staff' && (!user.stationId || user.stationId !== requestedStationId)) {
       return res.status(403).json({ success: false, error: 'This account is not assigned to the requested scanner station.' });
     }
     const station = (serverDbState?.scanPoints || []).find((p: any) =>
@@ -1382,12 +1382,15 @@ app.post(
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [idempotencyKey]);
 
       // Idempotent retries return the exact original committed result.
+      const requestFingerprint = crypto.createHash('sha256').update(JSON.stringify({
+        payload, restaurantCode, stationId: requestedStationId, actorId: user.userId, role: user.role,
+      })).digest('hex');
       const prior = await client.query(
-        'SELECT response, restaurant_code FROM scan_requests WHERE idempotency_key = $1 FOR UPDATE',
+        'SELECT response, restaurant_code, request_hash, actor_user_id, station_id FROM scan_requests WHERE idempotency_key = $1 FOR UPDATE',
         [idempotencyKey]
       );
       if (prior.rows[0]?.response) {
-        if (prior.rows[0].restaurant_code !== restaurantCode) {
+        if (prior.rows[0].restaurant_code !== restaurantCode || prior.rows[0].request_hash !== requestFingerprint || prior.rows[0].actor_user_id !== user.userId || prior.rows[0].station_id !== requestedStationId) {
           await client.query('ROLLBACK');
           return res.status(403).json({ success: false, error: 'Idempotency key belongs to another restaurant.' });
         }
@@ -1566,8 +1569,8 @@ app.post(
       );
       const response = { success: true, accepted: true, scanEvent: event, ledgerEntry: isGraceMeal ? null : ledgerEntry, isGraceMeal, balanceBefore, balanceAfter: isGraceMeal ? 0 : balanceBefore - 1 };
       await client.query(
-        'INSERT INTO scan_requests (idempotency_key, customer_id, restaurant_code, response, created_at) VALUES ($1, $2, $3, $4, $5)',
-        [idempotencyKey, customerRow.id, restaurantCode, JSON.stringify(response), now]
+        'INSERT INTO scan_requests (idempotency_key, customer_id, restaurant_code, request_hash, actor_user_id, station_id, response, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+        [idempotencyKey, customerRow.id, restaurantCode, requestFingerprint, user.userId, requestedStationId, JSON.stringify(response), now]
       );
       await client.query('COMMIT');
 
