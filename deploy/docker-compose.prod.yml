@@ -25,8 +25,8 @@ services:
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:5432:5432"
+    networks:
+      - backend
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:?POSTGRES_USER is required} -d ${POSTGRES_DB:?POSTGRES_DB is required}"]
       interval: 10s
@@ -48,8 +48,8 @@ services:
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"]
     volumes:
       - redis_data:/data
-    ports:
-      - "127.0.0.1:6379:6379"
+    networks:
+      - backend
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}", "ping"]
       interval: 10s
@@ -70,7 +70,6 @@ services:
       dockerfile: Dockerfile
     container_name: restopass-app
     restart: unless-stopped
-    ports:
     expose:
       - "3000"
     environment:
