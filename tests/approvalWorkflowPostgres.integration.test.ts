@@ -331,7 +331,8 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       assert.equal(staffLogin.status, 200);
       const staffToken = staffLogin.body.token;
       const customerId = 'scan_customer_' + restaurantCode;
-      const memberNo = 'SCAN' + restaurantCode.slice(-6);
+      // Keep the test member sequence above the registration workflow's 28490 baseline.
+      const memberNo = '999999';
       const licenseId = 'license_' + restaurantCode;
       const planId = 'plan_' + restaurantCode;
       const currentState = serverModule.getServerDbState();
