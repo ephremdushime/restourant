@@ -235,12 +235,12 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
     }
   };
 
-  // Handle Delete Station User
+  // Handle Station User Deactivation
   const handleExecuteDeleteUser = () => {
     if (!userToDelete) return;
     const success = restoStore.deleteStationUser(userToDelete.id, restaurantCode, 'Restaurant Boss (Executive)');
     if (success) {
-      showToast(`Deleted station user account "${userToDelete.name}" (@${userToDelete.username})`);
+      showToast(`Deactivated station user account "${userToDelete.name}" (@${userToDelete.username})`);
       setUserToDelete(null);
     }
   };
@@ -567,12 +567,12 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
                           )}
                         </button>
 
-                        {/* Delete User */}
+                        {/* Deactivate User */}
                         <button
                           type="button"
                           onClick={() => setUserToDelete(user)}
                           className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-950 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer inline-flex items-center"
-                          title="Delete user account"
+                          title="Deactivate user account"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -1132,12 +1132,12 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
           <div className="bg-slate-900 border border-rose-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
             <div className="flex items-center gap-3 text-rose-400">
               <AlertTriangle className="w-6 h-6 shrink-0" />
-              <h3 className="text-base font-bold text-white">Permanently Delete Account?</h3>
+              <h3 className="text-base font-bold text-white">Deactivate Account?</h3>
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              Are you sure you want to delete operator account <strong>"{userToDelete.name}" (@{userToDelete.username})</strong>?
-              They will immediately lose access to scanner stands and reception portals.
+              Are you sure you want to deactivate operator account <strong>"{userToDelete.name}" (@{userToDelete.username})</strong>?
+              They will immediately lose access to scanner stands and reception portals. The account and audit history will be retained.
             </p>
 
             <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
@@ -1153,7 +1153,7 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
                 onClick={handleExecuteDeleteUser}
                 className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-md cursor-pointer"
               >
-                Delete Account
+                Deactivate Account
               </button>
             </div>
           </div>
