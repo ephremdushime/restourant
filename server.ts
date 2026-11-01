@@ -461,16 +461,36 @@ declare global {
 /**
  * Middleware: Enforces valid session token and optional role verification
  */
+function sessionRevocationKey(token: string): string {
+  return `restopass:session:revoked:${crypto.createHash('sha256').update(token).digest('hex')}`;
+}
+
+async function revokeSessionToken(token: string): Promise<boolean> {
+  const session = verifySessionToken(token);
+  if (!session) return true;
+  if (process.env.NODE_ENV === 'production') {
+    const redis = getRedisClient();
+    if (!redis || redis.status !== 'ready') return false;
+    try {
+      const ttlSeconds = Math.max(1, Math.ceil((session.exp - Date.now()) / 1000));
+      await redis.set(sessionRevocationKey(token), '1', 'EX', ttlSeconds);
+      return true;
+    } catch (error) {
+      console.error('[Session Revocation] Redis write failed:', error);
+      return false;
+    }
+  }
+  revokedTokens.add(token);
+  return true;
+}
+
 function requireAuth(allowedRoles?: string[]) {
-  return (req: Request, res: Response, next: NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
     const authHeader = req.headers.authorization || (req.headers['x-restopass-token'] as string);
     let token = '';
 
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      token = authHeader.substring(7).trim();
-    } else if (authHeader) {
-      token = authHeader.trim();
-    }
+    if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.substring(7).trim();
+    else if (authHeader) token = authHeader.trim();
 
     if (!token) {
       return res.status(401).json({
@@ -485,6 +505,35 @@ function requireAuth(allowedRoles?: string[]) {
         success: false,
         error: 'Invalid or expired authentication session. Please sign in again.',
       });
+    }
+
+    if (process.env.NODE_ENV === 'production') {
+      const redis = getRedisClient();
+      if (!redis || redis.status !== 'ready') {
+        return res.status(503).json({ success: false, error: 'Session security is temporarily unavailable.' });
+      }
+      try {
+        if (await redis.exists(sessionRevocationKey(token))) {
+          return res.status(401).json({ success: false, error: 'Session has been revoked. Please sign in again.' });
+        }
+      } catch (error) {
+        console.error('[Session Validation] Redis lookup failed:', error);
+        return res.status(503).json({ success: false, error: 'Session security is temporarily unavailable.' });
+      }
+    }
+
+    if (session.role === 'stand_staff') {
+      const staff = (serverDbState?.stationUsers || []).find((item: any) =>
+        item.id === session.userId && item.restaurantCode === session.restaurantCode &&
+        item.status === 'active' && item.stationId === session.stationId
+      );
+      const station = (serverDbState?.scanPoints || []).find((item: any) =>
+        item.id === session.stationId && item.restaurantCode === session.restaurantCode &&
+        item.status === 'active' && item.isPaired
+      );
+      if (!staff || !station) {
+        return res.status(401).json({ success: false, error: 'Staff account or assigned station is inactive. Sign in again or contact the restaurant manager.' });
+      }
     }
 
     if (allowedRoles && allowedRoles.length > 0 && !allowedRoles.includes(session.role)) {
@@ -709,17 +758,11 @@ app.get('/api/auth/session', apiRateLimiter, requireAuth(), (req, res) => {
 });
 
 // POST /api/auth/logout: Revoke session token
-app.post('/api/auth/logout', (req, res) => {
+app.post('/api/auth/logout', async (req, res) => {
   const authHeader = req.headers.authorization || (req.headers['x-restopass-token'] as string);
-  let token = '';
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    token = authHeader.substring(7).trim();
-  } else if (authHeader) {
-    token = authHeader.trim();
-  }
-
-  if (token) {
-    revokedTokens.add(token);
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7).trim() : (authHeader || '').trim();
+  if (token && !(await revokeSessionToken(token))) {
+    return res.status(503).json({ success: false, error: 'Could not revoke the session because shared session security is unavailable.' });
   }
   return res.json({ success: true, message: 'Logged out successfully' });
 });
@@ -851,15 +894,12 @@ app.post('/api/customer/auth/login', authRateLimiter, (req, res) => {
 });
 
 // POST /api/customer/auth/logout: Revoke current session
-app.post('/api/customer/auth/logout', (req, res) => {
+app.post('/api/customer/auth/logout', async (req, res) => {
   const authHeader = req.headers.authorization || (req.headers['x-restopass-token'] as string);
-  let token = '';
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    token = authHeader.substring(7).trim();
-  } else if (authHeader) {
-    token = authHeader.trim();
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7).trim() : (authHeader || '').trim();
+  if (token && !(await revokeSessionToken(token))) {
+    return res.status(503).json({ success: false, error: 'Could not revoke the session because shared session security is unavailable.' });
   }
-  if (token) revokedTokens.add(token);
   return res.json({ success: true, message: 'Logged out successfully' });
 });
 
