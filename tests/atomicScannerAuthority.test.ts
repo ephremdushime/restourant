@@ -17,6 +17,7 @@ describe('Cloud-authoritative scanner regression guards', () => {
     assert.match(server, /requireAuth\(\['stand_staff', 'restaurant_admin'\]\)/);
     assert.match(server, /createDistributedRateLimiter\('scan', 1200, 60 \* 1000\)/);
     assert.match(server, /redis\.eval\(/);
+    assert.match(server, /ensureRedisReady\(10000\)/);
     assert.match(server, /SELECT id, restaurant_code, member_no, card_status, card_version, key_version, data FROM customers[^\n]*FOR UPDATE/);
   });
 
