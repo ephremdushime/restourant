@@ -283,11 +283,23 @@ SESSION_SECRET="generate_a_strong_64_hex_char_secret_here_for_session_signing"
 # Mandatory (>= 32 random characters): Root HMAC secret for restaurant keys, c1 PVC cards, and v1 phone QRs
 RESTOPASS_MASTER_SECRET="generate_a_strong_64_hex_char_secret_here_for_master_authority"
 
-# Optional role password overrides
-RESTOPASS_SUPERADMIN_PASSWORD="your_strong_superadmin_password"
-RESTOPASS_BOSS_PASSWORD="your_strong_restaurant_boss_password"
-RESTOPASS_STAFF_DEFAULT_PIN="1234"
+# Required platform-owner credential (minimum 16 characters)
+RESTOPASS_SUPERADMIN_PASSWORD="your_unique_strong_platform_admin_password"
+
+# Tenant administrators and POS staff are provisioned individually in PostgreSQL.
+# There is no shared restaurant-boss password or default staff PIN.
 ```
+
+Provision a tenant administrator after signing in as the platform super-admin:
+
+```bash
+curl -X POST https://YOUR_DOMAIN/api/admin/restaurant-admins \
+  -H "Authorization: Bearer YOUR_SUPER_ADMIN_SESSION" \
+  -H "Content-Type: application/json" \
+  -d '{"restaurantCode":"RW01","username":"owner.rw01","displayName":"Restaurant Owner","password":"A-unique-16-character-or-longer-password"}'
+```
+
+Each POS operator is provisioned from the restaurant's Station Operators screen. Passwords and optional 8–12 digit POS PINs are hashed server-side; credential hashes are never returned in state responses.
 
 Generate cryptographically strong secrets using Node.js:
 ```bash
@@ -300,7 +312,11 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 | Method & Endpoint | Auth / Roles | Purpose |
 | :--- | :--- | :--- |
-| `GET /api/health` | Public | Server liveness, uptime, and database state readiness check. |
+| `GET /api/health` | Public | Lightweight process liveness check. |
+| `GET /api/health/ready` | Public | PostgreSQL and Redis dependency readiness; returns HTTP 503 when production dependencies are unavailable. |
+| `GET /api/admin/restaurant-admins?restaurantCode=...` | `super_admin` | Lists tenant administrator accounts without credential hashes. |
+| `POST /api/admin/restaurant-admins` | `super_admin` | Provisions a unique tenant administrator with a scrypt-hashed password (minimum 16 characters). |
+| `PATCH /api/admin/restaurant-admins/:id` | `super_admin` | Blocks/reactivates a tenant administrator or resets their password. |
 | `GET /api/public/restaurants` | Public | Safe list of active restaurants (`code`, `name`, `address`, `status`) for portal sign-in. |
 | `POST /api/auth/login` | Public (Rate-limited) | Authenticates `super_admin`, `restaurant_admin`, `stand_staff`, or `customer` and issues `rp_sess_` token. |
 | `POST /api/customer/auth/login` | Public (Rate-limited) | Customer Phone + 6+ digit PIN login with 5-attempt lockout and anti-enumeration. |
