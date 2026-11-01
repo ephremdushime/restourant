@@ -7117,6 +7117,9 @@ export class RestoStore {
   }
 
   public cancelStudentSubscription(customerId: string): { success: boolean; error?: string } {
+    if (this.authToken && !this.isDemoModeActive()) {
+      return { success: false, error: 'Subscription changes require the server-side billing authority. Cancellation has not been changed.' };
+    }
     const sub = this.getCustomerSubscription(customerId);
     if (!sub) return { success: false, error: 'Subscription not found' };
 
@@ -7155,6 +7158,9 @@ export class RestoStore {
     durationDays?: number;
     grantedBy?: string;
   }): { success: boolean; subscription?: CustomerSubscription; error?: string } {
+    if (this.authToken && !this.isDemoModeActive()) {
+      return { success: false, error: 'Complimentary entitlements must be granted through the audited server-side administrator endpoint.' };
+    }
     if (!params.reason || !params.reason.trim()) {
       return { success: false, error: 'A mandatory reason is required to grant complimentary access.' };
     }
