@@ -247,8 +247,8 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
         gracePlatesConsumed: 0, photoUrl: '',
       };
       await pool!.query(
-        'INSERT INTO customers (id, restaurant_code, member_no, card_status, card_version, key_version, data) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-        [customerId, restaurantCode, memberNo, 'active', 1, 1, JSON.stringify(customerData)]
+        'INSERT INTO customers (id, restaurant_code, member_no, name, card_status, card_version, key_version, data) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+        [customerId, restaurantCode, memberNo, 'Scanner Integration Customer', 'active', 1, 1, JSON.stringify(customerData)]
       );
       await pool!.query(
         'INSERT INTO ledger_entries (id, restaurant_code, customer_id, type, plates_delta, idempotency_key, timestamp, data) VALUES ($1,$2,$3,$4,$5,$6,NOW(),$7)',
