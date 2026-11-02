@@ -14,7 +14,7 @@
 - Browser sync cannot create subscription entitlements or payment records. Client-side balance, transfer, scan reversal, second-plate, photo override and manual adjustment mutations remain blocked.
 - Financial exception requests now support cash/bank refund, paid scan reversal and completed plate-transfer reversal. A restaurant administrator submits a reasoned request; a different platform super-admin approves or rejects it. Approval locks affected rows, revalidates source eligibility, appends compensating ledger entries, updates the source record and writes an audit event in one PostgreSQL transaction. Duplicate source exceptions and idempotency keys are constrained in PostgreSQL. Refunds are limited to cash/bank top-ups with no subsequent ledger activity; mobile-money refunds remain disabled until a provider refund API is configured.
 - Liveness and dependency-aware readiness endpoints are available. The production proxy waits for PostgreSQL/Redis readiness.
-- A backup worker creates encrypted PostgreSQL and local-upload archives every 24 hours by default, retains 14 days, and verifies an independent HMAC-SHA256 integrity sidecar before reporting a recent backup healthy.
+- A backup worker creates encrypted PostgreSQL and local-upload archives every 24 hours by default, retains 14 days locally, and verifies an independent HMAC-SHA256 integrity sidecar. Production Compose now requires an S3-compatible off-site bucket, uploads both encrypted archive and HMAC sidecar, downloads the remote copy and verifies it before marking replication healthy.
 - A guarded restore utility verifies the HMAC before decryption, refuses non-empty destinations, and extracts only the expected database dump and upload archive. CI exercises valid restore and tamper rejection.
 
 ## Release gates still requiring external setup or an explicit product decision
@@ -25,7 +25,7 @@ MTN MoMo and Airtel Money production credentials, callback secrets, provider all
 
 ### 2. Off-site backup and restore drill
 
-The backup worker writes encrypted archives to `RESTOPASS_BACKUP_DIR`. Configure that directory on protected storage and replicate it to an independent off-site location. Keep the encryption key separately controlled. Perform and document a restore into an isolated staging database and upload volume before launch, then repeat on a schedule. A backup stored only on the application host is not disaster recovery.
+Production Compose requires `RESTOPASS_BACKUP_REQUIRE_OFFSITE=true` and an independent S3-compatible backup bucket. Configure `RESTOPASS_BACKUP_S3_BUCKET`, dedicated least-privilege access keys, region, and optional HTTPS endpoint (for R2/Spaces). The worker uploads the encrypted archive and HMAC sidecar, downloads the archive again, verifies its HMAC and byte-for-byte equality, then records a freshness marker. The backup healthcheck fails if no recent local backup or successful off-site replication exists within 48 hours. Apply a bucket lifecycle policy and versioning/object-lock policy appropriate to your retention and ransomware threat model. Keep the encryption and HMAC keys separately controlled outside the application host. Perform and document an isolated restore drill before launch and repeat it on a schedule.
 
 ### 3. Remaining financial and exception workflows
 
