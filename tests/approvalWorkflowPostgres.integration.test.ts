@@ -460,6 +460,10 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       );
       const scanRequest = await requestException('scan_reversal', scanId, 'scan-reversal-' + restaurantCode);
       assert.equal(scanRequest.status, 201);
+      const samePrincipalAttempt = await post('/api/financial-exceptions/' + scanRequest.body.exception.id + '/approve', samePrincipalSuperToken, {
+        approvalReason: 'A requester must never approve their own financial exception.',
+      });
+      assert.equal(samePrincipalAttempt.status, 403);
       const scanApproved = await approveException(scanRequest.body.exception.id);
       assert.equal(scanApproved.status, 200);
       const scanAfter = await pool!.query('SELECT status FROM scan_events WHERE id=$1', [scanId]);
@@ -497,10 +501,6 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       );
       assert.deepEqual(balances.rows.map((x: any) => Number(x.balance)).sort(), [0, 0]);
 
-      const ownApproval = await post('/api/financial-exceptions/' + scanRequest.body.exception.id + '/approve',
-        serverModule.createSessionToken({ userId: bossId, username: 'Same Principal', role: 'super_admin', restaurantCode: 'ALL' }),
-        { approvalReason: 'Requester must not approve their own exception.' });
-      assert.equal(ownApproval.status, 409); // already approved; cannot be replayed
     });
 
     await t.test('rejection atomically locks a provisional new customer', async () => {
