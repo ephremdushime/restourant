@@ -314,7 +314,19 @@ The production Compose stack runs a backup worker that:
 
 Set `RESTOPASS_BACKUP_ENCRYPTION_KEY`, `RESTOPASS_BACKUP_HMAC_KEY`, and `RESTOPASS_BACKUP_DIR` before deployment. Production Compose also requires `RESTOPASS_BACKUP_S3_BUCKET` and dedicated least-privilege S3-compatible credentials; configure `RESTOPASS_BACKUP_S3_ENDPOINT` for R2/Spaces or leave it blank for AWS S3. The worker uploads the encrypted archive and HMAC sidecar, downloads the remote archive and verifies it before marking off-site replication healthy. Keep the encryption and HMAC keys separately controlled outside the backup host. Configure bucket versioning and lifecycle retention, then complete and record an isolated restore drill before launch and repeat it on a schedule.
 
-For a guarded restore drill, create an empty destination directory and run the restore utility from the backup container (or a compatible environment containing OpenSSL and the scripts):
+For an off-site restore drill, create an empty destination directory and run the restore utility from the backup container. It downloads both objects from the configured private bucket, verifies the HMAC, then decrypts and extracts into the empty directory:
+
+```bash
+mkdir -p ./restore
+RESTOPASS_BACKUP_S3_BUCKET="$RESTOPASS_BACKUP_S3_BUCKET" \
+RESTOPASS_BACKUP_S3_ACCESS_KEY_ID="$RESTOPASS_BACKUP_S3_ACCESS_KEY_ID" \
+RESTOPASS_BACKUP_S3_SECRET_ACCESS_KEY="$RESTOPASS_BACKUP_S3_SECRET_ACCESS_KEY" \
+RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
+RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" \
+  deploy/restore-offsite.sh restopass-YYYYMMDDTHHMMSSZ.tar.gz.enc ./restore
+```
+
+For a local guarded restore drill, create an empty destination directory and run the restore utility from the backup container (or a compatible environment containing OpenSSL and the scripts):
 
 ```bash
 mkdir -p ./restore
