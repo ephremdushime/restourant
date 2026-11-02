@@ -2392,9 +2392,12 @@ app.post('/api/financial-exceptions', apiRateLimiter, requireAuth(['restaurant_a
         await client.query('ROLLBACK');
         return res.status(409).json({ success: false, error: 'The original purchase ledger entry could not be found.' });
       }
+      // Exclude the purchase row explicitly. PostgreSQL microseconds are truncated
+      // when pg converts timestamptz to JS Date; comparing the rounded Date alone
+      // can incorrectly classify the purchase itself as later activity.
       const later = await client.query(
-        'SELECT id FROM ledger_entries WHERE customer_id=$1 AND timestamp>$2 LIMIT 1',
-        [source.rows[0].customer_id, purchase.rows[0].timestamp]
+        'SELECT id FROM ledger_entries WHERE customer_id=$1 AND id<>$2 AND timestamp >= (SELECT timestamp FROM ledger_entries WHERE id=$2) LIMIT 1',
+        [source.rows[0].customer_id, purchase.rows[0].id]
       );
       if (later.rows[0]) {
         await client.query('ROLLBACK');
@@ -2490,7 +2493,10 @@ app.post('/api/financial-exceptions/:exceptionId/approve', apiRateLimiter, requi
       const source = await client.query('SELECT data FROM payments WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [exception.sourceId, row.restaurant_code]);
       const payment = source.rows[0]?.data;
       if (!payment || payment.refundStatus === 'refunded') { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Payment is no longer eligible for refund.' }); }
-      const later = await client.query('SELECT id FROM ledger_entries WHERE customer_id=$1 AND timestamp>$2 LIMIT 1', [exception.snapshot.customerId, exception.created_at]);
+      const later = await client.query(
+        'SELECT id FROM ledger_entries WHERE customer_id=$1 AND id<>$2 AND timestamp >= (SELECT timestamp FROM ledger_entries WHERE id=$2) LIMIT 1',
+        [exception.snapshot.customerId, exception.snapshot.purchaseLedgerId]
+      );
       if (later.rows[0]) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Customer ledger changed after refund request; reconcile before payout.' }); }
       await addLedger(exception.snapshot.customerId, 'reversal', -Number(exception.snapshot.plates), 'refund', exception.sourceId);
       payment.refundStatus = 'refunded'; payment.refundedAt = now.toISOString();
