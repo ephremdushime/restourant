@@ -249,3 +249,8 @@ CREATE INDEX IF NOT EXISTS idx_financial_exceptions_queue
     ON financial_exception_requests (restaurant_code, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_financial_exceptions_source
     ON financial_exception_requests (restaurant_code, exception_type, source_id);
+
+-- A source transaction may have at most one active or completed exception.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_financial_exception_source_active
+    ON financial_exception_requests (restaurant_code, exception_type, source_id)
+    WHERE status IN ('pending', 'approved');
