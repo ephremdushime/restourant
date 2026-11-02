@@ -1862,7 +1862,7 @@ app.post(
         staffId: user.userId, staffName: user.username, timestamp: now.toISOString(),
         platesInWindow: platesInWindow + 1, platesDeducted: 1,
         photoCheckRequired: requiresPhotoCheck,
-        photoCheckReason: requiresPhotoCheck ? 'random_spot_check' : 'none',
+        photoCheckReason: requiresPhotoCheck ? 'random_sample' : 'none',
         photoCheckResult: 'none', status: (platesInWindow > 0 || isGraceMeal) ? 'warning_confirmed' : 'approved',
         isGracePlate: isGraceMeal, gracePlateNumber,
         overrideReason: isGraceMeal ? `Authorized grace meal (#${gracePlateNumber}/3). Awaiting manager payment approval.` : undefined,
