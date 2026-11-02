@@ -316,3 +316,4 @@ Completion of Phase 4 validates:
 - [x] Staging smoke test script (`deploy/verify-staging.sh`) is prepared.
 
 Upon completing host provisioning and running `verify-staging.sh` with 0 failures, the system is formally cleared to proceed to **Phase 5 — Restaurant Acceptance Testing**.
+
