@@ -430,7 +430,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
           JSON.stringify({ id: purchaseId, paymentId, timestamp: new Date().toISOString(), platesDelta: 10 })]
       );
       const refundRequest = await requestException('cash_refund', paymentId, 'refund-request-' + restaurantCode);
-      assert.equal(refundRequest.status, 201);
+      assert.equal(refundRequest.status, 201, JSON.stringify(refundRequest.body));
       const refundApproval = await approveException(refundRequest.body.exception.id, 'CASH-PAYOUT-' + restaurantCode);
       assert.equal(refundApproval.status, 200);
       const refundLedger = await pool!.query(
