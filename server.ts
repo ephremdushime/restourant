@@ -2693,7 +2693,7 @@ app.post('/api/customer/transfers', apiRateLimiter, requireAuth(['customer']), a
       'SELECT customer_id,COALESCE(SUM(plates_delta),0)::int AS balance FROM ledger_entries WHERE restaurant_code=$1 AND customer_id = ANY($2::varchar[]) GROUP BY customer_id',
       [user.restaurantCode, ids]
     );
-    const balances = new Map(balanceResult.rows.map((r: any) => [r.customer_id, Number(r.balance)]));
+    const balances = new Map<string, number>(balanceResult.rows.map((r: any) => [String(r.customer_id), Number(r.balance)] as [string, number]));
     const senderBalance = balances.get(user.userId) || 0;
     if (senderBalance < plates) {
       await client.query('ROLLBACK');
