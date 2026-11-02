@@ -21,6 +21,7 @@ case "$filename" in */*|*..*) echo "[restore-offsite] path components are not al
 }
 
 prefix="${RESTOPASS_BACKUP_S3_PREFIX:-restopass}"
+[ -n "$prefix" ] || { echo "[restore-offsite] S3 prefix cannot be empty" >&2; exit 1; }
 object_key="${prefix%/}/$filename"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT HUP INT TERM
@@ -30,6 +31,7 @@ export AWS_DEFAULT_REGION="${RESTOPASS_BACKUP_S3_REGION:-us-east-1}"
 
 if [ -n "${RESTOPASS_BACKUP_S3_ENDPOINT:-}" ]; then
   case "$RESTOPASS_BACKUP_S3_ENDPOINT" in https://*) ;; *) echo "[restore-offsite] endpoint must use HTTPS" >&2; exit 1 ;; esac
+  export AWS_S3_ADDRESSING_STYLE=path
   aws --endpoint-url "$RESTOPASS_BACKUP_S3_ENDPOINT" s3 cp "s3://$RESTOPASS_BACKUP_S3_BUCKET/$object_key" "$workdir/backup.enc" --only-show-errors
   aws --endpoint-url "$RESTOPASS_BACKUP_S3_ENDPOINT" s3 cp "s3://$RESTOPASS_BACKUP_S3_BUCKET/$object_key.hmac" "$workdir/backup.enc.hmac" --only-show-errors
 else
