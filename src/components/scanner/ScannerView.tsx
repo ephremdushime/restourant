@@ -359,7 +359,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
       setActiveScan({
         ...activeScan,
         event: resultFromServer.scanEvent,
-        balanceAfter: result === 'rejected' ? restoStore.getCustomerBalance(activeScan.event.customerId) : activeScan.balanceAfter,
+        balanceAfter: resultFromServer.balanceAfter ?? activeScan.balanceAfter,
       });
       setScanError(null);
     } finally {
