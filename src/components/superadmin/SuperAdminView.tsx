@@ -3,6 +3,7 @@ import { Restaurant, Plan, License, SubscriptionPayment, Language } from '../../
 import { restoStore } from '../../store/restoStore';
 import { translations } from '../../services/i18n';
 import { KinyarwandaTranslationStudio } from './KinyarwandaTranslationStudio';
+import { FinancialExceptionsManager } from '../common/FinancialExceptionsManager';
 import {
   Building2,
   FileKey,
@@ -645,7 +646,9 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
       {/* 5. PLATFORM AUDIT LOG */}
       {activeSubTab === 'audit' && (
-        <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
+        <div className="space-y-5">
+          <FinancialExceptionsManager mode="review" />
+          <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-bold text-white uppercase tracking-wider">
               Immutable Platform Security Audit Trail
@@ -674,6 +677,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 </div>
               </div>
             ))}
+          </div>
           </div>
         </div>
       )}
