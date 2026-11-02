@@ -2040,6 +2040,17 @@ app.post('/api/scans/:scanId/photo-check', scanRateLimiter, requireAuth(['stand_
       await client.query('ROLLBACK');
       return res.status(403).json({ success: false, error: 'This operator is not assigned to the scan station.' });
     }
+    if (event.photoCheckResult === result && event.photoCheckedBy === user.userId && event.photoCheckIdempotencyKey === idempotencyKey) {
+      const checkpoint = await client.query('SELECT balance,cutoff_timestamp FROM balance_checkpoints WHERE customer_id=$1 ORDER BY cutoff_timestamp DESC LIMIT 1', [row.customer_id]);
+      const cutoff = checkpoint.rows[0]?.cutoff_timestamp || new Date(0);
+      const delta = await client.query('SELECT COALESCE(SUM(plates_delta),0)::int AS delta FROM ledger_entries WHERE customer_id=$1 AND timestamp>$2', [row.customer_id, cutoff]);
+      const ledgerResult = result === 'rejected'
+        ? await client.query("SELECT data FROM ledger_entries WHERE idempotency_key=$1", ['photo-reject:' + idempotencyKey])
+        : { rows: [] };
+      await client.query('COMMIT');
+      return res.json({ success: true, idempotent: true, scanEvent: event, ledgerEntry: ledgerResult.rows[0]?.data || null,
+        balanceAfter: Number(checkpoint.rows[0]?.balance || 0) + Number(delta.rows[0]?.delta || 0), reversed: result === 'rejected' });
+    }
     if (!event.photoCheckRequired || event.photoCheckResult !== 'none' ||
         !['approved','warning_confirmed'].includes(row.status) || event.isGracePlate) {
       await client.query('ROLLBACK');
@@ -2071,12 +2082,14 @@ app.post('/api/scans/:scanId/photo-check', scanRateLimiter, requireAuth(['stand_
       event.status = 'rejected_photo';
       event.platesDeducted = 0;
       event.photoCheckResult = 'rejected';
+      event.photoCheckIdempotencyKey = idempotencyKey;
       event.photoCheckReason = reason || 'photo_mismatch';
       event.photoCheckedAt = now.toISOString();
       event.photoCheckedBy = user.userId;
       await client.query("UPDATE scan_events SET status='rejected_photo',data=$2 WHERE id=$1", [scanId, JSON.stringify(event)]);
     } else {
       event.photoCheckResult = 'matched';
+      event.photoCheckIdempotencyKey = idempotencyKey;
       event.photoCheckedAt = now.toISOString();
       event.photoCheckedBy = user.userId;
       await client.query('UPDATE scan_events SET data=$2 WHERE id=$1', [scanId, JSON.stringify(event)]);
