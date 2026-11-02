@@ -11,7 +11,7 @@ test('customer transfers are disabled by default and require a customer session'
   assert.match(server, /customer-transfer:' \+ user\.restaurantCode \+ ':' \+ idempotencyKey/);
   assert.match(server, /SELECT id,member_no,name,card_status FROM customers WHERE restaurant_code=\$1 AND member_no=\$2/);
   assert.match(server, /INSUFFICIENT_BALANCE/);
-  assert.match(server, /uq_transfer_idempotency/);
+  assert.match(schema, /uq_transfer_idempotency/);
   assert.match(server, /CUSTOMER_PLATE_TRANSFER/);
 });
 
