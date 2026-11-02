@@ -74,6 +74,20 @@ jobs:
           sh -n tests/backup-recovery.test.sh
           sh tests/backup-recovery.test.sh
 
+      - name: Validate production Compose configuration
+        env:
+          DOMAIN: restopass.example.com
+          POSTGRES_DB: restopass
+          POSTGRES_USER: restopass
+          POSTGRES_PASSWORD: ci-postgres-password
+          REDIS_PASSWORD: ci-redis-password
+          RESTOPASS_SUPERADMIN_PASSWORD: ci-super-admin-password-0123456789
+          SESSION_SECRET: ci-session-secret-0123456789abcdef0123456789
+          RESTOPASS_MASTER_SECRET: ci-master-secret-0123456789abcdef0123456789
+          RESTOPASS_BACKUP_ENCRYPTION_KEY: ci-backup-encryption-secret-0123456789
+          RESTOPASS_BACKUP_HMAC_KEY: ci-backup-hmac-secret-0123456789
+        run: docker compose --file deploy/docker-compose.prod.yml config --quiet
+
       - name: Build production Docker image
         run: docker build --tag restopass-ci .
 
