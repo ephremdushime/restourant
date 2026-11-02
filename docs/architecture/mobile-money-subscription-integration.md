@@ -117,20 +117,13 @@ These are proposed placeholders only. The actual variable names and credential s
 
 ## 7. PostgreSQL persistence changes required before activation
 
-The current schema has general `payments` and `customer_subscriptions` tables, but that is not enough to safely operate multiple external payment providers. Add a dedicated subscription-payment-attempt table or equivalent normalized columns, with at least:
+The schema now includes `mobile_money_payment_attempts` and `mobile_money_webhook_events`. They separate provider transactions from meal-credit payments, constrain provider/environment/status, enforce unique internal references and provider transaction identities, and retain webhook digests rather than raw payloads. Before activation, the adapters and transaction reconciler must use these tables for:
 
-- Internal reference (unique, generated server-side)
-- Customer and subscription foreign keys
-- Provider name and environment
-- Amount in integer RWF and currency
-- Payment status and timestamps
-- Provider transaction ID (unique per provider/environment when present)
-- Provider request/correlation ID
-- Idempotency key and request fingerprint
-- Redacted payer MSISDN or encrypted payer MSISDN if retention is necessary
+- Customer and subscription relationship validation in the service transaction
+- Provider request/correlation ID and masked payer metadata in the JSON data column
 - Verified provider status, verification timestamp, and minimal verification evidence
 - Failure code/category and safe diagnostic metadata
-- Created/updated timestamps
+- Daily settlement reconciliation against provider statements
 
 Add indexes/unique constraints for internal reference, provider transaction identity, and idempotency. Keep raw provider payloads out of ordinary application logs; if retention is required for disputes, encrypt and restrict access with a documented retention period.
 
@@ -176,6 +169,6 @@ The current generic callback route is deliberately disabled. Prefer provider-spe
 - The checkout endpoint now returns HTTP 503 with `PAYMENT_PROVIDER_NOT_CONFIGURED`; it does not create a fake pending payment or claim a USSD prompt was sent.
 - The customer UI identifies Mobile Money as coming soon; payment simulation is limited to demo mode.
 - Client-side subscription verification is blocked in authenticated production sessions.
-- No real payment provider has been registered or connected. No customer is charged by this feature.
+- Normalized provider-neutral payment-attempt and webhook-event tables are now present in PostgreSQL. No provider adapter is enabled and no customer is charged by this feature.
 
 **Next implementation phase:** add normalized payment-attempt persistence, provider adapter interfaces and mock contract tests without activating a live provider. Complete provider-specific adapters only after merchant onboarding and sandbox credentials are available.
