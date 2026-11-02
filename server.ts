@@ -1841,9 +1841,26 @@ app.post(
         await client.query('ROLLBACK');
         return res.status(409).json({ success: false, error: 'Consecutive scans at this station are not allowed. Scan another customer first.' });
       }
+      let supervisorOverride: any = null;
       if (platesInWindow >= plateLimit) {
-        await client.query('ROLLBACK');
-        return res.status(409).json({ success: false, error: `Meal limit reached: maximum ${plateLimit} meals in ${windowMinutes} minutes.` });
+        const overrideId = typeof req.body?.supervisorOverrideId === 'string' ? req.body.supervisorOverrideId.trim() : '';
+        if (!/^sov_[A-Za-z0-9_-]{8,64}$/.test(overrideId)) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ success: false, code: 'MEAL_LIMIT_REACHED', error: `Meal limit reached: maximum ${plateLimit} meals in ${windowMinutes} minutes. A supervisor approval is required.` });
+        }
+        const approved = await client.query(
+          "SELECT * FROM scan_supervisor_overrides WHERE id=$1 AND restaurant_code=$2 AND customer_id=$3 AND station_id=$4 AND status='approved' AND expires_at>NOW() FOR UPDATE",
+          [overrideId, restaurantCode, customerRow.id, requestedStationId]
+        );
+        if (!approved.rows[0]) {
+          await client.query('ROLLBACK');
+          return res.status(403).json({ success: false, code: 'SUPERVISOR_OVERRIDE_INVALID', error: 'Supervisor override is invalid, expired, already used or not bound to this customer and station.' });
+        }
+        supervisorOverride = approved.rows[0];
+        await client.query(
+          "UPDATE scan_supervisor_overrides SET status='consumed',consumed_at=NOW(),consumed_scan_id=$2 WHERE id=$1 AND status='approved'",
+          [overrideId, 'pending']
+        );
       }
 
       const now = new Date();
@@ -1865,6 +1882,8 @@ app.post(
         photoCheckReason: requiresPhotoCheck ? 'random_sample' : 'none',
         photoCheckResult: 'none', status: (platesInWindow > 0 || isGraceMeal) ? 'warning_confirmed' : 'approved',
         isGracePlate: isGraceMeal, gracePlateNumber,
+        supervisorOverrideId: supervisorOverride?.id,
+        supervisorOverrideApprovedBy: supervisorOverride?.approved_by_user_id,
         overrideReason: isGraceMeal ? `Authorized grace meal (#${gracePlateNumber}/3). Awaiting manager payment approval.` : undefined,
       };
       if (!isGraceMeal) {
@@ -1884,6 +1903,17 @@ app.post(
         'INSERT INTO scan_requests (idempotency_key, customer_id, restaurant_code, request_hash, actor_user_id, station_id, response, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
         [idempotencyKey, customerRow.id, restaurantCode, requestFingerprint, user.userId, requestedStationId, JSON.stringify(response), now]
       );
+      if (supervisorOverride) {
+        await client.query(
+          "UPDATE scan_supervisor_overrides SET consumed_scan_id=$2 WHERE id=$1",
+          [supervisorOverride.id, scanId]
+        );
+        await client.query(
+          'INSERT INTO audit_logs (id,restaurant_code,user_id,action,data) VALUES ($1,$2,$3,$4,$5)',
+          ['aud_' + crypto.randomUUID(), restaurantCode, user.userId, 'SUPERVISOR_OVERRIDE_CONSUMED',
+            JSON.stringify({ overrideId: supervisorOverride.id, scanId, customerId: customerRow.id, stationId: requestedStationId, approvedBy: supervisorOverride.approved_by_user_id })]
+        );
+      }
       await client.query('COMMIT');
 
       // Update process cache only after the durable transaction has committed.
@@ -1911,6 +1941,66 @@ app.post(
   }
 );
 
+
+
+// Two-person supervisor override for a serving-window limit. Approval is one-time,
+// customer/station-bound, short-lived and consumed inside the scan transaction.
+app.post('/api/scans/supervisor-overrides', apiRateLimiter, requireAuth(['stand_staff','restaurant_admin']), async (req,res) => {
+  const user=req.user!;
+  const customerId=typeof req.body?.customerId==='string'?req.body.customerId.trim():'';
+  const stationId=typeof req.body?.stationId==='string'?req.body.stationId.trim():'';
+  const reason=typeof req.body?.reason==='string'?req.body.reason.trim():'';
+  const idempotencyKey=typeof req.body?.idempotencyKey==='string'?req.body.idempotencyKey.trim():'';
+  if(!customerId||!stationId||reason.length<12||reason.length>500||!/^[A-Za-z0-9:_-]{12,128}$/.test(idempotencyKey))
+    return res.status(400).json({success:false,error:'Customer, station, detailed reason and idempotency key are required.'});
+  if(user.role==='stand_staff'&&(!user.stationId||user.stationId!==stationId))
+    return res.status(403).json({success:false,error:'Operator is not assigned to this station.'});
+  const pool=getPostgresPool(); if(!pool||!isPostgresConfigured()) return res.status(503).json({success:false,error:'Supervisor overrides require PostgreSQL.'});
+  const client=await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const station=(serverDbState?.scanPoints||[]).find((p:any)=>p.id===stationId&&p.restaurantCode===user.restaurantCode&&p.status==='active'&&p.isPaired);
+    if(!station){await client.query('ROLLBACK');return res.status(403).json({success:false,error:'Station is not active and paired.'});}
+    const customer=await client.query('SELECT id FROM customers WHERE id=$1 AND restaurant_code=$2 AND card_status=\'active\' FOR UPDATE',[customerId,user.restaurantCode]);
+    if(!customer.rows[0]){await client.query('ROLLBACK');return res.status(404).json({success:false,error:'Active customer not found.'});}
+    const prior=await client.query('SELECT id,data,status FROM scan_supervisor_overrides WHERE restaurant_code=$1 AND idempotency_key=$2 FOR UPDATE',[user.restaurantCode,idempotencyKey]);
+    if(prior.rows[0]){
+      const d=prior.rows[0].data;
+      if(d.customerId!==customerId||d.stationId!==stationId||d.reason!==reason){await client.query('ROLLBACK');return res.status(409).json({success:false,error:'Idempotency key belongs to a different override request.'});}
+      await client.query('COMMIT');return res.json({success:true,override:d,idempotent:true});
+    }
+    const id='sov_'+crypto.randomUUID(), now=new Date();
+    const data={id,restaurantCode:user.restaurantCode,customerId,stationId,reason,status:'pending',
+      requestedBy:{userId:user.userId,username:user.username,role:user.role},idempotencyKey,createdAt:now.toISOString()};
+    await client.query("INSERT INTO scan_supervisor_overrides (id,restaurant_code,customer_id,station_id,status,requested_by_user_id,idempotency_key,data,expires_at) VALUES ($1,$2,$3,$4,'pending',$5,$6,$7,NOW()+INTERVAL '30 minutes')",
+      [id,user.restaurantCode,customerId,stationId,user.userId,idempotencyKey,JSON.stringify(data)]);
+    await client.query('INSERT INTO audit_logs (id,restaurant_code,user_id,action,data) VALUES ($1,$2,$3,$4,$5)',
+      ['aud_'+crypto.randomUUID(),user.restaurantCode,user.userId,'SUPERVISOR_OVERRIDE_REQUESTED',JSON.stringify({overrideId:id,customerId,stationId,reason})]);
+    await client.query('COMMIT');return res.status(201).json({success:true,override:data});
+  } catch(e:any){try{await client.query('ROLLBACK')}catch{};if(e?.code==='23505')return res.status(409).json({success:false,error:'Override request already exists.'});console.error('[Override Request]',e);return res.status(503).json({success:false,error:'Override request was not saved.'});}
+  finally{client.release();}
+});
+
+app.post('/api/scans/supervisor-overrides/:overrideId/approve',apiRateLimiter,requireAuth(['super_admin']),async(req,res)=>{
+  const actor=req.user!,reason=typeof req.body?.approvalReason==='string'?req.body.approvalReason.trim():'';
+  if(reason.length<12||reason.length>500)return res.status(400).json({success:false,error:'A detailed approval reason is required.'});
+  const pool=getPostgresPool();if(!pool||!isPostgresConfigured())return res.status(503).json({success:false,error:'Supervisor approval requires PostgreSQL.'});
+  const client=await pool.connect();
+  try{
+    await client.query('BEGIN');
+    const found=await client.query('SELECT * FROM scan_supervisor_overrides WHERE id=$1 FOR UPDATE',[req.params.overrideId]);
+    const row=found.rows[0];
+    if(!row){await client.query('ROLLBACK');return res.status(404).json({success:false,error:'Override request not found.'});}
+    if(row.status!=='pending'||new Date(row.expires_at).getTime()<=Date.now()){await client.query('ROLLBACK');return res.status(409).json({success:false,error:'Override request is no longer pending or has expired.'});}
+    if(row.requested_by_user_id===actor.userId){await client.query('ROLLBACK');return res.status(403).json({success:false,error:'Requester cannot approve their own override.'});}
+    const data={...row.data,status:'approved',approvedBy:{userId:actor.userId,username:actor.username},approvalReason:reason,approvedAt:new Date().toISOString()};
+    await client.query("UPDATE scan_supervisor_overrides SET status='approved',approved_by_user_id=$2,data=$3 WHERE id=$1",[row.id,actor.userId,JSON.stringify(data)]);
+    await client.query('INSERT INTO audit_logs (id,restaurant_code,user_id,action,data) VALUES ($1,$2,$3,$4,$5)',
+      ['aud_'+crypto.randomUUID(),row.restaurant_code,actor.userId,'SUPERVISOR_OVERRIDE_APPROVED',JSON.stringify({overrideId:row.id,requesterId:row.requested_by_user_id,customerId:row.customer_id,stationId:row.station_id,reason})]);
+    await client.query('COMMIT');return res.json({success:true,override:data});
+  }catch(e){try{await client.query('ROLLBACK')}catch{};console.error('[Override Approval]',e);return res.status(503).json({success:false,error:'Override approval was not committed.'});}
+  finally{client.release();}
+});
 
 
 // Server-authoritative second-plate and photo spot-check workflows.
