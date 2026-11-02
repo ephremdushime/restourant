@@ -12,7 +12,12 @@ output_dir="${2:?Usage: restopass-restore <backup-file> <empty-output-directory>
   echo "[restore] output directory must be empty" >&2; exit 1;
 }
 
-restopass-backup-verify "$backup_file"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+if command -v restopass-backup-verify >/dev/null 2>&1; then
+  restopass-backup-verify "$backup_file"
+else
+  sh "$SCRIPT_DIR/backup-verify.sh" "$backup_file"
+fi
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT HUP INT TERM
 
