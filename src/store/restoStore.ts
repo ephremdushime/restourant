@@ -2353,6 +2353,67 @@ export class RestoStore {
     }
   }
 
+  public async addSecondPlateAuthoritative(scanEventId: string): Promise<{ success: boolean; balanceAfter?: number; error?: string }> {
+    if (!this.authToken) return { success: false, error: 'Scanner session expired. Sign in again.' };
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return { success: false, error: 'Cloud connection unavailable. No second plate was deducted.' };
+    const idempotencyKey = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : 'extra_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+    try {
+      const response = await fetch('/api/scans/' + encodeURIComponent(scanEventId) + '/second-plate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.authToken },
+        body: JSON.stringify({ idempotencyKey }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success || !result?.scanEvent || !result?.ledgerEntry) {
+        return { success: false, error: result?.error || 'The server did not authorize a second plate.' };
+      }
+      this.appendLedgerEntry(result.ledgerEntry as LedgerEntry);
+      const index = this.state.scanEvents.findIndex((event) => event.id === scanEventId);
+      if (index >= 0) this.state.scanEvents[index] = result.scanEvent as ScanEvent;
+      this.notify();
+      return { success: true, balanceAfter: Number(result.balanceAfter) };
+    } catch {
+      return { success: false, error: 'Connection interrupted. Do not retry with a new scan; verify the scan history first.' };
+    }
+  }
+
+  public async recordPhotoCheckAuthoritative(
+    scanEventId: string,
+    result: 'matched' | 'rejected',
+    reason = ''
+  ): Promise<{ success: boolean; scanEvent?: ScanEvent; error?: string }> {
+    if (!this.authToken) return { success: false, error: 'Scanner session expired. Sign in again.' };
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return { success: false, error: 'Cloud connection unavailable. Photo check was not recorded.' };
+    const idempotencyKey = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : 'photo_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+    try {
+      const response = await fetch('/api/scans/' + encodeURIComponent(scanEventId) + '/photo-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.authToken },
+        body: JSON.stringify({ result, reason, idempotencyKey }),
+      });
+      const body = await response.json();
+      if (!response.ok || !body?.success || !body?.scanEvent) {
+        return { success: false, error: body?.error || 'The server did not record the photo check.' };
+      }
+      const event = body.scanEvent as ScanEvent;
+      const index = this.state.scanEvents.findIndex((item) => item.id === scanEventId);
+      if (index >= 0) this.state.scanEvents[index] = event;
+      if (body.reversed && event.customerId) {
+        // The server has already committed the compensating ledger entry. Refresh authoritative state
+        // before displaying a new balance; never synthesize a client-side credit.
+        await this.refreshAuthoritativeState();
+      }
+      this.notify();
+      return { success: true, scanEvent: event };
+    } catch {
+      return { success: false, error: 'Connection interrupted. Verify the scan history before retrying.' };
+    }
+  }
+
   public processScan(payload: string): {
     outcome: 'ACCEPTED' | 'REJECTED';
     accepted: boolean;
