@@ -307,23 +307,23 @@ Each POS operator is provisioned from the restaurant's Station Operators screen.
 
 The production Compose stack runs a backup worker that:
 - Takes an encrypted PostgreSQL custom-format dump and an archive of the local uploads volume immediately at startup, then every 24 hours by default.
-- Uses AES-256-CBC with PBKDF2 (200,000 iterations) and a dedicated passphrase of at least 32 characters.
-- Retains 14 days of local backups by default and marks the worker unhealthy if no backup has been produced within 48 hours.
+- Encrypts the PostgreSQL custom-format dump and uploads archive using AES-256-CBC with PBKDF2 (200,000 iterations).
+- Adds a separate HMAC-SHA256 integrity sidecar using an independent key; the healthcheck verifies the newest archive before considering it healthy.
+- Includes a guarded restore utility that verifies integrity before decrypting, refuses a non-empty destination, and extracts only the expected recovery artifacts.
+- Retains 14 days of local backups by default and marks the worker unhealthy if no valid recent backup exists within 48 hours.
 
-Set `RESTOPASS_BACKUP_ENCRYPTION_KEY` and `RESTOPASS_BACKUP_DIR` before deployment. Point `RESTOPASS_BACKUP_DIR` to a protected host path that is also replicated to independent off-site storage; a backup stored only on the application host is not disaster recovery. Restrict access to the encryption key and test restores in a separate staging environment before launch and on a scheduled basis.
+Set `RESTOPASS_BACKUP_ENCRYPTION_KEY`, `RESTOPASS_BACKUP_HMAC_KEY`, and `RESTOPASS_BACKUP_DIR` before deployment. The encryption and HMAC keys must be different, randomly generated secrets and stored separately from the backup host. Point `RESTOPASS_BACKUP_DIR` to protected storage that is also replicated to an independent off-site location; local encrypted backups are not disaster recovery. Complete and record an isolated restore drill before launch and repeat it on a schedule.
 
-To decrypt an archive for a restore drill:
+For a guarded restore drill, create an empty destination directory and run the restore utility from the backup container (or a compatible environment containing OpenSSL and the scripts):
 
 ```bash
-openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
-  -pass env:RESTOPASS_BACKUP_ENCRYPTION_KEY \
-  -in restopass-YYYYMMDDTHHMMSSZ.tar.gz.enc \
-  -out restopass-restore.tar.gz
 mkdir -p ./restore
-tar -xzf restopass-restore.tar.gz -C ./restore
+RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
+RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" \
+  deploy/restore.sh restopass-YYYYMMDDTHHMMSSZ.tar.gz.enc ./restore
 ```
 
-The archive contains `database.dump` (PostgreSQL custom format) and `uploads.tar.gz`. Restore into an isolated PostgreSQL instance with `pg_restore`; restore uploads into the corresponding private uploads volume. Never test a restore over the live production database.
+The output contains `database.dump` (PostgreSQL custom format) and `uploads.tar.gz`. Restore the database into an isolated PostgreSQL instance with `pg_restore`, and restore uploads into the corresponding private volume after reviewing the archive. Never test a restore over the live production database.
 
 Generate cryptographically strong secrets using Node.js:
 ```bash
