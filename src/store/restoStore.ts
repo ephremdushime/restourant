@@ -2356,9 +2356,15 @@ export class RestoStore {
   public async addSecondPlateAuthoritative(scanEventId: string): Promise<{ success: boolean; balanceAfter?: number; error?: string }> {
     if (!this.authToken) return { success: false, error: 'Scanner session expired. Sign in again.' };
     if (typeof navigator !== 'undefined' && !navigator.onLine) return { success: false, error: 'Cloud connection unavailable. No second plate was deducted.' };
-    const idempotencyKey = typeof crypto !== 'undefined' && 'randomUUID' in crypto
-      ? crypto.randomUUID()
-      : 'extra_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+    const storageKey = 'restopass_second_plate_' + scanEventId;
+    let idempotencyKey = '';
+    try { idempotencyKey = typeof localStorage !== 'undefined' ? localStorage.getItem(storageKey) || '' : ''; } catch {}
+    if (!idempotencyKey) {
+      idempotencyKey = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : 'extra_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+      try { if (typeof localStorage !== 'undefined') localStorage.setItem(storageKey, idempotencyKey); } catch {}
+    }
     try {
       const response = await fetch('/api/scans/' + encodeURIComponent(scanEventId) + '/second-plate', {
         method: 'POST',
@@ -2369,6 +2375,7 @@ export class RestoStore {
       if (!response.ok || !result?.success || !result?.scanEvent || !result?.ledgerEntry) {
         return { success: false, error: result?.error || 'The server did not authorize a second plate.' };
       }
+      try { if (typeof localStorage !== 'undefined') localStorage.removeItem(storageKey); } catch {}
       this.appendLedgerEntry(result.ledgerEntry as LedgerEntry);
       const index = this.state.scanEvents.findIndex((event) => event.id === scanEventId);
       if (index >= 0) this.state.scanEvents[index] = result.scanEvent as ScanEvent;
@@ -2386,9 +2393,15 @@ export class RestoStore {
   ): Promise<{ success: boolean; scanEvent?: ScanEvent; balanceAfter?: number; error?: string }> {
     if (!this.authToken) return { success: false, error: 'Scanner session expired. Sign in again.' };
     if (typeof navigator !== 'undefined' && !navigator.onLine) return { success: false, error: 'Cloud connection unavailable. Photo check was not recorded.' };
-    const idempotencyKey = typeof crypto !== 'undefined' && 'randomUUID' in crypto
-      ? crypto.randomUUID()
-      : 'photo_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+    const storageKey = 'restopass_photo_check_' + scanEventId + '_' + result;
+    let idempotencyKey = '';
+    try { idempotencyKey = typeof localStorage !== 'undefined' ? localStorage.getItem(storageKey) || '' : ''; } catch {}
+    if (!idempotencyKey) {
+      idempotencyKey = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : 'photo_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+      try { if (typeof localStorage !== 'undefined') localStorage.setItem(storageKey, idempotencyKey); } catch {}
+    }
     try {
       const response = await fetch('/api/scans/' + encodeURIComponent(scanEventId) + '/photo-check', {
         method: 'POST',
@@ -2399,6 +2412,7 @@ export class RestoStore {
       if (!response.ok || !body?.success || !body?.scanEvent) {
         return { success: false, error: body?.error || 'The server did not record the photo check.' };
       }
+      try { if (typeof localStorage !== 'undefined') localStorage.removeItem(storageKey); } catch {}
       const event = body.scanEvent as ScanEvent;
       const index = this.state.scanEvents.findIndex((item) => item.id === scanEventId);
       if (index >= 0) this.state.scanEvents[index] = event;
