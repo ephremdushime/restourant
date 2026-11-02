@@ -2411,6 +2411,7 @@ app.post('/api/financial-exceptions', apiRateLimiter, requireAuth(['restaurant_a
     return res.status(201).json({ success: true, exception });
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch {}
+    if ((error as any)?.code === '23505') return res.status(409).json({ success: false, error: 'An exception for this source transaction is already pending or has been approved.' });
     console.error('[Financial Exception Request] failed:', error);
     return res.status(503).json({ success: false, error: 'Financial exception request was not saved.' });
   } finally { client.release(); }
@@ -2500,6 +2501,33 @@ app.post('/api/financial-exceptions/:exceptionId/approve', apiRateLimiter, requi
     try { await client.query('ROLLBACK'); } catch {}
     console.error('[Financial Exception Approval] failed:', error);
     return res.status(503).json({ success: false, error: 'Financial exception was not approved or posted.' });
+  } finally { client.release(); }
+});
+
+
+app.post('/api/financial-exceptions/:exceptionId/reject', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
+  const actor = req.user!;
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  if (reason.length < 12 || reason.length > 500) return res.status(400).json({ success: false, error: 'A detailed rejection reason is required.' });
+  const pool = getPostgresPool();
+  if (!pool || !isPostgresConfigured()) return res.status(503).json({ success: false, error: 'Financial exception rejection requires PostgreSQL.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const found = await client.query('SELECT * FROM financial_exception_requests WHERE id=$1 FOR UPDATE', [req.params.exceptionId]);
+    if (!found.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Exception request not found.' }); }
+    const row = found.rows[0];
+    if (row.status !== 'pending') { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Exception is no longer pending.' }); }
+    if (row.requested_by_user_id === actor.userId) { await client.query('ROLLBACK'); return res.status(403).json({ success: false, error: 'The requester cannot reject their own financial exception.' }); }
+    const exception = { ...row.data, status: 'rejected', rejection: { userId: actor.userId, username: actor.username, reason, rejectedAt: new Date().toISOString() } };
+    await client.query("UPDATE financial_exception_requests SET status='rejected',approved_by_user_id=$2,data=$3,updated_at=NOW() WHERE id=$1", [exception.id, actor.userId, JSON.stringify(exception)]);
+    await writeApprovalAudit(client, row.restaurant_code, actor, 'FINANCIAL_EXCEPTION_REJECTED', { exceptionId: exception.id, type: exception.type, sourceId: exception.sourceId, reason });
+    await client.query('COMMIT');
+    return res.json({ success: true, exception });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    console.error('[Financial Exception Rejection] failed:', error);
+    return res.status(503).json({ success: false, error: 'Financial exception rejection was not committed.' });
   } finally { client.release(); }
 });
 
