@@ -81,14 +81,20 @@ export async function uploadPatronPhoto(
   mimeType: string,
   filenameHint = 'patron'
 ): Promise<UploadResult> {
-  const extMap: Record<string, string> = {
+  const allowedMimes: Record<string, string> = {
     'image/jpeg': 'jpg',
     'image/png': 'png',
     'image/webp': 'webp',
   };
-  const ext = extMap[mimeType] || 'jpg';
+  const ext = allowedMimes[mimeType];
+  if (!ext) {
+    throw new Error(`Unsupported image format (${mimeType}). Only JPEG, PNG, and WebP images are allowed.`);
+  }
+
+  // Prevent path traversal by sanitizing filename hint
+  const safeHint = (filenameHint || 'patron').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32) || 'patron';
   const randomSuffix = crypto.randomBytes(8).toString('hex');
-  const filename = `${filenameHint}-${Date.now()}-${randomSuffix}.${ext}`;
+  const filename = `${safeHint}-${Date.now()}-${randomSuffix}.${ext}`;
   const key = `patron-photos/${filename}`;
 
   const config = getObjectStorageConfig();
@@ -96,14 +102,19 @@ export async function uploadPatronPhoto(
 
   if (config && s3) {
     try {
-      const command = new PutObjectCommand({
+      const putParams: any = {
         Bucket: config.bucket,
         Key: key,
         Body: buffer,
         ContentType: mimeType,
-        ACL: 'public-read',
-      });
+      };
+      // Modern S3 buckets with Object Ownership: Bucket Owner Enforced reject ACLs.
+      // Only attach ACL when explicitly configured via S3_OBJECT_ACL environment variable.
+      if (process.env.S3_OBJECT_ACL) {
+        putParams.ACL = process.env.S3_OBJECT_ACL;
+      }
 
+      const command = new PutObjectCommand(putParams);
       await s3.send(command);
 
       // Determine public CDN or bucket URL

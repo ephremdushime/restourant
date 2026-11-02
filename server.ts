@@ -15,12 +15,30 @@ import { uploadBase64Photo } from './src/services/storage/objectStorage';
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
+// Configure trust proxy for cloud deployment (Cloudflare, AWS ALB, Nginx, Railway, Render)
+const trustProxySetting = process.env.TRUST_PROXY;
+if (trustProxySetting) {
+  app.set('trust proxy', trustProxySetting === 'true' ? true : Number(trustProxySetting) || trustProxySetting);
+} else {
+  // Default to 1 hop behind cloud reverse proxy
+  app.set('trust proxy', 1);
+}
+
 // Cryptographic secrets for session signing & data integrity
 const DEV_SESSION_SECRET = crypto
   .createHash('sha256')
   .update('RESTOPASS_DEV_EPHEMERAL_SESSION_KEY_V1')
   .digest('hex');
 const DEV_MASTER_SECRET = ['RESTOPASS', 'RWANDA', 'MASTER', '2026', 'SUPER', 'ADMIN', 'EPHREM'].join('_');
+
+const FORBIDDEN_PLACEHOLDERS = [
+  'REPLACE_WITH',
+  'CHANGE_ME',
+  'CHANGE_THIS',
+  'CHANGETHIS',
+  'YOUR_SECRET',
+  'EXAMPLE_SECRET',
+];
 
 function validateProductionSecrets(env: NodeJS.ProcessEnv = process.env): {
   sessionSecret: string;
@@ -36,11 +54,23 @@ function validateProductionSecrets(env: NodeJS.ProcessEnv = process.env): {
         '[FATAL SECURITY ERROR] SESSION_SECRET (>= 32 characters) must be configured in production environment. Server startup aborted.'
       );
     }
+    if (FORBIDDEN_PLACEHOLDERS.some((p) => sessionSecret.toUpperCase().includes(p))) {
+      throw new Error(
+        '[FATAL SECURITY ERROR] SESSION_SECRET contains an unconfigured placeholder. Generate a strong random production secret.'
+      );
+    }
+
     if (!masterSecret || masterSecret.length < 32 || masterSecret === DEV_MASTER_SECRET) {
       throw new Error(
         '[FATAL SECURITY ERROR] RESTOPASS_MASTER_SECRET (>= 32 characters) must be configured in production environment. Server startup aborted.'
       );
     }
+    if (FORBIDDEN_PLACEHOLDERS.some((p) => masterSecret.toUpperCase().includes(p))) {
+      throw new Error(
+        '[FATAL SECURITY ERROR] RESTOPASS_MASTER_SECRET contains an unconfigured placeholder. Generate a strong random production secret.'
+      );
+    }
+
     return { sessionSecret, masterSecret };
   }
 
@@ -321,6 +351,18 @@ function createRateLimiter(bucketName: string, maxRequests: number, windowMs: nu
   };
 }
 
+// Periodic memory pruning to prevent unbound Map growth in high DAU production
+setInterval(() => {
+  const now = Date.now();
+  for (const store of rateLimitStores.values()) {
+    for (const [ip, record] of store.entries()) {
+      if (now > record.resetTime) {
+        store.delete(ip);
+      }
+    }
+  }
+}, 5 * 60 * 1000).unref();
+
 const authRateLimiter = createRateLimiter('auth', 20, 60 * 1000); // 20 attempts per minute
 const apiRateLimiter = createRateLimiter('api', 120, 60 * 1000); // 120 requests per minute
 const syncRateLimiter = createRateLimiter('sync', 40, 60 * 1000); // 40 syncs per minute
@@ -343,6 +385,24 @@ export interface UserSession {
 }
 
 const revokedTokens = new Set<string>();
+
+// Periodic pruning of expired revoked session tokens
+setInterval(() => {
+  const now = Date.now();
+  for (const token of revokedTokens) {
+    const parts = token.slice('rp_sess_'.length).split('.');
+    if (parts.length === 2) {
+      try {
+        const payload = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf-8'));
+        if (payload.exp && payload.exp < now) {
+          revokedTokens.delete(token);
+        }
+      } catch {
+        revokedTokens.delete(token);
+      }
+    }
+  }
+}, 10 * 60 * 1000).unref();
 
 /**
  * Constant-time string equality check to prevent timing side channels
@@ -495,10 +555,16 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
 
   // 1. Super Admin Authentication
   if (role === 'super_admin') {
+    const isProd = process.env.NODE_ENV === 'production';
     const configuredSuperAdminPassword = process.env.RESTOPASS_SUPERADMIN_PASSWORD || process.env.SUPERADMIN_PASSWORD;
+    if (isProd && !configuredSuperAdminPassword) {
+      console.error('[SECURITY ERROR] Super Admin login attempted in production, but RESTOPASS_SUPERADMIN_PASSWORD is not configured.');
+      return res.status(500).json({ success: false, error: 'Super Admin login disabled: Administrator password not set in environment.' });
+    }
+
     const validPassword = configuredSuperAdminPassword
       ? timingSafeCompare(password || '', configuredSuperAdminPassword)
-      : (typeof password === 'string' && password.length >= 8);
+      : (!isProd && typeof password === 'string' && password.length >= 8);
 
     if (!validPassword) {
       return res.status(401).json({ success: false, error: 'Invalid Super Admin credentials' });
@@ -527,10 +593,11 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
     if (!restaurantCode) {
       return res.status(400).json({ success: false, error: 'Restaurant code is required' });
     }
+    const isProd = process.env.NODE_ENV === 'production';
     const configuredBossPassword = process.env.RESTOPASS_BOSS_PASSWORD || process.env.BOSS_PASSWORD;
     const validPassword = configuredBossPassword
       ? timingSafeCompare(password || '', configuredBossPassword)
-      : (typeof password === 'string' && password.length >= 6);
+      : (!isProd && typeof password === 'string' && password.length >= 6);
 
     if (!validPassword) {
       return res.status(401).json({ success: false, error: 'Invalid Restaurant Administrator credentials' });
@@ -561,9 +628,22 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
     if (!restaurantCode) {
       return res.status(400).json({ success: false, error: 'Restaurant code is required' });
     }
+    const isProd = process.env.NODE_ENV === 'production';
     const entered = (pin || password || '').trim();
-    const configuredStaffPin = process.env.RESTOPASS_STAFF_DEFAULT_PIN || '1234';
-    const validPin = timingSafeCompare(entered, configuredStaffPin) || (entered.length >= 4);
+    const configuredStaffPin = process.env.RESTOPASS_STAFF_DEFAULT_PIN;
+    const matchingStaffUser = (serverDbState?.stationUsers || []).find(
+      (u: any) => u.restaurantCode === restaurantCode && (u.username === username || u.id === username)
+    );
+
+    let validPin = false;
+    if (matchingStaffUser?.pin) {
+      validPin = timingSafeCompare(entered, matchingStaffUser.pin);
+    } else if (configuredStaffPin) {
+      validPin = timingSafeCompare(entered, configuredStaffPin);
+    } else if (!isProd) {
+      validPin = timingSafeCompare(entered, '1234') || (entered.length >= 4);
+    }
+
     if (!validPin) {
       return res.status(401).json({ success: false, error: 'Invalid Staff PIN or Password' });
     }
@@ -1477,6 +1557,23 @@ app.post(
 // RestoPass Student Digital Monetization & Entitlements Engine
 // ----------------------------------------------------
 
+function getServerCustomerBalance(state: any, customerId: string): number {
+  if (!state) return 0;
+  const checkpoints = (state.balanceCheckpoints || []).filter((cp: any) => cp.customerId === customerId);
+  checkpoints.sort((a: any, b: any) => new Date(b.cutoffTimestamp).getTime() - new Date(a.cutoffTimestamp).getTime());
+  const latestCheckpoint = checkpoints[0];
+  const cutoffTime = latestCheckpoint ? new Date(latestCheckpoint.cutoffTimestamp).getTime() : 0;
+  const baseBalance = latestCheckpoint ? Number(latestCheckpoint.balance || 0) : 0;
+
+  const subsequent = (state.ledgerEntries || []).filter((l: any) => {
+    if (l.customerId !== customerId) return false;
+    const t = l.timestamp ? new Date(l.timestamp).getTime() : 0;
+    return t > cutoffTime;
+  });
+
+  return baseBalance + subsequent.reduce((sum: number, l: any) => sum + (Number(l.platesDelta) || 0), 0);
+}
+
 /**
  * Server-authoritative entitlement verification for student digital features
  */
@@ -1708,6 +1805,20 @@ app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['cu
 // POST /api/payments/mobile-money/callback: Webhook callback from Mobile Money provider with Idempotency
 app.post('/api/payments/mobile-money/callback', apiRateLimiter, async (req, res) => {
   ensureServerDbDefaults(serverDbState);
+
+  // Webhook security guard for production cloud environments
+  const webhookSecret = process.env.MOMO_WEBHOOK_SECRET || process.env.PAYMENT_WEBHOOK_SECRET;
+  if (webhookSecret) {
+    const authHeader = req.headers['x-callback-token'] || req.headers['authorization'] || req.headers['x-webhook-secret'];
+    const expected = `Bearer ${webhookSecret}`;
+    const provided = typeof authHeader === 'string' ? authHeader.trim() : '';
+    const isValid = timingSafeCompare(provided, webhookSecret) || timingSafeCompare(provided, expected);
+    if (!isValid) {
+      console.warn('[Security Warning] Rejected unauthorized Mobile Money webhook callback attempt');
+      return res.status(401).json({ success: false, error: 'Unauthorized webhook callback' });
+    }
+  }
+
   const { internalReference, providerTransactionId, amountRwf, currency, status } = req.body;
 
   if (!internalReference) {
@@ -2259,6 +2370,38 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         return true;
       });
 
+      // Strict financial integrity validation for customer peer-to-peer transfers
+      if (user.role === 'customer') {
+        const custTransfersOut = incomingLedgers.filter((l: any) => l.type === 'transfer_out');
+        const custTransfersIn = incomingLedgers.filter((l: any) => l.type === 'transfer_in');
+        const totalOut = custTransfersOut.reduce((acc: number, l: any) => acc + l.platesDelta, 0); // negative
+        const totalIn = custTransfersIn.reduce((acc: number, l: any) => acc + l.platesDelta, 0);   // positive
+
+        if (custTransfersIn.length > 0 || custTransfersOut.length > 0) {
+          if (totalOut + totalIn !== 0) {
+            return res.status(400).json({
+              success: false,
+              error: 'Invalid transfer payload: transfer_out and transfer_in must balance to zero.',
+            });
+          }
+          const curBal = getServerCustomerBalance(serverDbState, user.userId);
+          if (Math.abs(totalOut) > curBal) {
+            return res.status(400).json({
+              success: false,
+              error: `Insufficient plates balance for transfer: Available ${curBal}, requested ${Math.abs(totalOut)}.`,
+            });
+          }
+          const transferEnt = checkServerStudentEntitlement(user.userId, 'digital_plate_transfer');
+          if (!transferEnt.allowed) {
+            return res.status(402).json({
+              success: false,
+              requiresSubscription: true,
+              error: transferEnt.reason || 'Digital plate transfers require an active student subscription (500 RWF/mo).',
+            });
+          }
+        }
+      }
+
       serverDbState.ledgerEntries = [...(serverDbState.ledgerEntries || []), ...incomingLedgers];
 
       // 3. Merge scan events idempotently (Only stand_staff, restaurant_admin, super_admin)
@@ -2445,6 +2588,7 @@ export {
   scopeStateForUser,
   timingSafeCompare,
   checkServerStudentEntitlement,
+  getServerCustomerBalance,
   ensureServerDbDefaults,
   getServerDbState,
   setServerDbState,

@@ -212,6 +212,17 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
       /FATAL SECURITY ERROR/
     );
 
+    // Placeholder secrets in production must throw
+    assert.throws(
+      () =>
+        validateProductionSecrets({
+          NODE_ENV: 'production',
+          SESSION_SECRET: 'REPLACE_WITH_32_PLUS_CHAR_RANDOM_PRODUCTION_SESSION_SECRET',
+          RESTOPASS_MASTER_SECRET: 'REPLACE_WITH_32_PLUS_CHAR_RANDOM_PRODUCTION_MASTER_SECRET',
+        } as unknown as NodeJS.ProcessEnv),
+      /placeholder/i
+    );
+
     // Strong 32+ char secrets in production succeed
     const strongSession = 'prod_session_secret_with_at_least_32_characters_random_2026';
     const strongMaster = 'prod_master_secret_with_at_least_32_characters_random_2026!';
