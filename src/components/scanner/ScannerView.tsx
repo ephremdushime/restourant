@@ -297,20 +297,26 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     }
   };
 
-  const handleAddSecondPlate = () => {
-    if (!activeScan) return;
-    const ok = restoStore.addSecondPlate(activeScan.event.id);
-    if (ok) {
+  const handleAddSecondPlate = async () => {
+    if (!activeScan || scanPendingRef.current) return;
+    if (isDemoMode) {
+      const ok = restoStore.addSecondPlate(activeScan.event.id);
+      if (!ok) return;
       const updatedBalance = restoStore.getCustomerBalance(activeScan.event.customerId);
-      setActiveScan({
-        ...activeScan,
-        event: {
-          ...activeScan.event,
-          platesDeducted: 2,
-          isSecondPlateAdded: true,
-        },
-        balanceAfter: updatedBalance,
-      });
+      setActiveScan({ ...activeScan, event: { ...activeScan.event, platesDeducted: 2, isSecondPlateAdded: true }, balanceAfter: updatedBalance });
+      return;
+    }
+    scanPendingRef.current = true;
+    setScanPending(true);
+    try {
+      const result = await restoStore.addSecondPlateAuthoritative(activeScan.event.id);
+      if (!result.success) { setScanError(result.error || 'Second plate was not authorized.'); return; }
+      const updated = restoStore.getState().scanEvents.find((event) => event.id === activeScan.event.id);
+      if (updated) setActiveScan({ ...activeScan, event: updated, balanceAfter: result.balanceAfter ?? activeScan.balanceAfter });
+      setScanError(null);
+    } finally {
+      scanPendingRef.current = false;
+      setScanPending(false);
     }
   };
 
@@ -331,28 +337,34 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     }
   };
 
-  const handlePhotoCheckDecision = (result: 'matched' | 'rejected') => {
-    if (!activeScan) return;
-    restoStore.recordPhotoCheck(activeScan.event.id, result);
-    if (result === 'rejected') {
+  const handlePhotoCheckDecision = async (result: 'matched' | 'rejected') => {
+    if (!activeScan || scanPendingRef.current) return;
+    if (isDemoMode) {
+      restoStore.recordPhotoCheck(activeScan.event.id, result);
+      if (result === 'rejected') {
+        setActiveScan({ ...activeScan, event: { ...activeScan.event, photoCheckResult: 'rejected', status: 'rejected_photo', platesDeducted: 0 }, balanceAfter: restoStore.getCustomerBalance(activeScan.event.customerId) });
+      } else {
+        setActiveScan({ ...activeScan, event: { ...activeScan.event, photoCheckResult: 'matched' } });
+      }
+      return;
+    }
+    scanPendingRef.current = true;
+    setScanPending(true);
+    try {
+      const resultFromServer = await restoStore.recordPhotoCheckAuthoritative(activeScan.event.id, result, result === 'rejected' ? 'Photo did not match the customer presenting the pass.' : '');
+      if (!resultFromServer.success || !resultFromServer.scanEvent) {
+        setScanError(resultFromServer.error || 'Photo check was not recorded.');
+        return;
+      }
       setActiveScan({
         ...activeScan,
-        event: {
-          ...activeScan.event,
-          photoCheckResult: 'rejected',
-          status: 'rejected_photo',
-          platesDeducted: 0,
-        },
-        balanceAfter: restoStore.getCustomerBalance(activeScan.event.customerId),
+        event: resultFromServer.scanEvent,
+        balanceAfter: result === 'rejected' ? restoStore.getCustomerBalance(activeScan.event.customerId) : activeScan.balanceAfter,
       });
-    } else {
-      setActiveScan({
-        ...activeScan,
-        event: {
-          ...activeScan.event,
-          photoCheckResult: 'matched',
-        },
-      });
+      setScanError(null);
+    } finally {
+      scanPendingRef.current = false;
+      setScanPending(false);
     }
   };
 
