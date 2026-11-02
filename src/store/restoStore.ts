@@ -2383,7 +2383,7 @@ export class RestoStore {
     scanEventId: string,
     result: 'matched' | 'rejected',
     reason = ''
-  ): Promise<{ success: boolean; scanEvent?: ScanEvent; error?: string }> {
+  ): Promise<{ success: boolean; scanEvent?: ScanEvent; balanceAfter?: number; error?: string }> {
     if (!this.authToken) return { success: false, error: 'Scanner session expired. Sign in again.' };
     if (typeof navigator !== 'undefined' && !navigator.onLine) return { success: false, error: 'Cloud connection unavailable. Photo check was not recorded.' };
     const idempotencyKey = typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -2402,13 +2402,9 @@ export class RestoStore {
       const event = body.scanEvent as ScanEvent;
       const index = this.state.scanEvents.findIndex((item) => item.id === scanEventId);
       if (index >= 0) this.state.scanEvents[index] = event;
-      if (body.reversed && event.customerId) {
-        // The server has already committed the compensating ledger entry. Refresh authoritative state
-        // before displaying a new balance; never synthesize a client-side credit.
-        await this.refreshAuthoritativeState();
-      }
+      if (body.ledgerEntry) this.appendLedgerEntry(body.ledgerEntry as LedgerEntry);
       this.notify();
-      return { success: true, scanEvent: event };
+      return { success: true, scanEvent: event, balanceAfter: Number(body.balanceAfter) };
     } catch {
       return { success: false, error: 'Connection interrupted. Verify the scan history before retrying.' };
     }
