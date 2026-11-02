@@ -13,13 +13,17 @@ umask 077
 BACKUP_INTERVAL_SECONDS="${BACKUP_INTERVAL_SECONDS:-86400}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
 RESTOPASS_BACKUP_REQUIRE_OFFSITE="${RESTOPASS_BACKUP_REQUIRE_OFFSITE:-false}"
-RESTOPASS_BACKUP_S3_PREFIX="${RESTOPASS_BACKUP_S3_PREFIX:-restopass/}"
+RESTOPASS_BACKUP_S3_PREFIX="${RESTOPASS_BACKUP_S3_PREFIX:-restopass}"
 RESTOPASS_BACKUP_S3_REGION="${RESTOPASS_BACKUP_S3_REGION:-us-east-1}"
 if [ "$RESTOPASS_BACKUP_REQUIRE_OFFSITE" = "true" ] && [ -z "${RESTOPASS_BACKUP_S3_BUCKET:-}" ]; then
   echo "[backup] off-site backups are required but RESTOPASS_BACKUP_S3_BUCKET is missing" >&2
   exit 1
 fi
 if [ -n "${RESTOPASS_BACKUP_S3_BUCKET:-}" ]; then
+  [ -n "$RESTOPASS_BACKUP_S3_PREFIX" ] || { echo "[backup] S3 prefix cannot be empty" >&2; exit 1; }
+  if [ -n "${RESTOPASS_BACKUP_S3_ENDPOINT:-}" ]; then
+    case "$RESTOPASS_BACKUP_S3_ENDPOINT" in https://*) ;; *) echo "[backup] off-site S3 endpoint must use HTTPS" >&2; exit 1 ;; esac
+  fi
   : "${RESTOPASS_BACKUP_S3_ACCESS_KEY_ID:?RESTOPASS_BACKUP_S3_ACCESS_KEY_ID is required for off-site backups}"
   : "${RESTOPASS_BACKUP_S3_SECRET_ACCESS_KEY:?RESTOPASS_BACKUP_S3_SECRET_ACCESS_KEY is required for off-site backups}"
 fi
@@ -56,7 +60,6 @@ while true; do
   openssl dgst -sha256 -hmac "$RESTOPASS_BACKUP_HMAC_KEY" "$output.tmp" | awk '{print $NF}' > "$output.hmac.tmp"
   mv "$output.tmp" "$output"
   mv "$output.hmac.tmp" "$output.hmac"
-  rm -rf "$workdir"
 
   echo "[backup] published encrypted backup: $output"
   if [ -n "${RESTOPASS_BACKUP_S3_BUCKET:-}" ]; then
