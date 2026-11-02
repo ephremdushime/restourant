@@ -2532,6 +2532,128 @@ app.post('/api/approvals/:approvalId/reject', apiRateLimiter, requireAuth(['rest
 
 
 /**
+ * Customer-to-customer plate transfers.
+ * Disabled by default. Enable only in a hosted staging environment after
+ * staff/device validation and transfer-specific security review.
+ */
+app.post('/api/customer/transfers', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
+  if (process.env.RESTOPASS_CUSTOMER_TRANSFERS_ENABLED !== 'true') {
+    return res.status(503).json({ success: false, code: 'CUSTOMER_TRANSFERS_DISABLED', error: 'Customer transfers are not enabled for this deployment.' });
+  }
+  const user = req.user!;
+  const recipientMemberNo = typeof req.body?.recipientMemberNo === 'string' ? req.body.recipientMemberNo.trim() : '';
+  const plates = Number(req.body?.plates);
+  const idempotencyKey = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(recipientMemberNo) ||
+      !Number.isSafeInteger(plates) || plates < 1 || plates > 20 ||
+      !/^[A-Za-z0-9:_-]{12,128}$/.test(idempotencyKey)) {
+    return res.status(400).json({ success: false, error: 'Provide a valid recipient member number, 1–20 plates and a unique idempotency key.' });
+  }
+  if (!checkServerStudentEntitlement(user.userId, 'digital_plate_transfer').allowed) {
+    return res.status(403).json({ success: false, code: 'TRANSFER_ENTITLEMENT_REQUIRED', error: 'Your account is not eligible to transfer plates.' });
+  }
+  const pool = getPostgresPool();
+  if (!pool || !isPostgresConfigured()) return res.status(503).json({ success: false, error: 'Transfers require PostgreSQL.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['customer-transfer:' + user.restaurantCode + ':' + idempotencyKey]);
+    const prior = await client.query(
+      'SELECT id,data FROM transfers WHERE restaurant_code=$1 AND idempotency_key=$2 FOR UPDATE',
+      [user.restaurantCode, idempotencyKey]
+    );
+    if (prior.rows[0]) {
+      const previous = prior.rows[0].data;
+      if (previous.senderCustomerId !== user.userId || previous.recipientMemberNo !== recipientMemberNo || Number(previous.plates) !== plates) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, error: 'Idempotency key is already bound to a different transfer.' });
+      }
+      await client.query('COMMIT');
+      return res.json({ success: true, idempotent: true, transfer: previous });
+    }
+    const recipientResult = await client.query(
+      'SELECT id,member_no,name,card_status FROM customers WHERE restaurant_code=$1 AND member_no=$2',
+      [user.restaurantCode, recipientMemberNo]
+    );
+    const recipient = recipientResult.rows[0];
+    if (!recipient || recipient.card_status !== 'active') {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Recipient was not found or is not active in this restaurant.' });
+    }
+    if (recipient.id === user.userId) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, error: 'You cannot transfer plates to yourself.' });
+    }
+    const ids = [user.userId, recipient.id].sort();
+    const locked = await client.query(
+      'SELECT id,member_no,name,card_status FROM customers WHERE restaurant_code=$1 AND id = ANY($2::varchar[]) ORDER BY id FOR UPDATE',
+      [user.restaurantCode, ids]
+    );
+    if (locked.rows.length !== 2 || locked.rows.some((c: any) => c.card_status !== 'active')) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, error: 'Both customer accounts must remain active.' });
+    }
+    const balanceResult = await client.query(
+      'SELECT customer_id,COALESCE(SUM(plates_delta),0)::int AS balance FROM ledger_entries WHERE restaurant_code=$1 AND customer_id = ANY($2::varchar[]) GROUP BY customer_id',
+      [user.restaurantCode, ids]
+    );
+    const balances = new Map(balanceResult.rows.map((r: any) => [r.customer_id, Number(r.balance)]));
+    const senderBalance = balances.get(user.userId) || 0;
+    if (senderBalance < plates) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, code: 'INSUFFICIENT_BALANCE', error: 'Insufficient available plates.' });
+    }
+    const now = new Date();
+    const transferId = 'tr_' + crypto.randomUUID();
+    const sender = locked.rows.find((c: any) => c.id === user.userId);
+    const transfer = {
+      id: transferId, restaurantCode: user.restaurantCode, senderCustomerId: user.userId,
+      senderMemberNo: sender?.member_no, senderName: sender?.name,
+      recipientCustomerId: recipient.id, recipientMemberNo: recipient.member_no,
+      recipientName: recipient.name, plates, status: 'completed',
+      idempotencyKey, createdAt: now.toISOString(),
+    };
+    const senderEntry = {
+      id: 'led_' + crypto.randomUUID(), customerId: user.userId, restaurantCode: user.restaurantCode,
+      type: 'transfer_out', platesDelta: -plates, timestamp: now.toISOString(),
+      reference: transferId, transferId, counterpartyCustomerId: recipient.id,
+      idempotencyKey: 'transfer:' + transferId + ':debit',
+    };
+    const recipientEntry = {
+      id: 'led_' + crypto.randomUUID(), customerId: recipient.id, restaurantCode: user.restaurantCode,
+      type: 'transfer_in', platesDelta: plates, timestamp: now.toISOString(),
+      reference: transferId, transferId, counterpartyCustomerId: user.userId,
+      idempotencyKey: 'transfer:' + transferId + ':credit',
+    };
+    await client.query(
+      'INSERT INTO transfers (id,restaurant_code,sender_customer_id,recipient_customer_id,plates,idempotency_key,data,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+      [transferId,user.restaurantCode,user.userId,recipient.id,plates,idempotencyKey,JSON.stringify(transfer),now]
+    );
+    for (const entry of [senderEntry, recipientEntry]) {
+      await client.query(
+        'INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+        [entry.id,user.restaurantCode,entry.customerId,entry.type,entry.platesDelta,entry.idempotencyKey,now,JSON.stringify(entry)]
+      );
+    }
+    await client.query(
+      'INSERT INTO audit_logs (id,restaurant_code,user_id,action,data) VALUES ($1,$2,$3,$4,$5)',
+      ['aud_' + crypto.randomUUID(),user.restaurantCode,user.userId,'CUSTOMER_PLATE_TRANSFER',JSON.stringify({
+        transferId,recipientCustomerId:recipient.id,plates,idempotencyKey,createdAt:now.toISOString()
+      })]
+    );
+    await client.query('COMMIT');
+    return res.status(201).json({ success: true, transfer, senderBalanceAfter: senderBalance - plates,
+      recipientBalanceAfter: (balances.get(recipient.id) || 0) + plates });
+  } catch (error: any) {
+    try { await client.query('ROLLBACK'); } catch {}
+    if (error?.code === '23505') return res.status(409).json({ success: false, error: 'This transfer was already processed.' });
+    console.error('[Customer Transfer] failed:', error);
+    return res.status(503).json({ success: false, error: 'Transfer was not committed. Retry with the same idempotency key.' });
+  } finally { client.release(); }
+});
+
+
+/**
  * Two-person financial exception authority.
  * Requests never mutate balances. A separate platform supervisor approves them,
  * and the compensating ledger entries plus source status change commit atomically.
