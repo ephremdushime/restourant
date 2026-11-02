@@ -39,11 +39,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       { id: otherStationId, restaurantCode, status: 'active', isPaired: true, name: 'Other Integration Scanner' },
     ],
     packages: [{ id: 'pkg_test_60', restaurantCode, name: '60 plates', platesCount: 60, priceRwf: 60000 }],
-    customers: [], pendingApprovals: [], ledgerEntries: [], payments: [], auditLogs: [],
-    stationUsers: [
-      { id: staffId, restaurantCode, status: 'active', stationId, sessionVersion: 1 },
-      { id: otherStaffId, restaurantCode, status: 'active', stationId: otherStationId, sessionVersion: 1 },
-    ],
+    customers: [], pendingApprovals: [], ledgerEntries: [], payments: [], auditLogs: [], stationUsers: [],
   });
 
   const httpServer = createServer(serverModule.app);
@@ -514,6 +510,19 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
     });
 
     await t.test('second-plate and photo-check actions are server-authoritative and idempotent', async () => {
+      const currentState = serverModule.getServerDbState();
+      serverModule.setServerDbState({
+        ...currentState,
+        scanPoints: [
+          ...(currentState.scanPoints || []),
+          { id: otherStationId, restaurantCode, status: 'active', isPaired: true, name: 'Other Integration Scanner' },
+        ],
+        stationUsers: [
+          ...(currentState.stationUsers || []),
+          { id: staffId, restaurantCode, status: 'active', stationId, sessionVersion: 1 },
+          { id: otherStaffId, restaurantCode, status: 'active', stationId: otherStationId, sessionVersion: 1 },
+        ],
+      });
       const staffToken = serverModule.createSessionToken({
         userId: staffId, username: 'Integration Scanner Operator',
         role: 'stand_staff', restaurantCode, stationId,
