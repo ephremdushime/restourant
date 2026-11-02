@@ -24,4 +24,22 @@ if sh "$ROOT/deploy/backup-verify.sh" "$TMP/backup.enc" >/dev/null 2>&1; then
   echo "Tampered backup unexpectedly passed integrity verification" >&2
   exit 1
 fi
-echo "Backup integrity and guarded restore tests passed."
+# Exercise the production healthcheck with a recent, authenticated local + remote copy.
+mkdir -p "$TMP/bin" "$TMP/backups"
+cp "$TMP/backup.enc" "$TMP/backups/restopass-test.tar.gz.enc"
+cp "$TMP/backup.enc.hmac" "$TMP/backups/restopass-test.tar.gz.enc.hmac"
+cat > "$TMP/bin/restopass-backup-verify" <<EOF
+#!/bin/sh
+sh "$ROOT/deploy/backup-verify.sh" "\$1"
+EOF
+chmod 0755 "$TMP/bin/restopass-backup-verify"
+printf '%s' "$(date +%s)" > "$TMP/backups/.offsite-last-success"
+RESTOPASS_BACKUP_DIR="$TMP/backups" RESTOPASS_BACKUP_REQUIRE_OFFSITE=true PATH="$TMP/bin:$PATH" \
+  sh "$ROOT/deploy/backup-healthcheck.sh"
+printf '1' > "$TMP/backups/.offsite-last-success"
+if RESTOPASS_BACKUP_DIR="$TMP/backups" RESTOPASS_BACKUP_REQUIRE_OFFSITE=true PATH="$TMP/bin:$PATH" \
+  sh "$ROOT/deploy/backup-healthcheck.sh" >/dev/null 2>&1; then
+  echo "Stale off-site marker unexpectedly passed healthcheck" >&2
+  exit 1
+fi
+echo "Backup integrity, guarded restore, tamper rejection and off-site healthcheck tests passed."
