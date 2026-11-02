@@ -14,6 +14,9 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
 
   const restaurantCode = 'IT' + Math.random().toString(36).slice(2, 8).toUpperCase();
   const stationId = 'station_' + restaurantCode;
+  const otherStationId = 'other_station_' + restaurantCode;
+  const staffId = 'staff_' + restaurantCode;
+  const otherStaffId = 'other_staff_' + restaurantCode;
   const bossId = 'boss_' + restaurantCode;
   const bossToken = serverModule.createSessionToken({
     userId: bossId, username: 'Integration Boss', role: 'restaurant_admin', restaurantCode,
@@ -31,9 +34,16 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
   );
   serverModule.setServerDbState({
     restaurants: [{ code: restaurantCode, name: 'Approval Integration Test', status: 'active' }],
-    scanPoints: [{ id: stationId, restaurantCode, status: 'active', isPaired: true, name: 'Integration Scanner' }],
+    scanPoints: [
+      { id: stationId, restaurantCode, status: 'active', isPaired: true, name: 'Integration Scanner' },
+      { id: otherStationId, restaurantCode, status: 'active', isPaired: true, name: 'Other Integration Scanner' },
+    ],
     packages: [{ id: 'pkg_test_60', restaurantCode, name: '60 plates', platesCount: 60, priceRwf: 60000 }],
-    customers: [], pendingApprovals: [], ledgerEntries: [], payments: [], auditLogs: [], stationUsers: [],
+    customers: [], pendingApprovals: [], ledgerEntries: [], payments: [], auditLogs: [],
+    stationUsers: [
+      { id: staffId, restaurantCode, status: 'active', stationId, sessionVersion: 1 },
+      { id: otherStaffId, restaurantCode, status: 'active', stationId: otherStationId, sessionVersion: 1 },
+    ],
   });
 
   const httpServer = createServer(serverModule.app);
@@ -505,7 +515,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
 
     await t.test('second-plate and photo-check actions are server-authoritative and idempotent', async () => {
       const staffToken = serverModule.createSessionToken({
-        userId: 'staff_' + restaurantCode, username: 'Integration Scanner Operator',
+        userId: staffId, username: 'Integration Scanner Operator',
         role: 'stand_staff', restaurantCode, stationId,
       });
       const secondCustomer = 'second_plate_customer_' + restaurantCode;
@@ -597,8 +607,8 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       assert.deepEqual(rejectedLedger.rows.map((row: any) => Number(row.plates_delta)), [1]);
 
       const crossStationToken = serverModule.createSessionToken({
-        userId: 'other_staff_' + restaurantCode, username: 'Other Station Operator',
-        role: 'stand_staff', restaurantCode, stationId: 'other_station',
+        userId: otherStaffId, username: 'Other Station Operator',
+        role: 'stand_staff', restaurantCode, stationId: otherStationId,
       });
       const forbiddenSecond = await post('/api/scans/' + secondScanId + '/second-plate', crossStationToken, {
         idempotencyKey: 'cross-station-' + restaurantCode,
