@@ -44,4 +44,30 @@ if RESTOPASS_BACKUP_DIR="$TMP/backups" RESTOPASS_BACKUP_REQUIRE_OFFSITE=true PAT
   echo "Stale off-site marker unexpectedly passed healthcheck" >&2
   exit 1
 fi
-echo "Backup integrity, guarded restore, tamper rejection and off-site healthcheck tests passed."
+# Simulate a private S3 bucket and verify that off-site restore downloads then validates both objects.
+mkdir -p "$TMP/remote/restopass" "$TMP/restore-offsite"
+cp "$TMP/valid-backup.enc" "$TMP/remote/restopass/restopass-test.tar.gz.enc"
+cp "$TMP/valid-backup.enc.hmac" "$TMP/remote/restopass/restopass-test.tar.gz.enc.hmac"
+cat > "$TMP/bin/aws" <<'EOF'
+#!/bin/sh
+set -eu
+[ "$1" = "s3" ] && [ "$2" = "cp" ] || exit 2
+src="$3"
+dest="$4"
+case "$src" in
+  s3://test-bucket/*)
+    key="${src#s3://test-bucket/}"
+    cp "$RESTOPASS_TEST_REMOTE_ROOT/$key" "$dest"
+    ;;
+  *) echo "Unexpected mocked S3 source" >&2; exit 2 ;;
+esac
+EOF
+chmod 0755 "$TMP/bin/aws"
+RESTOPASS_TEST_REMOTE_ROOT="$TMP/remote" RESTOPASS_BACKUP_S3_BUCKET=test-bucket \
+RESTOPASS_BACKUP_S3_PREFIX=restopass RESTOPASS_BACKUP_S3_ACCESS_KEY_ID=test-access \
+RESTOPASS_BACKUP_S3_SECRET_ACCESS_KEY=test-secret RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
+RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" PATH="$TMP/bin:$PATH" \
+  sh "$ROOT/deploy/restore-offsite.sh" restopass-test.tar.gz.enc "$TMP/restore-offsite"
+cmp "$TMP/source/database.dump" "$TMP/restore-offsite/database.dump"
+cmp "$TMP/source/uploads.tar.gz" "$TMP/restore-offsite/uploads.tar.gz"
+echo "Backup integrity, guarded restore, tamper rejection, off-site healthcheck and off-site restore tests passed."
