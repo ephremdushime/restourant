@@ -1854,14 +1854,15 @@ app.post(
         platesDelta: -1, timestamp: now.toISOString(), scanPointId: requestedStationId,
         staffId: user.userId, reference: `SCAN-${memberNo}`, idempotencyKey: `scan:${idempotencyKey}`,
       };
+      const requiresPhotoCheck = !isGraceMeal && Boolean(customer.photoUrl) && crypto.randomBytes(1)[0] < 13;
       const event = {
         id: scanId, restaurantCode, customerId: customerRow.id,
         customerName: customer.name || 'Customer', customerPhoto: customer.photoUrl || '',
         memberNo, scanPointId: requestedStationId, scanPointName: station.name || 'Scanner',
         staffId: user.userId, staffName: user.username, timestamp: now.toISOString(),
         platesInWindow: platesInWindow + 1, platesDeducted: 1,
-        photoCheckRequired: false,
-        photoCheckReason: 'none',
+        photoCheckRequired: requiresPhotoCheck,
+        photoCheckReason: requiresPhotoCheck ? 'random_spot_check' : 'none',
         photoCheckResult: 'none', status: (platesInWindow > 0 || isGraceMeal) ? 'warning_confirmed' : 'approved',
         isGracePlate: isGraceMeal, gracePlateNumber,
         overrideReason: isGraceMeal ? `Authorized grace meal (#${gracePlateNumber}/3). Awaiting manager payment approval.` : undefined,
@@ -2024,6 +2025,7 @@ app.post('/api/scans/:scanId/photo-check', scanRateLimiter, requireAuth(['stand_
   const pool = getPostgresPool();
   if (!pool || !isPostgresConfigured()) return res.status(503).json({ success: false, error: 'Photo verification requires PostgreSQL.' });
   const client = await pool.connect();
+  let reversalForCache: any = null;
   try {
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['photo-check:' + user.restaurantCode + ':' + idempotencyKey]);
@@ -2065,6 +2067,7 @@ app.post('/api/scans/:scanId/photo-check', scanRateLimiter, requireAuth(['stand_
         "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'reversal',1,$4,$5,$6)",
         [reversalId, user.restaurantCode, row.customer_id, 'photo-reject:' + idempotencyKey, now, JSON.stringify(reversal)]
       );
+      reversalForCache = reversal;
       event.status = 'rejected_photo';
       event.platesDeducted = 0;
       event.photoCheckResult = 'rejected';
@@ -2085,11 +2088,7 @@ app.post('/api/scans/:scanId/photo-check', scanRateLimiter, requireAuth(['stand_
         JSON.stringify({ scanId, customerId: row.customer_id, result, reason, actorRole: user.role, timestamp: now.toISOString() })]
     );
     await client.query('COMMIT');
-    if (result === 'rejected' && Array.isArray(serverDbState?.ledgerEntries)) serverDbState.ledgerEntries.push({
-      id: 'photo-reversal-cache-' + scanId, customerId: row.customer_id, restaurantCode: user.restaurantCode,
-      type: 'reversal', platesDelta: 1, timestamp: now.toISOString(), scanPointId: row.station_id,
-      staffId: user.userId, reason: 'Photo spot-check rejected', idempotencyKey: 'photo-reject:' + idempotencyKey,
-    });
+    if (reversalForCache && Array.isArray(serverDbState?.ledgerEntries)) serverDbState.ledgerEntries.push(reversalForCache);
     if (Array.isArray(serverDbState?.scanEvents)) {
       const cached = serverDbState.scanEvents.find((x: any) => x.id === scanId);
       if (cached) Object.assign(cached, event);
