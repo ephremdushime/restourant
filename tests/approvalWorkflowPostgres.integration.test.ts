@@ -503,6 +503,109 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
 
     });
 
+    await t.test('second-plate and photo-check actions are server-authoritative and idempotent', async () => {
+      const staffToken = serverModule.createSessionToken({
+        userId: 'staff_' + restaurantCode, username: 'Integration Scanner Operator',
+        role: 'stand_staff', restaurantCode, stationId,
+      });
+      const secondCustomer = 'second_plate_customer_' + restaurantCode;
+      const secondMember = 'SP' + restaurantCode;
+      const secondData = { id: secondCustomer, restaurantCode, memberNo: secondMember, name: 'Second Plate Customer', cardStatus: 'active' };
+      await pool!.query('INSERT INTO customers (id,restaurant_code,member_no,name,card_status,data) VALUES ($1,$2,$3,$4,$5,$6)',
+        [secondCustomer, restaurantCode, secondMember, 'Second Plate Customer', 'active', JSON.stringify(secondData)]);
+      await pool!.query(
+        "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'purchase',10,$4,NOW(),$5),($6,$2,$3,'scan',-1,$7,NOW(),$8)",
+        ['second-purchase-' + restaurantCode, restaurantCode, secondCustomer, 'second-purchase-' + restaurantCode,
+          JSON.stringify({ platesDelta: 10 }), 'second-scan-' + restaurantCode,
+          JSON.stringify({ timestamp: new Date().toISOString(), scanPointId: stationId })]
+      );
+      const secondScanId = 'scan_' + restaurantCode + '_second';
+      const secondEvent = { id: secondScanId, restaurantCode, customerId: secondCustomer, memberNo: secondMember,
+        scanPointId: stationId, timestamp: new Date().toISOString(), platesDeducted: 1,
+        status: 'approved', photoCheckRequired: false, photoCheckResult: 'none', isGracePlate: false };
+      await pool!.query(
+        "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data) VALUES ($1,$2,$3,$4,'approved',$5)",
+        [secondScanId, restaurantCode, secondCustomer, stationId, JSON.stringify(secondEvent)]);
+      const secondKey = 'second-plate-' + restaurantCode;
+      const second = await post('/api/scans/' + secondScanId + '/second-plate', staffToken, { idempotencyKey: secondKey });
+      assert.equal(second.status, 200, JSON.stringify(second.body));
+      assert.equal(second.body.scanEvent.platesDeducted, 2);
+      const duplicateSecond = await post('/api/scans/' + secondScanId + '/second-plate', staffToken, { idempotencyKey: secondKey });
+      assert.equal(duplicateSecond.status, 200);
+      assert.equal(duplicateSecond.body.idempotent, true);
+      const secondLedger = await pool!.query("SELECT COUNT(*)::int AS count FROM ledger_entries WHERE customer_id=$1 AND type='extra'", [secondCustomer]);
+      assert.equal(secondLedger.rows[0].count, 1);
+
+      const photoCustomer = 'photo_customer_' + restaurantCode;
+      const photoMember = 'PH' + restaurantCode;
+      const photoData = { id: photoCustomer, restaurantCode, memberNo: photoMember, name: 'Photo Customer', cardStatus: 'active' };
+      await pool!.query('INSERT INTO customers (id,restaurant_code,member_no,name,card_status,data) VALUES ($1,$2,$3,$4,$5,$6)',
+        [photoCustomer, restaurantCode, photoMember, 'Photo Customer', 'active', JSON.stringify(photoData)]);
+      const photoTimestamp = new Date().toISOString();
+      await pool!.query(
+        "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'purchase',10,$4,NOW(),$5),($6,$2,$3,'scan',-1,$7,$8,$9)",
+        ['photo-purchase-' + restaurantCode, restaurantCode, photoCustomer, 'photo-purchase-' + restaurantCode,
+          JSON.stringify({ platesDelta: 10 }), 'photo-scan-ledger-' + restaurantCode,
+          photoTimestamp, JSON.stringify({ timestamp: photoTimestamp, scanPointId: stationId })]
+      );
+      const photoScanId = 'scan_' + restaurantCode + '_photo';
+      const photoEvent = { id: photoScanId, restaurantCode, customerId: photoCustomer, memberNo: photoMember,
+        scanPointId: stationId, timestamp: photoTimestamp, platesDeducted: 1,
+        status: 'approved', photoCheckRequired: true, photoCheckReason: 'random_sample',
+        photoCheckResult: 'none', isGracePlate: false };
+      await pool!.query(
+        "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data) VALUES ($1,$2,$3,$4,'approved',$5)",
+        [photoScanId, restaurantCode, photoCustomer, stationId, JSON.stringify(photoEvent)]);
+      const photoMatch = await post('/api/scans/' + photoScanId + '/photo-check', staffToken, {
+        result: 'matched', idempotencyKey: 'photo-match-' + restaurantCode,
+      });
+      assert.equal(photoMatch.status, 200, JSON.stringify(photoMatch.body));
+      assert.equal(photoMatch.body.scanEvent.photoCheckResult, 'matched');
+      const repeatedPhoto = await post('/api/scans/' + photoScanId + '/photo-check', staffToken, {
+        result: 'rejected', idempotencyKey: 'photo-reject-again-' + restaurantCode,
+      });
+      assert.equal(repeatedPhoto.status, 409);
+      const photoRejections = await pool!.query("SELECT COUNT(*)::int AS count FROM ledger_entries WHERE customer_id=$1 AND type='reversal'", [photoCustomer]);
+      assert.equal(photoRejections.rows[0].count, 0);
+
+      const rejectedCustomer = 'photo_rejected_customer_' + restaurantCode;
+      const rejectedMember = 'PR' + restaurantCode;
+      const rejectedData = { id: rejectedCustomer, restaurantCode, memberNo: rejectedMember, name: 'Rejected Photo Customer', cardStatus: 'active' };
+      await pool!.query('INSERT INTO customers (id,restaurant_code,member_no,name,card_status,data) VALUES ($1,$2,$3,$4,$5,$6)',
+        [rejectedCustomer, restaurantCode, rejectedMember, 'Rejected Photo Customer', 'active', JSON.stringify(rejectedData)]);
+      const rejectedTimestamp = new Date().toISOString();
+      const rejectedScanId = 'scan_' + restaurantCode + '_photo_rejected';
+      const rejectedEvent = { id: rejectedScanId, restaurantCode, customerId: rejectedCustomer, memberNo: rejectedMember,
+        scanPointId: stationId, timestamp: rejectedTimestamp, platesDeducted: 1,
+        status: 'approved', photoCheckRequired: true, photoCheckReason: 'random_sample',
+        photoCheckResult: 'none', isGracePlate: false };
+      await pool!.query(
+        "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'scan',-1,$4,$5,$6)",
+        ['rejected-photo-ledger-' + restaurantCode, restaurantCode, rejectedCustomer, 'rejected-photo-ledger-' + restaurantCode,
+          rejectedTimestamp, JSON.stringify({ timestamp: rejectedTimestamp, scanPointId: stationId })]);
+      await pool!.query(
+        "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data) VALUES ($1,$2,$3,$4,'approved',$5)",
+        [rejectedScanId, restaurantCode, rejectedCustomer, stationId, JSON.stringify(rejectedEvent)]);
+      const photoReject = await post('/api/scans/' + rejectedScanId + '/photo-check', staffToken, {
+        result: 'rejected', reason: 'Photo did not match presenting patron.',
+        idempotencyKey: 'photo-reject-' + restaurantCode,
+      });
+      assert.equal(photoReject.status, 200, JSON.stringify(photoReject.body));
+      assert.equal(photoReject.body.reversed, true);
+      assert.equal(photoReject.body.scanEvent.status, 'rejected_photo');
+      const rejectedLedger = await pool!.query("SELECT plates_delta FROM ledger_entries WHERE customer_id=$1 AND type='reversal'", [rejectedCustomer]);
+      assert.deepEqual(rejectedLedger.rows.map((row: any) => Number(row.plates_delta)), [1]);
+
+      const crossStationToken = serverModule.createSessionToken({
+        userId: 'other_staff_' + restaurantCode, username: 'Other Station Operator',
+        role: 'stand_staff', restaurantCode, stationId: 'other_station',
+      });
+      const forbiddenSecond = await post('/api/scans/' + secondScanId + '/second-plate', crossStationToken, {
+        idempotencyKey: 'cross-station-' + restaurantCode,
+      });
+      assert.equal(forbiddenSecond.status, 403);
+    });
+
     await t.test('rejection atomically locks a provisional new customer', async () => {
       const created = await post('/api/approvals/registration', bossToken, registration('E', 15, '+250780000005'));
       assert.equal(created.status, 201);
