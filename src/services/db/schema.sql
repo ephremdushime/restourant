@@ -170,10 +170,17 @@ CREATE TABLE IF NOT EXISTS transfers (
     restaurant_code VARCHAR(32) NOT NULL,
     sender_customer_id VARCHAR(64) NOT NULL,
     recipient_customer_id VARCHAR(64) NOT NULL,
-    plates INT NOT NULL,
+    plates INT NOT NULL CHECK (plates > 0),
+    idempotency_key VARCHAR(128) NOT NULL,
     data JSONB NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_transfer_idempotency UNIQUE (restaurant_code, idempotency_key),
+    CONSTRAINT chk_transfer_distinct_customers CHECK (sender_customer_id <> recipient_customer_id)
 );
+ALTER TABLE transfers ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_transfer_idempotency
+    ON transfers (restaurant_code,idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 
 -- 15. Immutable Security & Audit Logs
 CREATE TABLE IF NOT EXISTS audit_logs (
