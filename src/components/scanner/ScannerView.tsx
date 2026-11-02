@@ -322,6 +322,12 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
   const handleUndo = () => {
     if (!activeScan) return;
+    // Undo is a financial reversal. Until its two-person server workflow is
+    // exposed here, production scanners must never mutate local ledger state.
+    if (!isDemoMode) {
+      setScanError('Scan reversal is not available from the scanner yet. Ask the restaurant administrator to submit a financial exception for platform review.');
+      return;
+    }
     const ok = restoStore.undoScan(activeScan.event.id);
     if (ok) {
       const updatedBalance = restoStore.getCustomerBalance(activeScan.event.customerId);
@@ -370,6 +376,14 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
   const handleConfirmOverride = () => {
     if (!activeScan) return;
+    // A browser-supplied "admin_on_duty" identity is not an authenticated
+    // supervisor approval. Keep this simulation-only until a two-person,
+    // one-time server authorization endpoint is implemented.
+    if (!isDemoMode) {
+      setScanError('Supervisor override is disabled in production. The scan remains blocked; contact the restaurant administrator.');
+      setOverrideModalOpen(false);
+      return;
+    }
     const ok = restoStore.approveScanOverride(
       activeScan.event.id,
       overrideReason,
