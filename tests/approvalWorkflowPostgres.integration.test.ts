@@ -15,6 +15,8 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
   const restaurantCode = 'IT' + Math.random().toString(36).slice(2, 8).toUpperCase();
   const stationId = 'station_' + restaurantCode;
   const otherStationId = 'other_station_' + restaurantCode;
+  const exceptionStationId = 'exception_station_' + restaurantCode;
+  const exceptionOtherStationId = 'exception_other_station_' + restaurantCode;
   const staffId = 'staff_' + restaurantCode;
   const otherStaffId = 'other_staff_' + restaurantCode;
   const bossId = 'boss_' + restaurantCode;
@@ -515,17 +517,18 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
         ...currentState,
         scanPoints: [
           ...(currentState.scanPoints || []),
-          { id: otherStationId, restaurantCode, status: 'active', isPaired: true, name: 'Other Integration Scanner' },
+          { id: exceptionStationId, restaurantCode, status: 'active', isPaired: true, name: 'Exception Integration Scanner' },
+          { id: exceptionOtherStationId, restaurantCode, status: 'active', isPaired: true, name: 'Other Exception Scanner' },
         ],
         stationUsers: [
           ...(currentState.stationUsers || []),
-          { id: staffId, restaurantCode, status: 'active', stationId, sessionVersion: 1 },
-          { id: otherStaffId, restaurantCode, status: 'active', stationId: otherStationId, sessionVersion: 1 },
+          { id: staffId, restaurantCode, status: 'active', stationId: exceptionStationId, sessionVersion: 1 },
+          { id: otherStaffId, restaurantCode, status: 'active', stationId: exceptionOtherStationId, sessionVersion: 1 },
         ],
       });
       const staffToken = serverModule.createSessionToken({
         userId: staffId, username: 'Integration Scanner Operator',
-        role: 'stand_staff', restaurantCode, stationId,
+        role: 'stand_staff', restaurantCode, stationId: exceptionStationId,
       });
       const secondCustomer = 'second_plate_customer_' + restaurantCode;
       const secondMember = 'SP' + restaurantCode;
@@ -536,7 +539,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
         "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'purchase',10,$4,NOW(),$5),($6,$2,$3,'scan',-1,$7,NOW(),$8)",
         ['second-purchase-' + restaurantCode, restaurantCode, secondCustomer, 'second-purchase-' + restaurantCode,
           JSON.stringify({ platesDelta: 10 }), 'second-scan-' + restaurantCode, 'second-scan-idem-' + restaurantCode,
-          JSON.stringify({ timestamp: new Date().toISOString(), scanPointId: stationId })]
+          JSON.stringify({ timestamp: new Date().toISOString(), scanPointId: exceptionStationId })]
       );
       const secondScanId = 'scan_' + restaurantCode + '_second';
       const secondEvent = { id: secondScanId, restaurantCode, customerId: secondCustomer, memberNo: secondMember,
@@ -544,7 +547,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
         status: 'approved', photoCheckRequired: false, photoCheckResult: 'none', isGracePlate: false };
       await pool!.query(
         "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data) VALUES ($1,$2,$3,$4,'approved',$5)",
-        [secondScanId, restaurantCode, secondCustomer, stationId, JSON.stringify(secondEvent)]);
+        [secondScanId, restaurantCode, secondCustomer, exceptionStationId, JSON.stringify(secondEvent)]);
       const secondKey = 'second-plate-' + restaurantCode;
       const second = await post('/api/scans/' + secondScanId + '/second-plate', staffToken, { idempotencyKey: secondKey });
       assert.equal(second.status, 200, JSON.stringify(second.body));
@@ -574,7 +577,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
         photoCheckResult: 'none', isGracePlate: false };
       await pool!.query(
         "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data) VALUES ($1,$2,$3,$4,'approved',$5)",
-        [photoScanId, restaurantCode, photoCustomer, stationId, JSON.stringify(photoEvent)]);
+        [photoScanId, restaurantCode, photoCustomer, exceptionStationId, JSON.stringify(photoEvent)]);
       const photoMatch = await post('/api/scans/' + photoScanId + '/photo-check', staffToken, {
         result: 'matched', idempotencyKey: 'photo-match-' + restaurantCode,
       });
@@ -604,7 +607,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
           rejectedTimestamp, JSON.stringify({ timestamp: rejectedTimestamp, scanPointId: stationId })]);
       await pool!.query(
         "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data) VALUES ($1,$2,$3,$4,'approved',$5)",
-        [rejectedScanId, restaurantCode, rejectedCustomer, stationId, JSON.stringify(rejectedEvent)]);
+        [rejectedScanId, restaurantCode, rejectedCustomer, exceptionStationId, JSON.stringify(rejectedEvent)]);
       const photoReject = await post('/api/scans/' + rejectedScanId + '/photo-check', staffToken, {
         result: 'rejected', reason: 'Photo did not match presenting patron.',
         idempotencyKey: 'photo-reject-' + restaurantCode,
@@ -617,7 +620,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
 
       const crossStationToken = serverModule.createSessionToken({
         userId: otherStaffId, username: 'Other Station Operator',
-        role: 'stand_staff', restaurantCode, stationId: otherStationId,
+        role: 'stand_staff', restaurantCode, stationId: exceptionOtherStationId,
       });
       const forbiddenSecond = await post('/api/scans/' + secondScanId + '/second-plate', crossStationToken, {
         idempotencyKey: 'cross-station-' + restaurantCode,
