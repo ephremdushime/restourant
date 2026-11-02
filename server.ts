@@ -2311,6 +2311,213 @@ app.post('/api/approvals/:approvalId/reject', apiRateLimiter, requireAuth(['rest
   } finally { client.release(); }
 });
 
+
+/**
+ * Two-person financial exception authority.
+ * Requests never mutate balances. A separate platform supervisor approves them,
+ * and the compensating ledger entries plus source status change commit atomically.
+ */
+app.post('/api/financial-exceptions', apiRateLimiter, requireAuth(['restaurant_admin']), async (req, res) => {
+  const user = req.user!;
+  const type = req.body?.type;
+  const sourceId = typeof req.body?.sourceId === 'string' ? req.body.sourceId.trim() : '';
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  const idempotencyKey = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
+  if (!['scan_reversal', 'transfer_reversal', 'cash_refund'].includes(type) ||
+      !sourceId || sourceId.length > 64 || reason.length < 12 || reason.length > 500 ||
+      !/^[A-Za-z0-9:_-]{12,128}$/.test(idempotencyKey)) {
+    return res.status(400).json({ success: false, error: 'A supported exception type, source ID, detailed reason and unique idempotency key are required.' });
+  }
+  const pool = getPostgresPool();
+  if (!pool || !isPostgresConfigured()) return res.status(503).json({ success: false, error: 'Financial exceptions require PostgreSQL.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const prior = await client.query(
+      'SELECT data,status FROM financial_exception_requests WHERE restaurant_code=$1 AND idempotency_key=$2 FOR UPDATE',
+      [user.restaurantCode, idempotencyKey]
+    );
+    if (prior.rows[0]) {
+      await client.query('COMMIT');
+      return res.json({ success: true, exception: prior.rows[0].data, idempotent: true });
+    }
+    let snapshot: any;
+    let customerId: string | null = null;
+    if (type === 'scan_reversal') {
+      const source = await client.query(
+        'SELECT data,status,customer_id FROM scan_events WHERE id=$1 AND restaurant_code=$2 FOR UPDATE',
+        [sourceId, user.restaurantCode]
+      );
+      const event = source.rows[0]?.data;
+      if (!event || !['approved', 'warning_confirmed'].includes(source.rows[0].status) ||
+          event.isGracePlate || Number(event.platesDeducted) !== 1) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, error: 'Only a committed, paid, single-plate scan can be reversed.' });
+      }
+      customerId = source.rows[0].customer_id;
+      snapshot = { scanEventId: sourceId, customerId, plates: 1, eventTimestamp: event.timestamp, scanPointId: event.scanPointId };
+    } else if (type === 'transfer_reversal') {
+      const source = await client.query(
+        'SELECT data FROM transfers WHERE id=$1 AND restaurant_code=$2 FOR UPDATE',
+        [sourceId, user.restaurantCode]
+      );
+      const transfer = source.rows[0]?.data;
+      if (!transfer || transfer.status !== 'completed') {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, error: 'Only a completed transfer can be reversed.' });
+      }
+      customerId = transfer.senderCustomerId;
+      snapshot = { transferId: sourceId, senderCustomerId: transfer.senderCustomerId, recipientCustomerId: transfer.recipientCustomerId, plates: Number(transfer.plates) };
+    } else {
+      const source = await client.query(
+        'SELECT data,customer_id FROM payments WHERE id=$1 AND restaurant_code=$2 FOR UPDATE',
+        [sourceId, user.restaurantCode]
+      );
+      const payment = source.rows[0]?.data;
+      if (!payment || !source.rows[0].customer_id || !['cash', 'bank_transfer'].includes(payment.paymentMethod) ||
+          payment.refundStatus === 'refunded' || Number(payment.amountRwf) < 1 || Number(payment.platesAdded) < 1) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, error: 'Only an unreversed cash or bank-transfer top-up can enter this manual refund workflow. Mobile-money refunds require a verified provider refund integration.' });
+      }
+      const purchase = await client.query(
+        "SELECT id,timestamp,data FROM ledger_entries WHERE restaurant_code=$1 AND customer_id=$2 AND type='purchase' AND data->>'paymentId'=$3 FOR UPDATE",
+        [user.restaurantCode, source.rows[0].customer_id, sourceId]
+      );
+      if (!purchase.rows[0]) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, error: 'The original purchase ledger entry could not be found.' });
+      }
+      const later = await client.query(
+        'SELECT id FROM ledger_entries WHERE customer_id=$1 AND timestamp>$2 LIMIT 1',
+        [source.rows[0].customer_id, purchase.rows[0].timestamp]
+      );
+      if (later.rows[0]) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, error: 'Refund is blocked because the customer has subsequent ledger activity. Reconcile the remaining plate liability manually before retrying.' });
+      }
+      customerId = source.rows[0].customer_id;
+      snapshot = { paymentId: sourceId, customerId, purchaseLedgerId: purchase.rows[0].id, plates: Number(payment.platesAdded), amountRwf: Number(payment.amountRwf), paymentMethod: payment.paymentMethod };
+    }
+    const id = 'fex_' + crypto.randomUUID();
+    const exception = { id, restaurantCode: user.restaurantCode, type, sourceId, reason,
+      status: 'pending', requestedBy: { userId: user.userId, username: user.username, role: user.role },
+      snapshot, idempotencyKey, createdAt: new Date().toISOString() };
+    await client.query(
+      'INSERT INTO financial_exception_requests (id,restaurant_code,exception_type,source_id,customer_id,status,idempotency_key,requested_by_user_id,data) VALUES ($1,$2,$3,$4,$5,\'pending\',$6,$7,$8)',
+      [id, user.restaurantCode, type, sourceId, customerId, idempotencyKey, user.userId, JSON.stringify(exception)]
+    );
+    await writeApprovalAudit(client, user.restaurantCode, user, 'FINANCIAL_EXCEPTION_REQUESTED', { exceptionId: id, type, sourceId, reason });
+    await client.query('COMMIT');
+    return res.status(201).json({ success: true, exception });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    console.error('[Financial Exception Request] failed:', error);
+    return res.status(503).json({ success: false, error: 'Financial exception request was not saved.' });
+  } finally { client.release(); }
+});
+
+app.post('/api/financial-exceptions/:exceptionId/approve', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
+  const actor = req.user!;
+  const reason = typeof req.body?.approvalReason === 'string' ? req.body.approvalReason.trim() : '';
+  const payoutReference = typeof req.body?.payoutReference === 'string' ? req.body.payoutReference.trim() : '';
+  if (reason.length < 12 || reason.length > 500) return res.status(400).json({ success: false, error: 'A detailed approval reason is required.' });
+  const pool = getPostgresPool();
+  if (!pool || !isPostgresConfigured()) return res.status(503).json({ success: false, error: 'Financial exception approval requires PostgreSQL.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const found = await client.query('SELECT * FROM financial_exception_requests WHERE id=$1 FOR UPDATE', [req.params.exceptionId]);
+    if (!found.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Exception request not found.' }); }
+    const row = found.rows[0];
+    const exception = row.data;
+    if (row.status !== 'pending') { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Exception is no longer pending.' }); }
+    if (row.requested_by_user_id === actor.userId) { await client.query('ROLLBACK'); return res.status(403).json({ success: false, error: 'The requester cannot approve their own financial exception.' }); }
+    if (exception.type === 'cash_refund' && (payoutReference.length < 4 || payoutReference.length > 128)) {
+      await client.query('ROLLBACK'); return res.status(400).json({ success: false, error: 'A cash/bank payout receipt reference is required to confirm the refund.' });
+    }
+    const customerIds = exception.type === 'transfer_reversal'
+      ? [exception.snapshot.senderCustomerId, exception.snapshot.recipientCustomerId].sort()
+      : [exception.snapshot.customerId];
+    const locked = new Map<string, any>();
+    for (const customerId of customerIds) {
+      const result = await client.query('SELECT id,data FROM customers WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [customerId, row.restaurant_code]);
+      if (!result.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Affected customer is no longer present in this restaurant.' }); }
+      locked.set(customerId, result.rows[0].data);
+    }
+    const now = new Date();
+    const addLedger = async (customerId: string, type: string, delta: number, suffix: string, reference: string) => {
+      const id = 'led_' + crypto.randomUUID();
+      const ledger = { id, customerId, restaurantCode: row.restaurant_code, type, platesDelta: delta,
+        timestamp: now.toISOString(), staffId: actor.userId, reason, reference,
+        reversalOfId: exception.sourceId, idempotencyKey: 'fex:' + exception.id + ':' + suffix };
+      await client.query(
+        'INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+        [id, row.restaurant_code, customerId, type, delta, ledger.idempotencyKey, now, JSON.stringify(ledger)]
+      );
+      return ledger;
+    };
+    if (exception.type === 'scan_reversal') {
+      const source = await client.query('SELECT data,status FROM scan_events WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [exception.sourceId, row.restaurant_code]);
+      if (!source.rows[0] || !['approved', 'warning_confirmed'].includes(source.rows[0].status) || source.rows[0].data?.isGracePlate) {
+        await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Scan is no longer eligible for reversal.' });
+      }
+      const ev = source.rows[0].data;
+      const original = await client.query(
+        "SELECT id FROM ledger_entries WHERE customer_id=$1 AND type='scan' AND data->>'timestamp'=$2 AND data->>'scanPointId'=$3 FOR UPDATE",
+        [exception.snapshot.customerId, ev.timestamp, ev.scanPointId]
+      );
+      if (!original.rows[0]) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Original scan debit was not found; no balance was changed.' }); }
+      await addLedger(exception.snapshot.customerId, 'reversal', 1, 'scan', original.rows[0].id);
+      ev.status = 'undone'; ev.reversedAt = now.toISOString(); ev.reversedBy = actor.userId;
+      await client.query('UPDATE scan_events SET status=\'undone\',data=$2 WHERE id=$1', [exception.sourceId, JSON.stringify(ev)]);
+    } else if (exception.type === 'transfer_reversal') {
+      const source = await client.query('SELECT data FROM transfers WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [exception.sourceId, row.restaurant_code]);
+      const transfer = source.rows[0]?.data;
+      if (!transfer || transfer.status !== 'completed') { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Transfer is no longer eligible for reversal.' }); }
+      const recipientBalance = await client.query('SELECT COALESCE(SUM(plates_delta),0)::int AS balance FROM ledger_entries WHERE customer_id=$1', [transfer.recipientCustomerId]);
+      if (Number(recipientBalance.rows[0].balance) < Number(transfer.plates)) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Recipient has already consumed the transferred plates; reversal would create a negative balance.' }); }
+      await addLedger(transfer.senderCustomerId, 'reversal', Number(transfer.plates), 'transfer_sender', exception.sourceId);
+      await addLedger(transfer.recipientCustomerId, 'reversal', -Number(transfer.plates), 'transfer_recipient', exception.sourceId);
+      transfer.status = 'reversed'; transfer.reversedAt = now.toISOString(); transfer.reversedByAdminId = actor.userId;
+      await client.query('UPDATE transfers SET data=$2 WHERE id=$1', [exception.sourceId, JSON.stringify(transfer)]);
+    } else if (exception.type === 'cash_refund') {
+      const source = await client.query('SELECT data FROM payments WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [exception.sourceId, row.restaurant_code]);
+      const payment = source.rows[0]?.data;
+      if (!payment || payment.refundStatus === 'refunded') { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Payment is no longer eligible for refund.' }); }
+      const later = await client.query('SELECT id FROM ledger_entries WHERE customer_id=$1 AND timestamp>$2 LIMIT 1', [exception.snapshot.customerId, exception.created_at]);
+      if (later.rows[0]) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Customer ledger changed after refund request; reconcile before payout.' }); }
+      await addLedger(exception.snapshot.customerId, 'reversal', -Number(exception.snapshot.plates), 'refund', exception.sourceId);
+      payment.refundStatus = 'refunded'; payment.refundedAt = now.toISOString();
+      payment.refundReference = payoutReference; payment.refundedBy = actor.userId;
+      await client.query('UPDATE payments SET data=$2 WHERE id=$1', [exception.sourceId, JSON.stringify(payment)]);
+    }
+    exception.status = 'approved'; exception.approval = { userId: actor.userId, username: actor.username, reason, payoutReference: payoutReference || undefined, approvedAt: now.toISOString() };
+    await client.query('UPDATE financial_exception_requests SET status=\'approved\',approved_by_user_id=$2,data=$3,updated_at=NOW() WHERE id=$1', [exception.id, actor.userId, JSON.stringify(exception)]);
+    await writeApprovalAudit(client, row.restaurant_code, actor, 'FINANCIAL_EXCEPTION_APPROVED', { exceptionId: exception.id, type: exception.type, sourceId: exception.sourceId, reason, payoutReference: payoutReference || undefined });
+    await client.query('COMMIT');
+    return res.json({ success: true, exception });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    console.error('[Financial Exception Approval] failed:', error);
+    return res.status(503).json({ success: false, error: 'Financial exception was not approved or posted.' });
+  } finally { client.release(); }
+});
+
+app.get('/api/financial-exceptions', apiRateLimiter, requireAuth(['restaurant_admin', 'super_admin']), async (req, res) => {
+  const user = req.user!;
+  const pool = getPostgresPool();
+  if (!pool || !isPostgresConfigured()) return res.status(503).json({ success: false, error: 'Financial exception queue requires PostgreSQL.' });
+  try {
+    const result = user.role === 'super_admin'
+      ? await pool.query('SELECT data FROM financial_exception_requests ORDER BY created_at DESC LIMIT 200')
+      : await pool.query('SELECT data FROM financial_exception_requests WHERE restaurant_code=$1 ORDER BY created_at DESC LIMIT 200', [user.restaurantCode]);
+    return res.json({ success: true, exceptions: result.rows.map((r: any) => r.data) });
+  } catch (error) {
+    console.error('[Financial Exception Queue] failed:', error);
+    return res.status(503).json({ success: false, error: 'Financial exception queue is unavailable.' });
+  }
+});
+
 // POST /api/topups/commit: manager-confirmed top-up, ledger and payment are one DB transaction.
 app.post(
   '/api/topups/commit',
