@@ -1910,6 +1910,199 @@ app.post(
   }
 );
 
+
+
+// Server-authoritative second-plate and photo spot-check workflows.
+// Every action is tied to the original committed scan, the authenticated station,
+// and a one-time idempotency key. Browser state is never treated as financial authority.
+app.post('/api/scans/:scanId/second-plate', scanRateLimiter, requireAuth(['stand_staff', 'restaurant_admin']), async (req, res) => {
+  const user = req.user!;
+  const scanId = String(req.params.scanId || '').trim();
+  const idempotencyKey = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
+  if (!/^scan_[A-Za-z0-9_-]{8,64}$/.test(scanId) || !/^[A-Za-z0-9:_-]{12,128}$/.test(idempotencyKey)) {
+    return res.status(400).json({ success: false, error: 'A valid scan and idempotency key are required.' });
+  }
+  const pool = getPostgresPool();
+  if (!pool || !isPostgresConfigured()) return res.status(503).json({ success: false, error: 'Second-plate authorization requires PostgreSQL.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['second-plate:' + user.restaurantCode + ':' + idempotencyKey]);
+    const prior = await client.query("SELECT data FROM ledger_entries WHERE idempotency_key=$1", ['extra:' + idempotencyKey]);
+    if (prior.rows[0]) {
+      const eventRow = await client.query('SELECT data FROM scan_events WHERE id=$1 AND restaurant_code=$2', [scanId, user.restaurantCode]);
+      await client.query('COMMIT');
+      return res.json({ success: true, idempotent: true, scanEvent: eventRow.rows[0]?.data || null, ledgerEntry: prior.rows[0].data });
+    }
+    const found = await client.query('SELECT data,status,customer_id,station_id FROM scan_events WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [scanId, user.restaurantCode]);
+    const row = found.rows[0];
+    const event = row?.data;
+    if (!row || !event || !['approved', 'warning_confirmed'].includes(row.status)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, error: 'Only a currently committed scan can receive a second plate.' });
+    }
+    if (user.role === 'stand_staff' && (!user.stationId || user.stationId !== row.station_id)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ success: false, error: 'This operator is not assigned to the scan station.' });
+    }
+    if (event.isGracePlate || Number(event.platesDeducted) !== 1 || event.isSecondPlateAdded) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, error: 'This scan is not eligible for another plate.' });
+    }
+    const customerResult = await client.query('SELECT id,data FROM customers WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [row.customer_id, user.restaurantCode]);
+    if (!customerResult.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Customer not found.' });
+    }
+    const checkpoint = await client.query('SELECT balance,cutoff_timestamp FROM balance_checkpoints WHERE customer_id=$1 ORDER BY cutoff_timestamp DESC LIMIT 1', [row.customer_id]);
+    const cutoff = checkpoint.rows[0]?.cutoff_timestamp || new Date(0);
+    const delta = await client.query('SELECT COALESCE(SUM(plates_delta),0)::int AS delta FROM ledger_entries WHERE customer_id=$1 AND timestamp>$2', [row.customer_id, cutoff]);
+    const balance = Number(checkpoint.rows[0]?.balance || 0) + Number(delta.rows[0]?.delta || 0);
+    if (balance < 1) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, error: 'Insufficient balance for a second plate.' });
+    }
+    const restaurant = (serverDbState?.restaurants || []).find((r: any) => r.code === user.restaurantCode);
+    const plan = (serverDbState?.plans || []).find((p: any) => p.id === restaurant?.planId) || (serverDbState?.plans || [])[0];
+    const terms = { ...(plan?.terms || {}), ...(restaurant?.termsOverride || {}) };
+    const windowMinutes = Math.max(1, Number(terms.servingWindowMinutes || 120));
+    const plateLimit = Math.max(1, Number(terms.plateLimitPerWindow || 3));
+    const recent = await client.query('SELECT data FROM scan_events WHERE customer_id=$1 AND restaurant_code=$2 AND created_at >= NOW() - ($3::text || \\' minutes\\')::interval FOR UPDATE', [row.customer_id, user.restaurantCode, windowMinutes]);
+    const served = recent.rows.reduce((sum: number, r: any) => sum + (['approved','warning_confirmed'].includes(r.data?.status) ? Number(r.data?.platesDeducted || 0) : 0), 0);
+    if (served + 1 > plateLimit) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, error: 'The second plate would exceed the serving-window limit.' });
+    }
+    const now = new Date();
+    const ledgerId = 'led_' + crypto.randomUUID();
+    const ledgerEntry = {
+      id: ledgerId, customerId: row.customer_id, restaurantCode: user.restaurantCode,
+      type: 'extra', platesDelta: -1, timestamp: now.toISOString(), scanPointId: row.station_id,
+      staffId: user.userId, reference: 'SECOND-PLATE-' + event.memberNo,
+      reason: 'Second plate authorized on active scan', idempotencyKey: 'extra:' + idempotencyKey,
+      reversalOfId: undefined,
+    };
+    await client.query(
+      "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'extra',-1,$4,$5,$6)",
+      [ledgerId, user.restaurantCode, row.customer_id, 'extra:' + idempotencyKey, now, JSON.stringify(ledgerEntry)]
+    );
+    event.platesDeducted = 2;
+    event.isSecondPlateAdded = true;
+    event.secondPlateAuthorizedAt = now.toISOString();
+    event.secondPlateAuthorizedBy = user.userId;
+    event.secondPlateIdempotencyKey = idempotencyKey;
+    await client.query('UPDATE scan_events SET data=$2 WHERE id=$1', [scanId, JSON.stringify(event)]);
+    await client.query(
+      'INSERT INTO audit_logs (id,restaurant_code,user_id,action,data) VALUES ($1,$2,$3,$4,$5)',
+      ['aud_' + crypto.randomUUID(), user.restaurantCode, user.userId, 'SECOND_PLATE_AUTHORIZED',
+        JSON.stringify({ scanId, customerId: row.customer_id, stationId: row.station_id, actorRole: user.role, timestamp: now.toISOString() })]
+    );
+    await client.query('COMMIT');
+    if (Array.isArray(serverDbState?.ledgerEntries)) serverDbState.ledgerEntries.push(ledgerEntry);
+    if (Array.isArray(serverDbState?.scanEvents)) {
+      const cached = serverDbState.scanEvents.find((x: any) => x.id === scanId);
+      if (cached) Object.assign(cached, event);
+    }
+    return res.json({ success: true, scanEvent: event, ledgerEntry, balanceAfter: balance - 1 });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    console.error('[Second Plate] Transaction failed:', error);
+    return res.status(503).json({ success: false, error: 'Second plate was not committed. Retry with the same idempotency key.' });
+  } finally { client.release(); }
+});
+
+app.post('/api/scans/:scanId/photo-check', scanRateLimiter, requireAuth(['stand_staff', 'restaurant_admin']), async (req, res) => {
+  const user = req.user!;
+  const scanId = String(req.params.scanId || '').trim();
+  const result = req.body?.result;
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  const idempotencyKey = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
+  if (!/^scan_[A-Za-z0-9_-]{8,64}$/.test(scanId) || !['matched','rejected'].includes(result) ||
+      !/^[A-Za-z0-9:_-]{12,128}$/.test(idempotencyKey) || reason.length > 300) {
+    return res.status(400).json({ success: false, error: 'A valid photo-check result and idempotency key are required.' });
+  }
+  const pool = getPostgresPool();
+  if (!pool || !isPostgresConfigured()) return res.status(503).json({ success: false, error: 'Photo verification requires PostgreSQL.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['photo-check:' + user.restaurantCode + ':' + idempotencyKey]);
+    const found = await client.query('SELECT data,status,customer_id,station_id FROM scan_events WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [scanId, user.restaurantCode]);
+    const row = found.rows[0];
+    const event = row?.data;
+    if (!row || !event) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Scan event not found.' });
+    }
+    if (user.role === 'stand_staff' && (!user.stationId || user.stationId !== row.station_id)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ success: false, error: 'This operator is not assigned to the scan station.' });
+    }
+    if (!event.photoCheckRequired || event.photoCheckResult !== 'none' ||
+        !['approved','warning_confirmed'].includes(row.status) || event.isGracePlate) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, error: 'This scan is not awaiting an eligible photo check.' });
+    }
+    const now = new Date();
+    if (result === 'rejected') {
+      const original = await client.query(
+        "SELECT id FROM ledger_entries WHERE customer_id=$1 AND type='scan' AND data->>'timestamp'=$2 AND data->>'scanPointId'=$3 FOR UPDATE",
+        [row.customer_id, event.timestamp, event.scanPointId]
+      );
+      if (!original.rows[0]) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, error: 'Original scan ledger entry was not found; no automatic balance change was made.' });
+      }
+      const reversalId = 'led_' + crypto.randomUUID();
+      const reversal = {
+        id: reversalId, customerId: row.customer_id, restaurantCode: user.restaurantCode,
+        type: 'reversal', platesDelta: 1, timestamp: now.toISOString(), scanPointId: row.station_id,
+        staffId: user.userId, reason: 'Photo spot-check rejected: ' + (reason || 'photo did not match'),
+        reference: 'PHOTO-REJECT-' + scanId, reversalOfId: original.rows[0].id,
+        idempotencyKey: 'photo-reject:' + idempotencyKey,
+      };
+      await client.query(
+        "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'reversal',1,$4,$5,$6)",
+        [reversalId, user.restaurantCode, row.customer_id, 'photo-reject:' + idempotencyKey, now, JSON.stringify(reversal)]
+      );
+      event.status = 'rejected_photo';
+      event.platesDeducted = 0;
+      event.photoCheckResult = 'rejected';
+      event.photoCheckReason = reason || 'photo_mismatch';
+      event.photoCheckedAt = now.toISOString();
+      event.photoCheckedBy = user.userId;
+      await client.query("UPDATE scan_events SET status='rejected_photo',data=$2 WHERE id=$1", [scanId, JSON.stringify(event)]);
+    } else {
+      event.photoCheckResult = 'matched';
+      event.photoCheckedAt = now.toISOString();
+      event.photoCheckedBy = user.userId;
+      await client.query('UPDATE scan_events SET data=$2 WHERE id=$1', [scanId, JSON.stringify(event)]);
+    }
+    await client.query(
+      'INSERT INTO audit_logs (id,restaurant_code,user_id,action,data) VALUES ($1,$2,$3,$4,$5)',
+      ['aud_' + crypto.randomUUID(), user.restaurantCode, user.userId,
+        result === 'matched' ? 'PHOTO_CHECK_MATCHED' : 'PHOTO_CHECK_REJECTED',
+        JSON.stringify({ scanId, customerId: row.customer_id, result, reason, actorRole: user.role, timestamp: now.toISOString() })]
+    );
+    await client.query('COMMIT');
+    if (result === 'rejected' && Array.isArray(serverDbState?.ledgerEntries)) serverDbState.ledgerEntries.push({
+      id: 'photo-reversal-cache-' + scanId, customerId: row.customer_id, restaurantCode: user.restaurantCode,
+      type: 'reversal', platesDelta: 1, timestamp: now.toISOString(), scanPointId: row.station_id,
+      staffId: user.userId, reason: 'Photo spot-check rejected', idempotencyKey: 'photo-reject:' + idempotencyKey,
+    });
+    if (Array.isArray(serverDbState?.scanEvents)) {
+      const cached = serverDbState.scanEvents.find((x: any) => x.id === scanId);
+      if (cached) Object.assign(cached, event);
+    }
+    return res.json({ success: true, scanEvent: event, reversed: result === 'rejected' });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    console.error('[Photo Check] Transaction failed:', error);
+    return res.status(503).json({ success: false, error: 'Photo check was not committed.' });
+  } finally { client.release(); }
+});
+
+
 // Transactional customer registration and approval authority.
 async function writeApprovalAudit(client: any, restaurantCode: string, user: UserSession, action: string, details: any) {
   await client.query(
