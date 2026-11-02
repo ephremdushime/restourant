@@ -3275,7 +3275,8 @@ function checkServerStudentEntitlement(
     | 'digital_qr'
     | 'customer_dashboard'
     | 'digital_plate_transfer'
-    | 'customer_transaction_history' = 'digital_plate_transfer'
+    | 'customer_transaction_history' = 'digital_plate_transfer',
+  targetState: any = serverDbState
 ): {
   allowed: boolean;
   feature: string;
@@ -3286,12 +3287,12 @@ function checkServerStudentEntitlement(
   expiresAt?: string;
   gracePeriodEnd?: string;
 } {
-  ensureServerDbDefaults(serverDbState);
-  const settings = serverDbState?.studentSubscriptionSettings;
+  ensureServerDbDefaults(targetState);
+  const settings = targetState?.studentSubscriptionSettings;
 
   // Physical card QR scanning NEVER requires a dashboard subscription
   if (feature === 'physical_card_scan') {
-    const subs = serverDbState?.customerSubscriptions || [];
+    const subs = targetState?.customerSubscriptions || [];
     const sub = subs.find((s: any) => s.customerId === customerId);
     return {
       allowed: true,
@@ -3314,7 +3315,7 @@ function checkServerStudentEntitlement(
     };
   }
 
-  const subs = serverDbState?.customerSubscriptions || [];
+  const subs = targetState?.customerSubscriptions || [];
   const sub = subs.find((s: any) => s.customerId === customerId);
   if (!sub) {
     return {
@@ -3702,7 +3703,7 @@ function scopeStateForUser(state: any, user: UserSession): any {
   if (user.role === 'customer') {
     const rCode = user.restaurantCode;
     const custId = user.userId;
-    const dashEnt = checkServerStudentEntitlement(custId, 'customer_dashboard');
+    const dashEnt = checkServerStudentEntitlement(custId, 'customer_dashboard', state);
     return {
       currentRestaurantCode: rCode,
       restaurants: (state.restaurants || []).filter((r: any) => r.code === rCode),
