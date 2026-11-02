@@ -2338,8 +2338,13 @@ app.post('/api/financial-exceptions', apiRateLimiter, requireAuth(['restaurant_a
       [user.restaurantCode, idempotencyKey]
     );
     if (prior.rows[0]) {
+      const priorException = prior.rows[0].data;
+      if (priorException.type !== type || priorException.sourceId !== sourceId) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, error: 'Idempotency key was already used for a different exception request.' });
+      }
       await client.query('COMMIT');
-      return res.json({ success: true, exception: prior.rows[0].data, idempotent: true });
+      return res.json({ success: true, exception: priorException, idempotent: true });
     }
     let snapshot: any;
     let customerId: string | null = null;
