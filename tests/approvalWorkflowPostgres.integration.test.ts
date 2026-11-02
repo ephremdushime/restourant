@@ -567,7 +567,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       await pool!.query(
         "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'purchase',10,$4,NOW(),$5),($6,$2,$3,'scan',-1,$7,$8,$9)",
         ['photo-purchase-' + restaurantCode, restaurantCode, photoCustomer, 'photo-purchase-' + restaurantCode,
-          JSON.stringify({ platesDelta: 10 }), 'photo-scan-ledger-' + restaurantCode,
+          JSON.stringify({ platesDelta: 10 }), 'photo-scan-ledger-' + restaurantCode, 'photo-scan-idem-' + restaurantCode,
           photoTimestamp, JSON.stringify({ timestamp: photoTimestamp, scanPointId: exceptionStationId })]
       );
       const photoScanId = 'scan_' + restaurantCode + '_photo';
