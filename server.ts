@@ -1843,6 +1843,10 @@ app.post(
       }
       let supervisorOverride: any = null;
       if (platesInWindow >= plateLimit) {
+        if (process.env.RESTOPASS_SUPERVISOR_OVERRIDES_ENABLED !== 'true') {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ success: false, code: 'MEAL_LIMIT_REACHED', error: `Meal limit reached: maximum ${plateLimit} meals in ${windowMinutes} minutes.` });
+        }
         const overrideId = typeof req.body?.supervisorOverrideId === 'string' ? req.body.supervisorOverrideId.trim() : '';
         if (!/^sov_[A-Za-z0-9_-]{8,64}$/.test(overrideId)) {
           await client.query('ROLLBACK');
@@ -1946,6 +1950,7 @@ app.post(
 // Two-person supervisor override for a serving-window limit. Approval is one-time,
 // customer/station-bound, short-lived and consumed inside the scan transaction.
 app.post('/api/scans/supervisor-overrides', apiRateLimiter, requireAuth(['stand_staff','restaurant_admin']), async (req,res) => {
+  if (process.env.RESTOPASS_SUPERVISOR_OVERRIDES_ENABLED !== 'true') return res.status(503).json({success:false,code:'SUPERVISOR_OVERRIDES_DISABLED',error:'Supervisor overrides are disabled for this deployment.'});
   const user=req.user!;
   const customerId=typeof req.body?.customerId==='string'?req.body.customerId.trim():'';
   const stationId=typeof req.body?.stationId==='string'?req.body.stationId.trim():'';
@@ -1982,6 +1987,7 @@ app.post('/api/scans/supervisor-overrides', apiRateLimiter, requireAuth(['stand_
 });
 
 app.post('/api/scans/supervisor-overrides/:overrideId/approve',apiRateLimiter,requireAuth(['super_admin']),async(req,res)=>{
+  if (process.env.RESTOPASS_SUPERVISOR_OVERRIDES_ENABLED !== 'true') return res.status(503).json({success:false,code:'SUPERVISOR_OVERRIDES_DISABLED',error:'Supervisor overrides are disabled for this deployment.'});
   const actor=req.user!,reason=typeof req.body?.approvalReason==='string'?req.body.approvalReason.trim():'';
   if(reason.length<12||reason.length>500)return res.status(400).json({success:false,error:'A detailed approval reason is required.'});
   const pool=getPostgresPool();if(!pool||!isPostgresConfigured())return res.status(503).json({success:false,error:'Supervisor approval requires PostgreSQL.'});
