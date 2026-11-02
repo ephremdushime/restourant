@@ -26,6 +26,7 @@ import { SecurityAndAuditLogsView } from './SecurityAndAuditLogsView';
 import { RestaurantSecurityCenter } from './RestaurantSecurityCenter';
 import { RestaurantAppearanceManager } from './RestaurantAppearanceManager';
 import { SummaryMetricCards } from './SummaryMetricCards';
+import { FinancialExceptionsManager } from '../common/FinancialExceptionsManager';
 import {
   exportTransactionsToCsv,
   exportTransactionsToJson,
@@ -3127,6 +3128,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
       {/* 6. OVERRIDES & SPOT-CHECKS VIEW */}
       {activeSubTab === 'overrides' && (
         <div className="space-y-4">
+          <FinancialExceptionsManager mode="request" />
           <div className="p-4 rounded-xl bg-slate-900 border border-slate-800">
             <h2 className="text-base font-bold text-white">Blocked Scans &amp; Staff Spot-Check Logs</h2>
             <p className="text-xs text-slate-400 mt-0.5">
