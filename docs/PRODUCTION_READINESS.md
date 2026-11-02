@@ -11,7 +11,8 @@
 - Staff credential hashes, customer PIN hashes and identity hashes are redacted from state and direct customer responses. Staff secrets are also excluded from browser storage.
 - Patron photos are stored as private objects, validated by MIME signature and size, and served through authenticated tenant-scoped access.
 - Production rate limits and session revocation use shared Redis. Protected requests fail closed when shared session security is unavailable.
-- Browser sync cannot create subscription entitlements or payment records. Client-side balance, transfer, scan reversal, second-plate, photo override and manual adjustment mutations are blocked in authenticated production mode unless a server-authoritative workflow exists.
+- Browser sync cannot create subscription entitlements or payment records. Client-side balance, transfer, scan reversal, second-plate, photo override and manual adjustment mutations remain blocked.
+- Financial exception requests now support cash/bank refund, paid scan reversal and completed plate-transfer reversal. A restaurant administrator submits a reasoned request; a different platform super-admin approves or rejects it. Approval locks affected rows, revalidates source eligibility, appends compensating ledger entries, updates the source record and writes an audit event in one PostgreSQL transaction. Duplicate source exceptions and idempotency keys are constrained in PostgreSQL. Refunds are limited to cash/bank top-ups with no subsequent ledger activity; mobile-money refunds remain disabled until a provider refund API is configured.
 - Liveness and dependency-aware readiness endpoints are available. The production proxy waits for PostgreSQL/Redis readiness.
 - A backup worker creates encrypted PostgreSQL and local-upload archives every 24 hours by default, retains 14 days, and verifies an independent HMAC-SHA256 integrity sidecar before reporting a recent backup healthy.
 - A guarded restore utility verifies the HMAC before decryption, refuses non-empty destinations, and extracts only the expected database dump and upload archive. CI exercises valid restore and tamper rejection.
@@ -26,9 +27,9 @@ MTN MoMo and Airtel Money production credentials, callback secrets, provider all
 
 The backup worker writes encrypted archives to `RESTOPASS_BACKUP_DIR`. Configure that directory on protected storage and replicate it to an independent off-site location. Keep the encryption key separately controlled. Perform and document a restore into an isolated staging database and upload volume before launch, then repeat on a schedule. A backup stored only on the application host is not disaster recovery.
 
-### 3. Deferred financial and exception workflows
+### 3. Remaining financial and exception workflows
 
-Transfers, refunds, scan reversals, second-plate authorization and supervisor/photo overrides are not enabled for production. Their legacy client-side mutations are blocked; they must not be re-enabled by changing UI flags. If the launch scope requires any of them, implement a PostgreSQL transaction, unique idempotency key, tenant/role authorization, audit record, reversal/compensation logic and concurrent integration tests for each workflow first.
+The new audited exception API covers manual cash/bank refunds, paid scan reversals and completed transfer reversals. It deliberately does not execute mobile-money refunds, which require a provider refund transaction and status verification. Second-plate authorization and photo/supervisor overrides still require a one-time, server-consumed authorization record and scanner-path integration; they must not be re-enabled through browser state. Transfers themselves remain unavailable until a separate customer-to-customer transfer creation transaction is implemented.
 
 ### 4. Cloud availability and network behavior
 
