@@ -312,7 +312,7 @@ The production Compose stack runs a backup worker that:
 - Includes a guarded restore utility that verifies integrity before decrypting, refuses a non-empty destination, and extracts only the expected recovery artifacts.
 - Retains 14 days of local backups by default and marks the worker unhealthy if no valid recent backup exists within 48 hours.
 
-Set `RESTOPASS_BACKUP_ENCRYPTION_KEY`, `RESTOPASS_BACKUP_HMAC_KEY`, and `RESTOPASS_BACKUP_DIR` before deployment. The encryption and HMAC keys must be different, randomly generated secrets and stored separately from the backup host. Point `RESTOPASS_BACKUP_DIR` to protected storage that is also replicated to an independent off-site location; local encrypted backups are not disaster recovery. Complete and record an isolated restore drill before launch and repeat it on a schedule.
+Set `RESTOPASS_BACKUP_ENCRYPTION_KEY`, `RESTOPASS_BACKUP_HMAC_KEY`, and `RESTOPASS_BACKUP_DIR` before deployment. Production Compose also requires `RESTOPASS_BACKUP_S3_BUCKET` and dedicated least-privilege S3-compatible credentials; configure `RESTOPASS_BACKUP_S3_ENDPOINT` for R2/Spaces or leave it blank for AWS S3. The worker uploads the encrypted archive and HMAC sidecar, downloads the remote archive and verifies it before marking off-site replication healthy. Keep the encryption and HMAC keys separately controlled outside the backup host. Configure bucket versioning and lifecycle retention, then complete and record an isolated restore drill before launch and repeat it on a schedule.
 
 For a guarded restore drill, create an empty destination directory and run the restore utility from the backup container (or a compatible environment containing OpenSSL and the scripts):
 
