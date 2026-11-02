@@ -24,6 +24,25 @@ const DEV_SESSION_SECRET = crypto
   .digest('hex');
 const DEV_MASTER_SECRET = ['RESTOPASS', 'RWANDA', 'MASTER', '2026', 'SUPER', 'ADMIN', 'EPHREM'].join('_');
 
+function isPlaceholderSecret(secret: string): boolean {
+  if (!secret) return true;
+  const lower = secret.toLowerCase();
+  const placeholderKeywords = [
+    'change_me',
+    'changeme',
+    'placeholder',
+    'your_',
+    'example',
+    'generate_a_',
+    'secret_here',
+    'password_here',
+    'default',
+  ];
+  if (placeholderKeywords.some((kw) => lower.includes(kw))) return true;
+  if (/^([a-zA-Z0-9_-])\1+$/.test(secret)) return true;
+  return false;
+}
+
 function validateProductionSecrets(env: NodeJS.ProcessEnv = process.env): {
   sessionSecret: string;
   masterSecret: string;
@@ -31,16 +50,22 @@ function validateProductionSecrets(env: NodeJS.ProcessEnv = process.env): {
   const isProd = env.NODE_ENV === 'production';
   const sessionSecret = env.SESSION_SECRET?.trim() || '';
   const masterSecret = (env.RESTOPASS_MASTER_SECRET || env.RESTOPASS_MASTER_KEY || '')?.trim();
+  const superAdminPassword = (env.RESTOPASS_SUPERADMIN_PASSWORD || env.SUPERADMIN_PASSWORD || '')?.trim();
 
   if (isProd) {
-    if (!sessionSecret || sessionSecret.length < 32 || sessionSecret === DEV_SESSION_SECRET) {
+    if (!sessionSecret || sessionSecret.length < 32 || sessionSecret === DEV_SESSION_SECRET || isPlaceholderSecret(sessionSecret)) {
       throw new Error(
-        '[FATAL SECURITY ERROR] SESSION_SECRET (>= 32 characters) must be configured in production environment. Server startup aborted.'
+        '[FATAL SECURITY ERROR] SESSION_SECRET (>= 32 characters, non-placeholder) must be configured in production environment. Server startup aborted.'
       );
     }
-    if (!masterSecret || masterSecret.length < 32 || masterSecret === DEV_MASTER_SECRET) {
+    if (!masterSecret || masterSecret.length < 32 || masterSecret === DEV_MASTER_SECRET || isPlaceholderSecret(masterSecret)) {
       throw new Error(
-        '[FATAL SECURITY ERROR] RESTOPASS_MASTER_SECRET (>= 32 characters) must be configured in production environment. Server startup aborted.'
+        '[FATAL SECURITY ERROR] RESTOPASS_MASTER_SECRET (>= 32 characters, non-placeholder) must be configured in production environment. Server startup aborted.'
+      );
+    }
+    if (superAdminPassword && (superAdminPassword.length < 16 || isPlaceholderSecret(superAdminPassword))) {
+      throw new Error(
+        '[FATAL SECURITY ERROR] RESTOPASS_SUPERADMIN_PASSWORD (>= 16 characters, non-placeholder) must be configured securely in production environment.'
       );
     }
     return { sessionSecret, masterSecret };
@@ -423,10 +448,10 @@ function createSessionToken(session: Omit<UserSession, 'iat' | 'exp'>, expiresIn
 /**
  * Verifies and decodes a session token
  */
-function verifySessionToken(token: string): UserSession | null {
+function verifySessionToken(token: string, checkRevocation = false): UserSession | null {
   try {
     if (!token || !token.startsWith('rp_sess_')) return null;
-    if (revokedTokens.has(token)) return null;
+    if (checkRevocation && revokedTokens.has(token)) return null;
 
     const parts = token.slice('rp_sess_'.length).split('.');
     if (parts.length !== 2) return null;
@@ -469,6 +494,7 @@ function sessionRevocationKey(token: string): string {
 async function revokeSessionToken(token: string): Promise<boolean> {
   const session = verifySessionToken(token);
   if (!session) return true;
+  revokedTokens.add(token);
   if (process.env.NODE_ENV === 'production') {
     const redis = getRedisClient();
     if (!redis || redis.status !== 'ready') return false;
@@ -481,7 +507,6 @@ async function revokeSessionToken(token: string): Promise<boolean> {
       return false;
     }
   }
-  revokedTokens.add(token);
   return true;
 }
 
@@ -500,14 +525,6 @@ function requireAuth(allowedRoles?: string[]) {
       });
     }
 
-    const session = verifySessionToken(token);
-    if (!session) {
-      return res.status(401).json({
-        success: false,
-        error: 'Invalid or expired authentication session. Please sign in again.',
-      });
-    }
-
     if (process.env.NODE_ENV === 'production') {
       const redis = getRedisClient();
       if (!redis || redis.status !== 'ready') {
@@ -521,6 +538,16 @@ function requireAuth(allowedRoles?: string[]) {
         console.error('[Session Validation] Redis lookup failed:', error);
         return res.status(503).json({ success: false, error: 'Session security is temporarily unavailable.' });
       }
+    } else if (revokedTokens.has(token)) {
+      return res.status(401).json({ success: false, error: 'Session has been revoked. Please sign in again.' });
+    }
+
+    const session = verifySessionToken(token);
+    if (!session) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid or expired authentication session. Please sign in again.',
+      });
     }
 
     if (process.env.NODE_ENV === 'production' && session.role === 'restaurant_admin') {
@@ -1131,6 +1158,7 @@ app.post(
   requireAuth(['stand_staff', 'restaurant_admin', 'super_admin']),
   (req, res) => {
     const { customerId, memberNo, phone } = req.body;
+    const user = req.user!;
     const customers = serverDbState?.customers || [];
     const cust = customers.find(
       (c: any) =>
@@ -1139,6 +1167,9 @@ app.post(
         (phone && c.phone === phone)
     );
     if (!cust) return res.status(404).json({ success: false, error: 'Customer not found' });
+    if (user.role !== 'super_admin' && cust.restaurantCode !== user.restaurantCode) {
+      return res.status(403).json({ success: false, error: 'Customer belongs to another restaurant.' });
+    }
     if (cust.provisionalStatus === 'pending_approval') {
       return res.status(400).json({ success: false, error: 'Registration is pending boss approval before activation.' });
     }
@@ -1284,9 +1315,13 @@ app.post(
   requireAuth(['restaurant_admin', 'super_admin']),
   (req, res) => {
     const { requestId } = req.body;
+    const user = req.user!;
     const requests = serverDbState?.pinRecoveryRequests || [];
     const recReq = requests.find((r: any) => r.id === requestId);
     if (!recReq) return res.status(404).json({ success: false, error: 'Recovery request not found' });
+    if (user.role !== 'super_admin' && recReq.restaurantCode !== user.restaurantCode) {
+      return res.status(403).json({ success: false, error: 'Recovery request belongs to another restaurant.' });
+    }
     if (recReq.status !== 'pending') return res.status(400).json({ success: false, error: 'Request is already reviewed' });
 
     const code = Math.floor(100000 + Math.random() * 900000).toString();
@@ -1370,7 +1405,23 @@ app.get('/api/customer/photo', apiRateLimiter, requireAuth(), async (req, res) =
     return res.status(400).json({ success: false, error: 'Invalid photo reference.' });
   }
   const privateUrl = `/api/customer/photo?key=${encodeURIComponent(key)}`;
-  const customer = (serverDbState?.customers || []).find((item: any) => item.photoUrl === privateUrl);
+  let customer = (serverDbState?.customers || []).find((item: any) => item.photoUrl === privateUrl);
+  if (!customer && isPostgresConfigured()) {
+    const pool = getPostgresPool();
+    if (pool) {
+      try {
+        const result = await pool.query(
+          "SELECT id, restaurant_code FROM customers WHERE data->>'photoUrl' = $1 LIMIT 1",
+          [privateUrl]
+        );
+        if (result.rows[0]) {
+          customer = { id: result.rows[0].id, restaurantCode: result.rows[0].restaurant_code };
+        }
+      } catch (e) {
+        console.error('[Photo Lookup Postgres Error]', e);
+      }
+    }
+  }
   if (!customer) return res.status(404).json({ success: false, error: 'Photo not found.' });
   const user = req.user!;
   if (user.role === 'customer' && customer.id !== user.userId) {
@@ -3617,10 +3668,22 @@ function scopeStateForUser(state: any, user: UserSession): any {
   const redactStationUsers = (items: any[]) => (items || []).map((stationUser: any) => ({
     ...stationUser, passwordHash: undefined, pin: undefined,
   }));
+  const redactActivationRequests = (items: any[]) => (items || []).map((ar: any) => ({
+    ...ar, activationCode: undefined, codeHash: undefined,
+  }));
+  const redactPinRecoveryRequests = (items: any[]) => (items || []).map((pr: any) => ({
+    ...pr, recoveryCode: undefined, recoveryCodeHash: undefined,
+  }));
 
   // Operational data is available to super-admins, never raw authentication material.
   if (user.role === 'super_admin') {
-    return { ...state, customers: redactCustomers(state.customers || []), stationUsers: redactStationUsers(state.stationUsers || []) };
+    return {
+      ...state,
+      customers: redactCustomers(state.customers || []),
+      stationUsers: redactStationUsers(state.stationUsers || []),
+      activationRequests: redactActivationRequests(state.activationRequests || []),
+      pinRecoveryRequests: redactPinRecoveryRequests(state.pinRecoveryRequests || []),
+    };
   }
 
   // Restaurant Admin: Scoped exclusively to their restaurantCode
@@ -3659,8 +3722,8 @@ function scopeStateForUser(state: any, user: UserSession): any {
       },
       customerSubscriptions: (state.customerSubscriptions || []).filter((cs: any) => cs.restaurantCode === rCode),
       studentSubscriptionPayments: (state.studentSubscriptionPayments || []).filter((sp: any) => sp.restaurantCode === rCode),
-      activationRequests: (state.activationRequests || []).filter((ar: any) => ar.restaurantCode === rCode),
-      pinRecoveryRequests: (state.pinRecoveryRequests || []).filter((pr: any) => pr.restaurantCode === rCode),
+      activationRequests: redactActivationRequests((state.activationRequests || []).filter((ar: any) => ar.restaurantCode === rCode)),
+      pinRecoveryRequests: redactPinRecoveryRequests((state.pinRecoveryRequests || []).filter((pr: any) => pr.restaurantCode === rCode)),
       customTranslations: state.customTranslations || {},
     };
   }
@@ -3681,8 +3744,8 @@ function scopeStateForUser(state: any, user: UserSession): any {
       stationUsers: redactStationUsers((state.stationUsers || []).filter((su: any) => su.restaurantCode === rCode)),
       pendingApprovals: (state.pendingApprovals || []).filter((pa: any) => pa.restaurantCode === rCode),
       shifts: (state.shifts || []).filter((sh: any) => sh.restaurantCode === rCode),
-      activationRequests: (state.activationRequests || []).filter((ar: any) => ar.restaurantCode === rCode),
-      pinRecoveryRequests: (state.pinRecoveryRequests || []).filter((pr: any) => pr.restaurantCode === rCode),
+      activationRequests: redactActivationRequests((state.activationRequests || []).filter((ar: any) => ar.restaurantCode === rCode)),
+      pinRecoveryRequests: redactPinRecoveryRequests((state.pinRecoveryRequests || []).filter((pr: any) => pr.restaurantCode === rCode)),
       notifications: (state.notifications || []).filter(
         (n: any) => !n.restaurantCode || n.restaurantCode === rCode
       ),
@@ -4132,4 +4195,6 @@ export {
   getServerDbState,
   setServerDbState,
   validateProductionSecrets,
+  revokeSessionToken,
+  isPlaceholderSecret,
 };

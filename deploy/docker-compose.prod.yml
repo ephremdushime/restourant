@@ -1,6 +1,14 @@
 # ==============================================================================
 # RestoPass Multi-Tenant Campus & Cafeteria Cloud Production Stack
-# High-Scale Architecture (50,000 DAU Distributed Deployment)
+# Pilot Baseline Production Architecture (Single-Instance Cloud Deployment)
+#
+# HARDWARE SIZING & CAPACITY NOTES:
+# - PostgreSQL Limit: 2048M | Redis Limit: 1024M | App Limit: 2048M | Backup: 1024M
+# - Combined with Caddy reverse proxy and Linux host OS overhead, this complete
+#   stack requires a minimum 8 GB RAM VM (e.g. AOS Cloud Standard Option 6).
+# - 2 GB RAM (Option 2) and 4 GB RAM (Option 4) will experience OOM kills or severe paging.
+# - High-scale throughput (e.g. 50,000 DAU) has not been benchmarked and requires
+#   dedicated load testing and multi-instance orchestration before making capacity claims.
 # ==============================================================================
 # Services:
 #   1. postgres: Managed Relational Database with strict constraints & append-only ledger
@@ -102,6 +110,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
     volumes:
       - app_uploads:/app/public/uploads
     networks:
@@ -121,6 +134,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 5m
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
     environment:
       PGHOST: postgres
       PGPORT: 5432

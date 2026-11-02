@@ -27,6 +27,14 @@ if [ -n "${RESTOPASS_BACKUP_S3_BUCKET:-}" ]; then
   : "${RESTOPASS_BACKUP_S3_ACCESS_KEY_ID:?RESTOPASS_BACKUP_S3_ACCESS_KEY_ID is required for off-site backups}"
   : "${RESTOPASS_BACKUP_S3_SECRET_ACCESS_KEY:?RESTOPASS_BACKUP_S3_SECRET_ACCESS_KEY is required for off-site backups}"
 fi
+if [ "$RESTOPASS_BACKUP_ENCRYPTION_KEY" = "$RESTOPASS_BACKUP_HMAC_KEY" ]; then
+  echo "[backup] encryption key and HMAC integrity key must be distinct" >&2
+  exit 1
+fi
+if [ "$RESTOPASS_BACKUP_ENCRYPTION_KEY" = "generate_a_unique_backup_encryption_passphrase_at_least_32_characters" ] || [ "$RESTOPASS_BACKUP_HMAC_KEY" = "generate_a_separate_random_backup_integrity_key_at_least_32_characters" ]; then
+  echo "[backup] default placeholder backup keys detected; configure unique secrets" >&2
+  exit 1
+fi
 if [ "${#RESTOPASS_BACKUP_ENCRYPTION_KEY}" -lt 32 ] || [ "${#RESTOPASS_BACKUP_HMAC_KEY}" -lt 32 ]; then
   echo "[backup] encryption and independent HMAC keys must each contain at least 32 characters" >&2
   exit 1
