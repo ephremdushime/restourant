@@ -227,3 +227,25 @@ CREATE INDEX IF NOT EXISTS idx_scan_events_resto_time ON scan_events (restaurant
 CREATE INDEX IF NOT EXISTS idx_scan_events_customer ON scan_events (customer_id);
 CREATE INDEX IF NOT EXISTS idx_pending_approvals_resto ON pending_approvals (restaurant_code, status);
 CREATE INDEX IF NOT EXISTS idx_used_tokens_expires ON used_tokens (expires_at);
+
+-- 19. Two-person financial exception workflow. Requests are immutable snapshots;
+-- approvals are committed with compensating ledger entries in one transaction.
+CREATE TABLE IF NOT EXISTS financial_exception_requests (
+    id VARCHAR(64) PRIMARY KEY,
+    restaurant_code VARCHAR(32) NOT NULL,
+    exception_type VARCHAR(32) NOT NULL,
+    source_id VARCHAR(64) NOT NULL,
+    customer_id VARCHAR(64),
+    status VARCHAR(24) NOT NULL DEFAULT 'pending',
+    idempotency_key VARCHAR(128) NOT NULL,
+    requested_by_user_id VARCHAR(128) NOT NULL,
+    approved_by_user_id VARCHAR(128),
+    data JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_financial_exception_idempotency UNIQUE (restaurant_code, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_financial_exceptions_queue
+    ON financial_exception_requests (restaurant_code, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_financial_exceptions_source
+    ON financial_exception_requests (restaurant_code, exception_type, source_id);
