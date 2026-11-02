@@ -308,3 +308,23 @@ CREATE TABLE IF NOT EXISTS mobile_money_webhook_events (
 );
 CREATE INDEX IF NOT EXISTS idx_mobile_money_webhook_status
     ON mobile_money_webhook_events (processing_status, received_at);
+
+-- Two-person, one-time overrides for serving-window limits.
+CREATE TABLE IF NOT EXISTS scan_supervisor_overrides (
+  id VARCHAR(64) PRIMARY KEY,
+  restaurant_code VARCHAR(32) NOT NULL,
+  customer_id VARCHAR(64) NOT NULL,
+  station_id VARCHAR(64) NOT NULL,
+  status VARCHAR(24) NOT NULL CHECK (status IN ('pending','approved','consumed','rejected','expired')),
+  requested_by_user_id VARCHAR(64) NOT NULL,
+  approved_by_user_id VARCHAR(64),
+  idempotency_key VARCHAR(128) NOT NULL,
+  data JSONB NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  consumed_scan_id VARCHAR(64),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_scan_supervisor_override_key UNIQUE (restaurant_code,idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_scan_supervisor_override_queue
+  ON scan_supervisor_overrides (restaurant_code,status,created_at DESC);
