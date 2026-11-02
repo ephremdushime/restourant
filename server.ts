@@ -2087,13 +2087,17 @@ app.post('/api/scans/:scanId/photo-check', scanRateLimiter, requireAuth(['stand_
         result === 'matched' ? 'PHOTO_CHECK_MATCHED' : 'PHOTO_CHECK_REJECTED',
         JSON.stringify({ scanId, customerId: row.customer_id, result, reason, actorRole: user.role, timestamp: now.toISOString() })]
     );
+    const balanceCheckpoint = await client.query('SELECT balance,cutoff_timestamp FROM balance_checkpoints WHERE customer_id=$1 ORDER BY cutoff_timestamp DESC LIMIT 1', [row.customer_id]);
+    const balanceCutoff = balanceCheckpoint.rows[0]?.cutoff_timestamp || new Date(0);
+    const balanceDelta = await client.query('SELECT COALESCE(SUM(plates_delta),0)::int AS delta FROM ledger_entries WHERE customer_id=$1 AND timestamp>$2', [row.customer_id, balanceCutoff]);
+    const balanceAfter = Number(balanceCheckpoint.rows[0]?.balance || 0) + Number(balanceDelta.rows[0]?.delta || 0);
     await client.query('COMMIT');
     if (reversalForCache && Array.isArray(serverDbState?.ledgerEntries)) serverDbState.ledgerEntries.push(reversalForCache);
     if (Array.isArray(serverDbState?.scanEvents)) {
       const cached = serverDbState.scanEvents.find((x: any) => x.id === scanId);
       if (cached) Object.assign(cached, event);
     }
-    return res.json({ success: true, scanEvent: event, reversed: result === 'rejected' });
+    return res.json({ success: true, scanEvent: event, ledgerEntry: reversalForCache, balanceAfter, reversed: result === 'rejected' });
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch {}
     console.error('[Photo Check] Transaction failed:', error);
