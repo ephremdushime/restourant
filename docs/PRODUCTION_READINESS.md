@@ -13,7 +13,8 @@
 - Production rate limits and session revocation use shared Redis. Protected requests fail closed when shared session security is unavailable.
 - Browser sync cannot create subscription entitlements or payment records. Client-side balance, transfer, scan reversal, second-plate, photo override and manual adjustment mutations are blocked in authenticated production mode unless a server-authoritative workflow exists.
 - Liveness and dependency-aware readiness endpoints are available. The production proxy waits for PostgreSQL/Redis readiness.
-- A backup worker creates encrypted PostgreSQL and local-upload archives every 24 hours by default, retains 14 days, and reports unhealthy when a recent backup is missing.
+- A backup worker creates encrypted PostgreSQL and local-upload archives every 24 hours by default, retains 14 days, and verifies an independent HMAC-SHA256 integrity sidecar before reporting a recent backup healthy.
+- A guarded restore utility verifies the HMAC before decryption, refuses non-empty destinations, and extracts only the expected database dump and upload archive. CI exercises valid restore and tamper rejection.
 
 ## Release gates still requiring external setup or an explicit product decision
 
