@@ -77,6 +77,7 @@ mkdir -p "$TMP/image-bin" "$TMP/image-restore"
 cp "$ROOT/deploy/backup-verify.sh" "$TMP/image-bin/restopass-backup-verify"
 cp "$ROOT/deploy/restore.sh" "$TMP/image-bin/restopass-restore"
 cp "$ROOT/deploy/restore-offsite.sh" "$TMP/image-bin/restopass-restore-offsite"
+cp "$ROOT/deploy/restore-drill.sh" "$TMP/image-bin/restopass-restore-drill"
 chmod 0755 "$TMP/image-bin/"*
 RESTOPASS_TEST_REMOTE_ROOT="$TMP/remote" RESTOPASS_BACKUP_S3_BUCKET=test-bucket \
 RESTOPASS_BACKUP_S3_PREFIX=restopass RESTOPASS_BACKUP_S3_ACCESS_KEY_ID=test-access \
@@ -85,4 +86,10 @@ RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" PATH="$TMP/bin:$TMP/image
   restopass-restore-offsite restopass-test.tar.gz.enc "$TMP/image-restore"
 cmp "$TMP/source/database.dump" "$TMP/image-restore/database.dump"
 cmp "$TMP/source/uploads.tar.gz" "$TMP/image-restore/uploads.tar.gz"
-echo "Backup integrity, guarded restore, tamper rejection, off-site healthcheck and source/container-layout restore tests passed."
+
+# Exercise the automated disaster recovery drill verification report
+RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
+RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" PATH="$TMP/bin:$TMP/image-bin:$PATH" \
+  restopass-restore-drill "$TMP/valid-backup.enc"
+
+echo "Backup integrity, guarded restore, tamper rejection, off-site healthcheck, DR drill report and source/container-layout restore tests passed."
