@@ -1931,9 +1931,15 @@ app.post('/api/scans/:scanId/second-plate', scanRateLimiter, requireAuth(['stand
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['second-plate:' + user.restaurantCode + ':' + idempotencyKey]);
     const prior = await client.query("SELECT data FROM ledger_entries WHERE idempotency_key=$1", ['extra:' + idempotencyKey]);
     if (prior.rows[0]) {
-      const eventRow = await client.query('SELECT data FROM scan_events WHERE id=$1 AND restaurant_code=$2', [scanId, user.restaurantCode]);
+      const eventRow = await client.query('SELECT data,customer_id FROM scan_events WHERE id=$1 AND restaurant_code=$2', [scanId, user.restaurantCode]);
+      const customerId = eventRow.rows[0]?.customer_id;
+      const checkpoint = customerId ? await client.query('SELECT balance,cutoff_timestamp FROM balance_checkpoints WHERE customer_id=$1 ORDER BY cutoff_timestamp DESC LIMIT 1', [customerId]) : { rows: [] };
+      const cutoff = checkpoint.rows[0]?.cutoff_timestamp || new Date(0);
+      const delta = customerId ? await client.query('SELECT COALESCE(SUM(plates_delta),0)::int AS delta FROM ledger_entries WHERE customer_id=$1 AND timestamp>$2', [customerId, cutoff]) : { rows: [{ delta: 0 }] };
       await client.query('COMMIT');
-      return res.json({ success: true, idempotent: true, scanEvent: eventRow.rows[0]?.data || null, ledgerEntry: prior.rows[0].data });
+      return res.json({ success: true, idempotent: true, scanEvent: eventRow.rows[0]?.data || null,
+        ledgerEntry: prior.rows[0].data,
+        balanceAfter: Number(checkpoint.rows[0]?.balance || 0) + Number(delta.rows[0]?.delta || 0) });
     }
     const found = await client.query('SELECT data,status,customer_id,station_id FROM scan_events WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [scanId, user.restaurantCode]);
     const row = found.rows[0];
