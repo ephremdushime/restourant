@@ -40,5 +40,13 @@ else
 fi
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
-sh "$SCRIPT_DIR/backup-verify.sh" "$workdir/backup.enc"
-sh "$SCRIPT_DIR/restore.sh" "$workdir/backup.enc" "$output_dir"
+if command -v restopass-backup-verify >/dev/null 2>&1; then
+  restopass-backup-verify "$workdir/backup.enc"
+else
+  sh "$SCRIPT_DIR/backup-verify.sh" "$workdir/backup.enc"
+fi
+if command -v restopass-restore >/dev/null 2>&1; then
+  restopass-restore "$workdir/backup.enc" "$output_dir"
+else
+  sh "$SCRIPT_DIR/restore.sh" "$workdir/backup.enc" "$output_dir"
+fi
