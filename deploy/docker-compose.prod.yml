@@ -160,6 +160,8 @@ services:
     depends_on:
       app:
         condition: service_healthy
+      backup:
+        condition: service_healthy
     networks:
       - backend
 
