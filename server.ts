@@ -1932,6 +1932,10 @@ app.post('/api/scans/:scanId/second-plate', scanRateLimiter, requireAuth(['stand
     const prior = await client.query("SELECT data FROM ledger_entries WHERE idempotency_key=$1", ['extra:' + idempotencyKey]);
     if (prior.rows[0]) {
       const eventRow = await client.query('SELECT data,customer_id FROM scan_events WHERE id=$1 AND restaurant_code=$2', [scanId, user.restaurantCode]);
+      if (!eventRow.rows[0] || prior.rows[0].data?.scanEventId !== scanId || prior.rows[0].data?.staffId !== user.userId) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, error: 'Idempotency key is already bound to a different scan or operator.' });
+      }
       const customerId = eventRow.rows[0]?.customer_id;
       const checkpoint = customerId ? await client.query('SELECT balance,cutoff_timestamp FROM balance_checkpoints WHERE customer_id=$1 ORDER BY cutoff_timestamp DESC LIMIT 1', [customerId]) : { rows: [] };
       const cutoff = checkpoint.rows[0]?.cutoff_timestamp || new Date(0);
@@ -1985,7 +1989,7 @@ app.post('/api/scans/:scanId/second-plate', scanRateLimiter, requireAuth(['stand
     const ledgerEntry = {
       id: ledgerId, customerId: row.customer_id, restaurantCode: user.restaurantCode,
       type: 'extra', platesDelta: -1, timestamp: now.toISOString(), scanPointId: row.station_id,
-      staffId: user.userId, reference: 'SECOND-PLATE-' + event.memberNo,
+      staffId: user.userId, scanEventId: scanId, reference: 'SECOND-PLATE-' + event.memberNo,
       reason: 'Second plate authorized on active scan', idempotencyKey: 'extra:' + idempotencyKey,
       reversalOfId: undefined,
     };
