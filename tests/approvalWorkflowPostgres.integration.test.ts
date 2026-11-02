@@ -395,6 +395,114 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       assert.equal(altered.status, 403);
     });
 
+
+    await t.test('two-person financial exception workflows post compensating entries exactly once', async () => {
+      const makeCustomer = async (id: string, memberNo: string) => {
+        const data = { id, restaurantCode, memberNo, name: id, cardStatus: 'active', cardVersion: 1, keyVersion: 1 };
+        await pool!.query(
+          'INSERT INTO customers (id,restaurant_code,member_no,name,card_status,data) VALUES ($1,$2,$3,$4,$5,$6)',
+          [id, restaurantCode, memberNo, id, 'active', JSON.stringify(data)]
+        );
+      };
+      const requestException = (type: string, sourceId: string, idempotencyKey: string) =>
+        post('/api/financial-exceptions', bossToken, {
+          type, sourceId, reason: 'Integration test verified source transaction and supporting evidence.',
+          idempotencyKey,
+        });
+      const approveException = (id: string, payoutReference?: string) =>
+        post('/api/financial-exceptions/' + id + '/approve', superToken, {
+          approvalReason: 'Independent supervisor reviewed the source and supporting evidence.',
+          payoutReference,
+        });
+
+      const refundCustomer = 'refund_customer_' + restaurantCode;
+      await makeCustomer(refundCustomer, 'RF' + restaurantCode);
+      const paymentId = 'payment_refund_' + restaurantCode;
+      const payment = { id: paymentId, customerId: refundCustomer, customerName: 'Refund Customer',
+        memberNo: 'RF' + restaurantCode, platesAdded: 10, amountRwf: 10000, paymentMethod: 'cash',
+        reference: 'CASH-REFUND-' + restaurantCode };
+      await pool!.query('INSERT INTO payments (id,restaurant_code,customer_id,amount_rwf,data) VALUES ($1,$2,$3,$4,$5)',
+        [paymentId, restaurantCode, refundCustomer, 10000, JSON.stringify(payment)]);
+      const purchaseId = 'purchase_refund_' + restaurantCode;
+      await pool!.query(
+        "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,amount_rwf,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'purchase',10,10000,$4,NOW(),$5)",
+        [purchaseId, restaurantCode, refundCustomer, 'purchase-refund-' + restaurantCode,
+          JSON.stringify({ id: purchaseId, paymentId, timestamp: new Date().toISOString(), platesDelta: 10 })]
+      );
+      const refundRequest = await requestException('cash_refund', paymentId, 'refund-request-' + restaurantCode);
+      assert.equal(refundRequest.status, 201);
+      const refundApproval = await approveException(refundRequest.body.exception.id, 'CASH-PAYOUT-' + restaurantCode);
+      assert.equal(refundApproval.status, 200);
+      const refundLedger = await pool!.query(
+        "SELECT plates_delta FROM ledger_entries WHERE customer_id=$1 AND type='reversal'",
+        [refundCustomer]
+      );
+      assert.deepEqual(refundLedger.rows.map((x: any) => Number(x.plates_delta)), [-10]);
+      const refundedPayment = await pool!.query('SELECT data FROM payments WHERE id=$1', [paymentId]);
+      assert.equal(refundedPayment.rows[0].data.refundStatus, 'refunded');
+      const duplicateRefund = await requestException('cash_refund', paymentId, 'refund-request-second-' + restaurantCode);
+      assert.equal(duplicateRefund.status, 409);
+
+      const scanCustomer = 'scan_reverse_customer_' + restaurantCode;
+      await makeCustomer(scanCustomer, 'SR' + restaurantCode);
+      const scanId = 'scan_reverse_' + restaurantCode;
+      const scanTimestamp = new Date().toISOString();
+      const scanData = { id: scanId, customerId: scanCustomer, scanPointId: stationId,
+        timestamp: scanTimestamp, platesDeducted: 1, status: 'approved', isGracePlate: false };
+      await pool!.query(
+        "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data) VALUES ($1,$2,$3,$4,'approved',$5)",
+        [scanId, restaurantCode, scanCustomer, stationId, JSON.stringify(scanData)]
+      );
+      await pool!.query(
+        "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'scan',-1,$4,$5,$6)",
+        ['scan-ledger-' + restaurantCode, restaurantCode, scanCustomer, 'scan-ledger-' + restaurantCode,
+          scanTimestamp, JSON.stringify({ timestamp: scanTimestamp, scanPointId: stationId })]
+      );
+      const scanRequest = await requestException('scan_reversal', scanId, 'scan-reversal-' + restaurantCode);
+      assert.equal(scanRequest.status, 201);
+      const scanApproved = await approveException(scanRequest.body.exception.id);
+      assert.equal(scanApproved.status, 200);
+      const scanAfter = await pool!.query('SELECT status FROM scan_events WHERE id=$1', [scanId]);
+      assert.equal(scanAfter.rows[0].status, 'undone');
+      const scanReversal = await pool!.query(
+        "SELECT plates_delta FROM ledger_entries WHERE customer_id=$1 AND type='reversal'",
+        [scanCustomer]
+      );
+      assert.deepEqual(scanReversal.rows.map((x: any) => Number(x.plates_delta)), [1]);
+
+      const sender = 'transfer_sender_' + restaurantCode;
+      const recipient = 'transfer_recipient_' + restaurantCode;
+      await makeCustomer(sender, 'TS' + restaurantCode);
+      await makeCustomer(recipient, 'TR' + restaurantCode);
+      const transferId = 'transfer_reverse_' + restaurantCode;
+      const transfer = { id: transferId, senderCustomerId: sender, recipientCustomerId: recipient,
+        plates: 5, status: 'completed' };
+      await pool!.query('INSERT INTO transfers (id,restaurant_code,sender_customer_id,recipient_customer_id,plates,data) VALUES ($1,$2,$3,$4,5,$5)',
+        [transferId, restaurantCode, sender, recipient, JSON.stringify(transfer)]);
+      await pool!.query(
+        "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'transfer_out',-5,$4,NOW(),$5),($6,$2,$7,'transfer_in',5,$8,NOW(),$9)",
+        ['transfer-out-' + restaurantCode, restaurantCode, sender, 'transfer-out-' + restaurantCode,
+          JSON.stringify({ platesDelta: -5 }), 'transfer-in-' + restaurantCode, recipient,
+          'transfer-in-' + restaurantCode, JSON.stringify({ platesDelta: 5 })]
+      );
+      const transferRequest = await requestException('transfer_reversal', transferId, 'transfer-reversal-' + restaurantCode);
+      assert.equal(transferRequest.status, 201);
+      const transferApproved = await approveException(transferRequest.body.exception.id);
+      assert.equal(transferApproved.status, 200);
+      const transferAfter = await pool!.query('SELECT data FROM transfers WHERE id=$1', [transferId]);
+      assert.equal(transferAfter.rows[0].data.status, 'reversed');
+      const balances = await pool!.query(
+        'SELECT customer_id,COALESCE(SUM(plates_delta),0)::int AS balance FROM ledger_entries WHERE customer_id IN ($1,$2) GROUP BY customer_id',
+        [sender, recipient]
+      );
+      assert.deepEqual(balances.rows.map((x: any) => Number(x.balance)).sort(), [0, 0]);
+
+      const ownApproval = await post('/api/financial-exceptions/' + scanRequest.body.exception.id + '/approve',
+        serverModule.createSessionToken({ userId: bossId, username: 'Same Principal', role: 'super_admin', restaurantCode: 'ALL' }),
+        { approvalReason: 'Requester must not approve their own exception.' });
+      assert.equal(ownApproval.status, 409); // already approved; cannot be replayed
+    });
+
     await t.test('rejection atomically locks a provisional new customer', async () => {
       const created = await post('/api/approvals/registration', bossToken, registration('E', 15, '+250780000005'));
       assert.equal(created.status, 201);
@@ -406,6 +514,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
     });
   } finally {
     await new Promise<void>((resolve, reject) => httpServer.close((error) => error ? reject(error) : resolve()));
+    await pool!.query('DELETE FROM financial_exception_requests WHERE restaurant_code=$1', [restaurantCode]);
     await pool!.query('DELETE FROM scan_requests WHERE restaurant_code=$1', [restaurantCode]);
     await pool!.query('DELETE FROM scan_events WHERE restaurant_code=$1', [restaurantCode]);
     await pool!.query('DELETE FROM used_tokens WHERE station_id=$1', [stationId]);
