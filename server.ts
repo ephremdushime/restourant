@@ -2454,11 +2454,11 @@ app.post('/api/financial-exceptions/:exceptionId/approve', apiRateLimiter, requi
       locked.set(customerId, result.rows[0].data);
     }
     const now = new Date();
-    const addLedger = async (customerId: string, type: string, delta: number, suffix: string, reference: string) => {
+    const addLedger = async (customerId: string, type: string, delta: number, suffix: string, reference: string, reversalOfId?: string) => {
       const id = 'led_' + crypto.randomUUID();
       const ledger = { id, customerId, restaurantCode: row.restaurant_code, type, platesDelta: delta,
         timestamp: now.toISOString(), staffId: actor.userId, reason, reference,
-        reversalOfId: exception.sourceId, idempotencyKey: 'fex:' + exception.id + ':' + suffix };
+        reversalOfId: reversalOfId || undefined, idempotencyKey: 'fex:' + exception.id + ':' + suffix };
       await client.query(
         'INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
         [id, row.restaurant_code, customerId, type, delta, ledger.idempotencyKey, now, JSON.stringify(ledger)]
@@ -2476,7 +2476,7 @@ app.post('/api/financial-exceptions/:exceptionId/approve', apiRateLimiter, requi
         [exception.snapshot.customerId, ev.timestamp, ev.scanPointId]
       );
       if (!original.rows[0]) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Original scan debit was not found; no balance was changed.' }); }
-      await addLedger(exception.snapshot.customerId, 'reversal', 1, 'scan', original.rows[0].id);
+      await addLedger(exception.snapshot.customerId, 'reversal', 1, 'scan', original.rows[0].id, original.rows[0].id);
       ev.status = 'undone'; ev.reversedAt = now.toISOString(); ev.reversedBy = actor.userId;
       await client.query('UPDATE scan_events SET status=\'undone\',data=$2 WHERE id=$1', [exception.sourceId, JSON.stringify(ev)]);
     } else if (exception.type === 'transfer_reversal') {
@@ -2498,7 +2498,7 @@ app.post('/api/financial-exceptions/:exceptionId/approve', apiRateLimiter, requi
         [exception.snapshot.customerId, exception.snapshot.purchaseLedgerId]
       );
       if (later.rows[0]) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Customer ledger changed after refund request; reconcile before payout.' }); }
-      await addLedger(exception.snapshot.customerId, 'reversal', -Number(exception.snapshot.plates), 'refund', exception.sourceId);
+      await addLedger(exception.snapshot.customerId, 'reversal', -Number(exception.snapshot.plates), 'refund', exception.sourceId, exception.snapshot.purchaseLedgerId);
       payment.refundStatus = 'refunded'; payment.refundedAt = now.toISOString();
       payment.refundReference = payoutReference; payment.refundedBy = actor.userId;
       await client.query('UPDATE payments SET data=$2 WHERE id=$1', [exception.sourceId, JSON.stringify(payment)]);
