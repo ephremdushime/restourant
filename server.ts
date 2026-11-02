@@ -1968,7 +1968,7 @@ app.post('/api/scans/:scanId/second-plate', scanRateLimiter, requireAuth(['stand
     const terms = { ...(plan?.terms || {}), ...(restaurant?.termsOverride || {}) };
     const windowMinutes = Math.max(1, Number(terms.servingWindowMinutes || 120));
     const plateLimit = Math.max(1, Number(terms.plateLimitPerWindow || 3));
-    const recent = await client.query('SELECT data FROM scan_events WHERE customer_id=$1 AND restaurant_code=$2 AND created_at >= NOW() - ($3::text || \\' minutes\\')::interval FOR UPDATE', [row.customer_id, user.restaurantCode, windowMinutes]);
+    const recent = await client.query(`SELECT data FROM scan_events WHERE customer_id=$1 AND restaurant_code=$2 AND created_at >= NOW() - ($3 * INTERVAL '1 minute') FOR UPDATE`, [row.customer_id, user.restaurantCode, windowMinutes]);
     const served = recent.rows.reduce((sum: number, r: any) => sum + (['approved','warning_confirmed'].includes(r.data?.status) ? Number(r.data?.platesDeducted || 0) : 0), 0);
     if (served + 1 > plateLimit) {
       await client.query('ROLLBACK');
