@@ -64,8 +64,13 @@ jobs:
       - name: Dependency vulnerability audit
         run: npm audit --audit-level=high
 
-      - name: Validate backup worker script
-        run: sh -n deploy/backup.sh
+      - name: Validate and exercise backup recovery scripts
+        run: |
+          sh -n deploy/backup.sh
+          sh -n deploy/backup-verify.sh
+          sh -n deploy/restore.sh
+          sh -n tests/backup-recovery.test.sh
+          sh tests/backup-recovery.test.sh
 
       - name: Build production Docker image
         run: docker build --tag restopass-ci .
