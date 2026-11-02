@@ -19,6 +19,8 @@ sh "$ROOT/deploy/restore.sh" "$TMP/backup.enc" "$TMP/restore"
 cmp "$TMP/source/database.dump" "$TMP/restore/database.dump"
 cmp "$TMP/source/uploads.tar.gz" "$TMP/restore/uploads.tar.gz"
 
+cp "$TMP/backup.enc" "$TMP/valid-backup.enc"
+cp "$TMP/backup.enc.hmac" "$TMP/valid-backup.enc.hmac"
 printf 'tamper' >> "$TMP/backup.enc"
 if sh "$ROOT/deploy/backup-verify.sh" "$TMP/backup.enc" >/dev/null 2>&1; then
   echo "Tampered backup unexpectedly passed integrity verification" >&2
@@ -26,8 +28,8 @@ if sh "$ROOT/deploy/backup-verify.sh" "$TMP/backup.enc" >/dev/null 2>&1; then
 fi
 # Exercise the production healthcheck with a recent, authenticated local + remote copy.
 mkdir -p "$TMP/bin" "$TMP/backups"
-cp "$TMP/backup.enc" "$TMP/backups/restopass-test.tar.gz.enc"
-cp "$TMP/backup.enc.hmac" "$TMP/backups/restopass-test.tar.gz.enc.hmac"
+cp "$TMP/valid-backup.enc" "$TMP/backups/restopass-test.tar.gz.enc"
+cp "$TMP/valid-backup.enc.hmac" "$TMP/backups/restopass-test.tar.gz.enc.hmac"
 cat > "$TMP/bin/restopass-backup-verify" <<EOF
 #!/bin/sh
 sh "$ROOT/deploy/backup-verify.sh" "\$1"
