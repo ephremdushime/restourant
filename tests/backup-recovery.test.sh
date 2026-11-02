@@ -70,4 +70,19 @@ RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" PATH="$TMP/bin:$PATH" \
   sh "$ROOT/deploy/restore-offsite.sh" restopass-test.tar.gz.enc "$TMP/restore-offsite"
 cmp "$TMP/source/database.dump" "$TMP/restore-offsite/database.dump"
 cmp "$TMP/source/uploads.tar.gz" "$TMP/restore-offsite/uploads.tar.gz"
-echo "Backup integrity, guarded restore, tamper rejection, off-site healthcheck and off-site restore tests passed."
+
+# Reproduce the production backup image layout: helper scripts are installed
+# under restopass-* executable names, not their source filenames.
+mkdir -p "$TMP/image-bin" "$TMP/image-restore"
+cp "$ROOT/deploy/backup-verify.sh" "$TMP/image-bin/restopass-backup-verify"
+cp "$ROOT/deploy/restore.sh" "$TMP/image-bin/restopass-restore"
+cp "$ROOT/deploy/restore-offsite.sh" "$TMP/image-bin/restopass-restore-offsite"
+chmod 0755 "$TMP/image-bin/"*
+RESTOPASS_TEST_REMOTE_ROOT="$TMP/remote" RESTOPASS_BACKUP_S3_BUCKET=test-bucket \
+RESTOPASS_BACKUP_S3_PREFIX=restopass RESTOPASS_BACKUP_S3_ACCESS_KEY_ID=test-access \
+RESTOPASS_BACKUP_S3_SECRET_ACCESS_KEY=test-secret RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
+RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" PATH="$TMP/bin:$TMP/image-bin:$PATH" \
+  restopass-restore-offsite restopass-test.tar.gz.enc "$TMP/image-restore"
+cmp "$TMP/source/database.dump" "$TMP/image-restore/database.dump"
+cmp "$TMP/source/uploads.tar.gz" "$TMP/image-restore/uploads.tar.gz"
+echo "Backup integrity, guarded restore, tamper rejection, off-site healthcheck and source/container-layout restore tests passed."
