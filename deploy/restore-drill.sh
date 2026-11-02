@@ -115,3 +115,4 @@ echo "Recovery Point (RPO): $rpo_info"
 echo "Integrity Status:   VERIFIED (HMAC-SHA256 authentic, AES-256-CBC decrypted)"
 echo "=============================================================================="
 exit 0
+

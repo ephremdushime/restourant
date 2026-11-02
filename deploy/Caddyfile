@@ -1,11 +1,36 @@
 {$DOMAIN} {
   encode zstd gzip
-  reverse_proxy app:3000
+
+  # Defend against payload flooding (ID photos max ~5MB, 10MB ceiling)
+  request_body {
+    max_size 10MB
+  }
+
+  # Immutable static caching for bundled frontend assets
+  @static {
+    path /assets/*
+  }
+  header @static Cache-Control "public, max-age=31536000, immutable"
+
+  # Production security headers
   header {
     -Server
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
     X-Content-Type-Options nosniff
     Referrer-Policy strict-origin-when-cross-origin
     X-Frame-Options DENY
     Permissions-Policy "camera=(self), microphone=(), geolocation=()"
   }
+
+  # Structured JSON access logging with automated rotation
+  log {
+    output file /var/log/caddy/access.log {
+      roll_size 50mb
+      roll_keep 5
+      roll_keep_for 720h
+    }
+    format json
+  }
+
+  reverse_proxy app:3000
 }

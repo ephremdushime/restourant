@@ -3,7 +3,7 @@
 # Pilot Baseline Production Architecture (Single-Instance Cloud Deployment)
 #
 # HARDWARE SIZING & CAPACITY NOTES:
-# - PostgreSQL Limit: 2048M | Redis Limit: 1024M | App Limit: 2048M | Backup: 1024M
+# - PostgreSQL Limit: 2048M | Redis Limit: 1024M | App Limit: 2048M | Backup: 1024M | Caddy: 512M
 # - Combined with Caddy reverse proxy and Linux host OS overhead, this complete
 #   stack requires a minimum 8 GB RAM VM (e.g. AOS Cloud Standard Option 6).
 # - 2 GB RAM (Option 2) and 4 GB RAM (Option 4) will experience OOM kills or severe paging.
@@ -14,6 +14,8 @@
 #   1. postgres: Managed Relational Database with strict constraints & append-only ledger
 #   2. redis: Distributed In-Memory Cache for 30s atomic QR token replay prevention
 #   3. app: Hardened Node.js Authority & SPA Application
+#   4. backup: Automated encrypted pg_dump + HMAC + S3 off-site backup worker
+#   5. caddy: TLS terminator, reverse proxy, HSTS, rate-limiting & security headers
 # ==============================================================================
 
 version: '3.8'
@@ -45,6 +47,11 @@ services:
         limits:
           cpus: '2.0'
           memory: 2048M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   # ----------------------------------------------------------------------------
   # 2. Managed Redis 7 In-Memory Cache (Multi-Instance QR Replay Guard)
@@ -68,6 +75,11 @@ services:
         limits:
           cpus: '1.0'
           memory: 1024M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   # ----------------------------------------------------------------------------
   # 3. RestoPass Cloud Application Node
@@ -115,15 +127,24 @@ services:
         limits:
           cpus: '2.0'
           memory: 2048M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
     volumes:
       - app_uploads:/app/public/uploads
     networks:
       - backend
 
+  # ----------------------------------------------------------------------------
+  # 4. Automated Encrypted Backup & Off-Site Sync Worker
+  # ----------------------------------------------------------------------------
   backup:
     build:
       context: ..
       dockerfile: deploy/backup.Dockerfile
+    container_name: restopass-backup
     restart: unless-stopped
     depends_on:
       postgres:
@@ -139,6 +160,11 @@ services:
         limits:
           cpus: '1.0'
           memory: 1024M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
     environment:
       PGHOST: postgres
       PGPORT: 5432
@@ -162,6 +188,9 @@ services:
     networks:
       - backend
 
+  # ----------------------------------------------------------------------------
+  # 5. Reverse Proxy, TLS Termination & Security Header Enforcement
+  # ----------------------------------------------------------------------------
   caddy:
     image: caddy:2-alpine
     container_name: restopass-caddy
@@ -175,6 +204,17 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
     depends_on:
       app:
         condition: service_healthy
@@ -192,10 +232,11 @@ volumes:
     driver: local
   caddy_config:
     driver: local
+  caddy_logs:
+    driver: local
   postgres_data:
     driver: local
   redis_data:
     driver: local
   app_uploads:
     driver: local
-

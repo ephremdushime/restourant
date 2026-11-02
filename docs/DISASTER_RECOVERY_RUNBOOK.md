@@ -174,3 +174,4 @@ Log the following metrics in your production deployment log:
 - **Measured RTO**: `3.4 seconds` (extraction + database restore)
 - **Measured RPO**: `2 hours 15 minutes` (age of archive at restoration)
 - **Integrity Status**: Passed (0 balance discrepancies, 100% photo SHA256 match)
+
