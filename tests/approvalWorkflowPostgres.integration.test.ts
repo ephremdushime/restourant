@@ -543,7 +543,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       );
       const secondScanId = 'scan_' + restaurantCode + '_second';
       const secondEvent = { id: secondScanId, restaurantCode, customerId: secondCustomer, memberNo: secondMember,
-        scanPointId: stationId, timestamp: new Date().toISOString(), platesDeducted: 1,
+        scanPointId: exceptionStationId, timestamp: new Date().toISOString(), platesDeducted: 1,
         status: 'approved', photoCheckRequired: false, photoCheckResult: 'none', isGracePlate: false };
       await pool!.query(
         "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data) VALUES ($1,$2,$3,$4,'approved',$5)",
@@ -568,11 +568,11 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
         "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'purchase',10,$4,NOW(),$5),($6,$2,$3,'scan',-1,$7,$8,$9)",
         ['photo-purchase-' + restaurantCode, restaurantCode, photoCustomer, 'photo-purchase-' + restaurantCode,
           JSON.stringify({ platesDelta: 10 }), 'photo-scan-ledger-' + restaurantCode,
-          photoTimestamp, JSON.stringify({ timestamp: photoTimestamp, scanPointId: stationId })]
+          photoTimestamp, JSON.stringify({ timestamp: photoTimestamp, scanPointId: exceptionStationId })]
       );
       const photoScanId = 'scan_' + restaurantCode + '_photo';
       const photoEvent = { id: photoScanId, restaurantCode, customerId: photoCustomer, memberNo: photoMember,
-        scanPointId: stationId, timestamp: photoTimestamp, platesDeducted: 1,
+        scanPointId: exceptionStationId, timestamp: photoTimestamp, platesDeducted: 1,
         status: 'approved', photoCheckRequired: true, photoCheckReason: 'random_sample',
         photoCheckResult: 'none', isGracePlate: false };
       await pool!.query(
@@ -598,13 +598,13 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       const rejectedTimestamp = new Date().toISOString();
       const rejectedScanId = 'scan_' + restaurantCode + '_photo_rejected';
       const rejectedEvent = { id: rejectedScanId, restaurantCode, customerId: rejectedCustomer, memberNo: rejectedMember,
-        scanPointId: stationId, timestamp: rejectedTimestamp, platesDeducted: 1,
+        scanPointId: exceptionStationId, timestamp: rejectedTimestamp, platesDeducted: 1,
         status: 'approved', photoCheckRequired: true, photoCheckReason: 'random_sample',
         photoCheckResult: 'none', isGracePlate: false };
       await pool!.query(
         "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'scan',-1,$4,$5,$6)",
         ['rejected-photo-ledger-' + restaurantCode, restaurantCode, rejectedCustomer, 'rejected-photo-ledger-' + restaurantCode,
-          rejectedTimestamp, JSON.stringify({ timestamp: rejectedTimestamp, scanPointId: stationId })]);
+          rejectedTimestamp, JSON.stringify({ timestamp: rejectedTimestamp, scanPointId: exceptionStationId })]);
       await pool!.query(
         "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data) VALUES ($1,$2,$3,$4,'approved',$5)",
         [rejectedScanId, restaurantCode, rejectedCustomer, exceptionStationId, JSON.stringify(rejectedEvent)]);
