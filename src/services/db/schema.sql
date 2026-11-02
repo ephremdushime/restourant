@@ -254,3 +254,50 @@ CREATE INDEX IF NOT EXISTS idx_financial_exceptions_source
 CREATE UNIQUE INDEX IF NOT EXISTS uq_financial_exception_source_active
     ON financial_exception_requests (restaurant_code, exception_type, source_id)
     WHERE status IN ('pending', 'approved');
+
+-- 20. Provider-neutral mobile-money attempts. A pending attempt never grants entitlement.
+CREATE TABLE IF NOT EXISTS mobile_money_payment_attempts (
+    id VARCHAR(64) PRIMARY KEY,
+    restaurant_code VARCHAR(32) NOT NULL,
+    customer_id VARCHAR(64) NOT NULL,
+    purpose VARCHAR(32) NOT NULL CHECK (purpose IN ('subscription', 'plate_topup')),
+    provider VARCHAR(24) NOT NULL CHECK (provider IN ('mtn_momo', 'airtel_money')),
+    provider_environment VARCHAR(16) NOT NULL CHECK (provider_environment IN ('sandbox', 'production')),
+    internal_reference VARCHAR(64) NOT NULL UNIQUE,
+    provider_transaction_id VARCHAR(128),
+    amount_rwf INT NOT NULL CHECK (amount_rwf > 0),
+    currency CHAR(3) NOT NULL CHECK (currency = 'RWF'),
+    status VARCHAR(24) NOT NULL DEFAULT 'created'
+      CHECK (status IN ('created', 'provider_pending', 'successful', 'failed', 'cancelled', 'expired')),
+    idempotency_key VARCHAR(128) NOT NULL UNIQUE,
+    request_fingerprint VARCHAR(64) NOT NULL,
+    data JSONB NOT NULL,
+    verified_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mobile_money_provider_transaction
+    ON mobile_money_payment_attempts (provider, provider_environment, provider_transaction_id)
+    WHERE provider_transaction_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_mobile_money_customer_history
+    ON mobile_money_payment_attempts (restaurant_code, customer_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mobile_money_reconciliation
+    ON mobile_money_payment_attempts (provider, status, created_at);
+
+-- Store only webhook event digests and processing metadata, not raw provider payloads.
+CREATE TABLE IF NOT EXISTS mobile_money_webhook_events (
+    id VARCHAR(64) PRIMARY KEY,
+    provider VARCHAR(24) NOT NULL CHECK (provider IN ('mtn_momo', 'airtel_money')),
+    provider_environment VARCHAR(16) NOT NULL CHECK (provider_environment IN ('sandbox', 'production')),
+    provider_event_key VARCHAR(160) NOT NULL,
+    internal_reference VARCHAR(64),
+    body_sha256 VARCHAR(64) NOT NULL,
+    processing_status VARCHAR(24) NOT NULL DEFAULT 'received'
+      CHECK (processing_status IN ('received', 'verified', 'rejected', 'reconciled')),
+    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    processed_at TIMESTAMPTZ,
+    CONSTRAINT uq_mobile_money_webhook_event UNIQUE (provider, provider_environment, provider_event_key)
+);
+CREATE INDEX IF NOT EXISTS idx_mobile_money_webhook_status
+    ON mobile_money_webhook_events (processing_status, received_at);
