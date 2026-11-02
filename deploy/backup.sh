@@ -69,6 +69,7 @@ while true; do
     export AWS_SECRET_ACCESS_KEY="$RESTOPASS_BACKUP_S3_SECRET_ACCESS_KEY"
     export AWS_DEFAULT_REGION="$RESTOPASS_BACKUP_S3_REGION"
     if [ -n "${RESTOPASS_BACKUP_S3_ENDPOINT:-}" ]; then
+      export AWS_S3_ADDRESSING_STYLE=path
       aws --endpoint-url "$RESTOPASS_BACKUP_S3_ENDPOINT" s3 cp "$output" "s3://$RESTOPASS_BACKUP_S3_BUCKET/$object_key" --only-show-errors
       aws --endpoint-url "$RESTOPASS_BACKUP_S3_ENDPOINT" s3 cp "$output.hmac" "s3://$RESTOPASS_BACKUP_S3_BUCKET/$sidecar_key" --only-show-errors
       aws --endpoint-url "$RESTOPASS_BACKUP_S3_ENDPOINT" s3 cp "s3://$RESTOPASS_BACKUP_S3_BUCKET/$object_key" "$workdir/remote.enc" --only-show-errors
