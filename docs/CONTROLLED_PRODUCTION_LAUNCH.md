@@ -45,6 +45,7 @@ All items below are **pending until evidence is attached**.
 - [ ] Create unique production secrets in the host's secret manager or protected environment file. Do not use sample values or commit secrets.
 - [ ] Verify the exact environment variable names consumed by `deploy/docker-compose.prod.yml` and `server.ts`; do not copy variables from older runbooks without checking the current code.
 - [ ] Create a private off-site backup bucket with least-privilege credentials, versioning and lifecycle policy. Keep backup encryption and HMAC keys separate from the host.
+- [ ] Provision private S3-compatible patron-photo storage with its own bucket and least-privilege credentials, separate from the backup bucket. Do not expose patron photos through a public bucket or CDN; verify authenticated photo upload/download in staging.
 - [ ] Complete an isolated off-site restore into a disposable PostgreSQL instance and restore the upload archive. Record measured RPO/RTO and evidence.
 - [ ] Configure monitoring and alerts for API readiness, PostgreSQL, Redis, disk, backup freshness, failed backup jobs and 5xx rate.
 
