@@ -1597,7 +1597,7 @@ app.post('/api/qr/token/phone', apiRateLimiter, requireAuth(), (req, res) => {
 app.post(
   '/api/qr/token/card',
   apiRateLimiter,
-  requireAuth(['super_admin', 'restaurant_admin', 'customer']),
+  requireAuth(['super_admin', 'restaurant_admin', 'stand_staff', 'customer']),
   (req, res) => {
     const { restaurantCode, memberNo } = req.body;
     const user = req.user!;
@@ -1620,7 +1620,7 @@ app.post(
       if (customerRecord.cardStatus === 'locked') {
         return res.status(403).json({ success: false, error: 'This card is locked and cannot be presented for scanning.' });
       }
-    } else if (user.role === 'restaurant_admin' && user.restaurantCode !== restaurantCode) {
+    } else if ((user.role === 'restaurant_admin' || user.role === 'stand_staff') && user.restaurantCode !== restaurantCode) {
       return res.status(403).json({ success: false, error: 'Forbidden: Cannot generate cards for other restaurants' });
     }
 
