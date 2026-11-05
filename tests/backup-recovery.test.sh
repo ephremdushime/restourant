@@ -8,7 +8,9 @@ export RESTOPASS_BACKUP_HMAC_KEY="test-hmac-key-0123456789abcdef"
 
 mkdir -p "$TMP/source" "$TMP/restore"
 printf 'database fixture\n' > "$TMP/source/database.dump"
-printf 'uploads fixture\n' > "$TMP/source/uploads.tar.gz"
+mkdir -p "$TMP/uploads-fixture"
+printf 'uploads fixture\n' > "$TMP/uploads-fixture/patron-photo.fixture"
+tar -czf "$TMP/source/uploads.tar.gz" -C "$TMP/uploads-fixture" .
 tar -czf "$TMP/archive.tar.gz" -C "$TMP/source" database.dump uploads.tar.gz
 openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 -md sha256 \
   -pass env:RESTOPASS_BACKUP_ENCRYPTION_KEY -in "$TMP/archive.tar.gz" -out "$TMP/backup.enc"
