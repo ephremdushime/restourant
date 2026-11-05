@@ -2324,10 +2324,6 @@ app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), as
   }
 
   const transferId = `tr_${crypto.createHash('sha256').update(`${customer.id}:${idempotencyKey}`).digest('hex').slice(0, 40)}`;
-  const existingTransfer = (serverDbState.transfers || []).find((item: any) => item.id === transferId);
-  if (existingTransfer) {
-    return res.json({ success: true, idempotent: true, transfer: existingTransfer, senderBalance: getServerCustomerBalance(serverDbState, customer.id) });
-  }
 
   const previousPinHash = customer.pinHash;
   const previousAttempts = customer.failedLoginAttempts;
@@ -2359,6 +2355,25 @@ app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), as
       recipient.provisionalStatus === 'rejected') {
     await queueDbSave(serverDbState);
     return res.status(400).json({ success: false, error: 'Recipient not found or not eligible in this restaurant.' });
+  }
+
+  const existingTransfer = (serverDbState.transfers || []).find((item: any) => item.id === transferId);
+  if (existingTransfer) {
+    const sameRequest =
+      existingTransfer.senderCustomerId === customer.id &&
+      existingTransfer.recipientCustomerId === recipient.id &&
+      Number(existingTransfer.plates) === plates &&
+      existingTransfer.idempotencyKey === idempotencyKey;
+    if (!sameRequest) {
+      return res.status(409).json({ success: false, code: 'IDEMPOTENCY_CONFLICT', error: 'This transfer key was already used for different transfer details.' });
+    }
+    return res.json({
+      success: true,
+      idempotent: true,
+      transfer: existingTransfer,
+      senderBalance: getServerCustomerBalance(serverDbState, customer.id),
+      recipientBalance: getServerCustomerBalance(serverDbState, recipient.id),
+    });
   }
 
   const availableBalance = getServerCustomerBalance(serverDbState, customer.id);
