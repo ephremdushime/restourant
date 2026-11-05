@@ -177,10 +177,19 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
       ? generateCardToken(customer.restaurantCode, customer.memberNo, customer.cardVersion)
       : '';
 
-  const handleForceRefresh = () => {
-    if (customer && !isDashboardGated) {
-      setTokenInfo(restoStore.getCustomerPhoneQr(customer));
+  const requestCustomerPhoneQr = async () => {
+    if (!customer || isDashboardGated) {
+      setTokenInfo({ token: '', step: 0, secondsRemaining: 0 });
+      return;
     }
+    const nextToken = restoStore.isDemoModeActive()
+      ? restoStore.getCustomerPhoneQr(customer)
+      : await restoStore.getServerCustomerPhoneQr(customer);
+    setTokenInfo(nextToken);
+  };
+
+  const handleForceRefresh = () => {
+    void requestCustomerPhoneQr();
   };
 
   useEffect(() => {
@@ -188,13 +197,34 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
       setTokenInfo({ token: '', step: 0, secondsRemaining: 0 });
       return;
     }
-    const updateToken = () => {
-      setTokenInfo(restoStore.getCustomerPhoneQr(customer));
+
+    let active = true;
+    const updateToken = async () => {
+      const nextToken = restoStore.isDemoModeActive()
+        ? restoStore.getCustomerPhoneQr(customer)
+        : await restoStore.getServerCustomerPhoneQr(customer);
+      if (active) setTokenInfo(nextToken);
     };
-    updateToken();
-    const interval = setInterval(updateToken, 1000);
-    return () => clearInterval(interval);
-  }, [customer, isDashboardGated]);
+
+    void updateToken();
+    // The server issues 30-second tokens. Refresh before expiry; update the
+    // visible countdown locally without repeatedly requesting the same token.
+    const refreshInterval = setInterval(() => { void updateToken(); }, 20000);
+    const countdownInterval = setInterval(() => {
+      if (active) {
+        setTokenInfo((current) => ({
+          ...current,
+          secondsRemaining: current.token ? Math.max(0, current.secondsRemaining - 1) : 0,
+        }));
+      }
+    }, 1000);
+
+    return () => {
+      active = false;
+      clearInterval(refreshInterval);
+      clearInterval(countdownInterval);
+    };
+  }, [customer?.id, customer?.restaurantCode, customer?.memberNo, customer?.keyVersion, isDashboardGated]);
 
   // View Mode: 'qr_pass' | 'notifications' | 'history'
   const [activeTab, setActiveTab] = useState<'qr_pass' | 'notifications' | 'history'>('qr_pass');
