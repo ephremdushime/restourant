@@ -475,8 +475,8 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                           {!licStatus.isExpired && (
                             <button
                               type="button"
-                              onClick={() => restoStore.setRestaurantLicenseRemainingDays(resto.code, -1)}
-                              title="Immediately expire license and lock Boss & Scanner portals until renewed"
+                              onClick={() => restoStore.setRestaurantLicenseRemainingDays(resto.code, -4)}
+                              title="Expire the paid period and 72-hour grace window to test restricted access"
                               className="px-2.5 py-1.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-800 text-rose-300 font-semibold text-[11px] transition-colors cursor-pointer"
                             >
                               Expire Now
