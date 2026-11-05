@@ -587,15 +587,21 @@ function requireAuth(allowedRoles?: string[]) {
     // Enforce subscription restrictions server-side for every tenant write.
     // Read-only GETs and SaaS billing routes remain available so admins can renew.
     const isTenantSession = session.role === 'restaurant_admin' || session.role === 'stand_staff';
-    const isSaasBillingRoute = req.path.startsWith('/api/restaurant-saas/');
+    const isSaasBillingRoute =
+      (req.method === 'GET' && req.path === '/api/restaurant-saas/subscription') ||
+      (req.method === 'POST' && (
+        req.path === '/api/restaurant-saas/payment/initiate' ||
+        /^\\/api\\/restaurant-saas\\/payment\\/[^/]+\\/verify$/.test(req.path)
+      ));
     if (isTenantSession && req.method !== 'GET' && !isSaasBillingRoute) {
       const pool = getPostgresPool();
       if (pool) {
         try {
           const entitlement = await pool.query(
-            `SELECT r.status, l.valid_until
+            `SELECT r.status, l.valid_until, s.status AS subscription_status
              FROM restaurants r
              LEFT JOIN licenses l ON l.id = r.data->>'currentLicenseId'
+             LEFT JOIN restaurant_subscriptions s ON s.restaurant_code = r.code
              WHERE r.code = $1 LIMIT 1`,
             [session.restaurantCode]
           );
@@ -603,6 +609,7 @@ function requireAuth(allowedRoles?: string[]) {
           const paidUntilMs = row?.valid_until ? new Date(row.valid_until).getTime() : 0;
           const graceEndsAtMs = paidUntilMs + 72 * 60 * 60 * 1000;
           if (!row || ['pending_payment','suspended','expired'].includes(row.status) ||
+              ['pending_payment','restricted','cancelled'].includes(row.subscription_status) ||
               !Number.isFinite(paidUntilMs) || Date.now() >= graceEndsAtMs) {
             return res.status(402).json({
               success: false,
