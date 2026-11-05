@@ -55,7 +55,10 @@ export const RestaurantSaasBillingPanel: React.FC<{ restaurantCode: string; rest
       const body = await response.json();
       if (!response.ok || !body.success) throw new Error(body.error || 'Payment verification failed.');
       setMessage(body.status === 'successful' ? 'Payment verified. Your 30-day RestoPass subscription is active.' : 'MTN has not confirmed a successful payment yet. No access time has been granted.');
-      if (body.status === 'successful') setPaymentId('');
+      if (body.status === 'successful') {
+        setPaymentId('');
+        await restoStore.pullStateFromServer();
+      }
       await refresh();
     } catch (e: any) { setError(e.message || 'Verification failed.'); }
     finally { setBusy(false); }
