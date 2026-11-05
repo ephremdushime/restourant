@@ -1355,6 +1355,46 @@ app.post('/api/upload/photo', apiRateLimiter, requireAuth(), async (req, res) =>
 // ----------------------------------------------------
 
 // POST /api/qr/token/phone: Authoritative generation of dynamic phone pass QR
+function createScanAuthorizationToken(
+  customer: any,
+  user: UserSession,
+  restaurantCode: string,
+  stationId: string,
+  qrType: 'card' | 'phone'
+): string {
+  const payload = {
+    version: 1,
+    nonce: crypto.randomUUID(),
+    customerId: customer.id,
+    memberNo: customer.memberNo,
+    restaurantCode,
+    stationId,
+    qrType,
+    maxPlates: 2,
+    issuedAt: Date.now(),
+  };
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const signature = serverHmac(MASTER_KEY, `SCAN_AUTH:${encoded}`);
+  return `${encoded}.${signature}`;
+}
+
+function verifyScanAuthorizationToken(token: string): any | null {
+  if (typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+  const expected = serverHmac(MASTER_KEY, `SCAN_AUTH:${parts[0]}`);
+  if (!timingSafeCompare(parts[1], expected)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+    if (payload.version !== 1 || typeof payload.nonce !== 'string' ||
+        !Number.isFinite(payload.issuedAt) || Date.now() - payload.issuedAt > 120000 ||
+        payload.issuedAt > Date.now() + 30000 || payload.maxPlates !== 2) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
 app.post('/api/qr/token/phone', apiRateLimiter, requireAuth(), (req, res) => {
   const { restaurantCode, memberNo } = req.body || {};
   const user = req.user!;
@@ -1494,6 +1534,11 @@ app.post(
         });
       }
 
+      const effectiveStationId = user.stationId || stationId || 'stand_pos';
+      if (user.role === 'stand_staff' && stationId && stationId !== user.stationId) {
+        return res.status(403).json({ success: false, valid: false, error: 'Station identity mismatch.' });
+      }
+      const authorizationId = createScanAuthorizationToken(customer, user, targetResto, effectiveStationId, 'card');
       return res.json({
         success: true,
         valid: true,
@@ -1502,6 +1547,7 @@ app.post(
         customerId: customer.id,
         customerName: customer.name,
         customerPhoto: customer.photoUrl,
+        authorizationId,
         isCard: true,
       });
     }
@@ -1587,6 +1633,11 @@ app.post(
 
       await queueDbSave(serverDbState);
 
+      const effectiveStationId = user.stationId || stationId || 'stand_pos';
+      if (user.role === 'stand_staff' && stationId && stationId !== user.stationId) {
+        return res.status(403).json({ success: false, valid: false, error: 'Station identity mismatch.' });
+      }
+      const authorizationId = createScanAuthorizationToken(customer, user, targetResto, effectiveStationId, 'phone');
       return res.json({
         success: true,
         valid: true,
@@ -1596,6 +1647,7 @@ app.post(
         customerName: customer.name,
         customerPhoto: customer.photoUrl,
         step: scannedStep,
+        authorizationId,
         isCard: false,
       });
     }
