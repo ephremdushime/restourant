@@ -22,3 +22,25 @@ test('customer subscription checkout defaults to the MTN MoMo provider', () => {
   );
   assert.match(customerView, /const momoProvider = 'mtn_momo' as const/);
 });
+
+test('disabled customer checkout advertises MTN MoMo only', () => {
+  const server = fs.readFileSync(path.resolve(process.cwd(), 'server.ts'), 'utf8');
+  const checkoutRoute = server.slice(
+    server.indexOf("app.post('/api/customer/subscription/checkout'"),
+    server.indexOf("// POST /api/payments/mobile-money/callback")
+  );
+  assert.match(checkoutRoute, /PAYMENT_PROVIDER_NOT_CONFIGURED/);
+  assert.match(checkoutRoute, /supportedProviders: \['mtn_momo'\]/);
+  assert.doesNotMatch(checkoutRoute, /airtel_money|Airtel Money|Airtel/i);
+});
+
+test('production customer QR generation uses the authenticated server endpoint', () => {
+  const store = fs.readFileSync(path.resolve(process.cwd(), 'src/store/restoStore.ts'), 'utf8');
+  const customerView = fs.readFileSync(
+    path.resolve(process.cwd(), 'src/components/customer/CustomerView.tsx'),
+    'utf8'
+  );
+  assert.match(store, /getServerCustomerPhoneQr/);
+  assert.match(store, /fetch\('\/api\/qr\/token\/phone'/);
+  assert.match(customerView, /restoStore\.getServerCustomerPhoneQr\(customer\)/);
+});
