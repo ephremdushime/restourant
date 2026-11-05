@@ -2239,12 +2239,11 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         if (prev) {
           if (user.role === 'customer') {
             // Customers can only toggle their own card lock status or update PIN metadata, never privilege/version fields
+            // Customer sync may only lock/unlock their own card. PIN changes must
+            // go through the server-side activation/recovery flows.
             existingCustomersMap.set(inc.id, {
               ...prev,
               cardStatus: inc.cardStatus === 'locked' || inc.cardStatus === 'active' ? inc.cardStatus : prev.cardStatus,
-              hasCustomPin: inc.hasCustomPin ?? prev.hasCustomPin,
-              pinSetAt: inc.pinSetAt ?? prev.pinSetAt,
-              pinHash: inc.pinHash ?? prev.pinHash,
             });
           } else {
             existingCustomersMap.set(inc.id, {
@@ -2281,6 +2280,17 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         }
         serverDbState[key] = Array.from(map.values());
       };
+
+      // Customers cannot submit financial ledger entries through generic state sync.
+      // This prevents bypassing PIN verification, entitlement checks, recipient validation,
+      // and server-side transaction controls by forging transfer_out/transfer_in rows.
+      if (user.role === 'customer' && Array.isArray(fullState.ledgerEntries) && fullState.ledgerEntries.length > 0) {
+        return res.status(403).json({
+          success: false,
+          code: 'CUSTOMER_LEDGER_WRITE_FORBIDDEN',
+          error: 'Customer ledger changes must use an authorized server-side transaction endpoint.',
+        });
+      }
 
       // 2. Merge ledger entries with Idempotency, Role Authorization, and Schema Validation (append-only)
       const existingLedgerIds = new Set((serverDbState.ledgerEntries || []).map((l: any) => l.id));
@@ -2360,14 +2370,13 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         serverDbState.scanEvents = [...incomingScans, ...(serverDbState.scanEvents || [])];
       }
 
-      // 4. Merge notifications & operational collections with role guards
-      mergeScopedCollection('notifications', true);
-      mergeScopedCollection('transfers', false);
-      mergeScopedCollection('auditLogs', false);
-      mergeScopedCollection('customerSubscriptions', true);
-      mergeScopedCollection('studentSubscriptionPayments', true);
-
+      // 4. Merge operational collections with role guards.
+      // Customer-originated notifications, transfer records, audit events and subscription
+      // states are server-authoritative and must not be accepted from client fullState.
       if (user.role !== 'customer') {
+        mergeScopedCollection('notifications', true);
+        mergeScopedCollection('transfers', false);
+        mergeScopedCollection('auditLogs', false);
         mergeScopedCollection('pendingApprovals', true);
         mergeScopedCollection('payments', false);
         mergeScopedCollection('shifts', true);
@@ -2398,6 +2407,9 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
       }
 
       if (user.role === 'super_admin') {
+        mergeScopedCollection('customerSubscriptions', true);
+        mergeScopedCollection('studentSubscriptionPayments', true);
+        mergeScopedCollection('subscriptionPayments', true);
         mergeScopedCollection('plans', true);
         mergeScopedCollection('licenses', true);
         if (fullState.studentSubscriptionSettings) {
