@@ -2677,6 +2677,75 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
           .map((l: any) => l.idempotencyKey)
       );
 
+      const authorizedScanTokens = new Set<string>();
+      if (user.role === 'stand_staff') {
+        const scanCandidates = (fullState.ledgerEntries || []).filter((entry: any) =>
+          entry && ['scan', 'extra'].includes(entry.type)
+        );
+        const authGroups = new Map<string, { payload: any; entries: any[] }>();
+        for (const entry of scanCandidates) {
+          if (typeof entry.scanAuthorizationId !== 'string') {
+            return res.status(403).json({ success: false, error: 'Cashier ledger writes require a server-issued scan authorization.' });
+          }
+          const authPayload = verifyScanAuthorizationToken(entry.scanAuthorizationId);
+          if (!authPayload ||
+              authPayload.restaurantCode !== user.restaurantCode ||
+              authPayload.stationId !== user.stationId ||
+              authPayload.customerId !== entry.customerId ||
+              authPayload.restaurantCode !== entry.restaurantCode ||
+              !['card', 'phone'].includes(authPayload.qrType) ||
+              entry.platesDelta !== -1) {
+            return res.status(403).json({ success: false, error: 'Scan authorization is invalid, expired, or does not match this cashier, customer and restaurant.' });
+          }
+          const group = authGroups.get(entry.scanAuthorizationId) || { payload: authPayload, entries: [] };
+          group.entries.push(entry);
+          authGroups.set(entry.scanAuthorizationId, group);
+        }
+
+        const requestedMealsByCustomer = new Map<string, number>();
+        for (const [authorizationId, group] of authGroups) {
+          const scans = group.entries.filter((entry) => entry.type === 'scan');
+          const extras = group.entries.filter((entry) => entry.type === 'extra');
+          if (scans.length !== 1 || extras.length > 1 || group.entries.length > group.payload.maxPlates) {
+            return res.status(400).json({ success: false, error: 'Each verified QR authorization permits one scan and at most one second-plate entry.' });
+          }
+          const requestedMeals = group.entries.length;
+          const customerId = group.payload.customerId;
+          requestedMealsByCustomer.set(customerId, (requestedMealsByCustomer.get(customerId) || 0) + requestedMeals);
+          authorizedScanTokens.add(authorizationId);
+        }
+
+        for (const [customerId, requestedMeals] of requestedMealsByCustomer) {
+          const customer = (serverDbState.customers || []).find((item: any) =>
+            item.id === customerId && item.restaurantCode === user.restaurantCode
+          );
+          if (!customer) return res.status(404).json({ success: false, error: 'Scan customer no longer exists in this restaurant.' });
+          const currentBalance = getServerCustomerBalance(serverDbState, customerId);
+          if (currentBalance < requestedMeals) {
+            return res.status(400).json({ success: false, error: 'Insufficient server-confirmed plate balance for this scan batch.' });
+          }
+          const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+          const recentMealCount = (serverDbState.ledgerEntries || []).filter((entry: any) =>
+            entry.customerId === customerId &&
+            entry.restaurantCode === user.restaurantCode &&
+            ['scan', 'extra'].includes(entry.type) &&
+            Number(entry.platesDelta) < 0 &&
+            new Date(entry.timestamp).getTime() >= twoHoursAgo
+          ).reduce((sum: number, entry: any) => sum + Math.abs(Number(entry.platesDelta)), 0);
+          if (recentMealCount + requestedMeals > 3) {
+            return res.status(429).json({ success: false, error: 'The rolling two-hour meal limit has been reached.' });
+          }
+        }
+
+        // Consume each signed scan authorization once across all scanner devices and retries.
+        for (const [authorizationId, group] of authGroups) {
+          const replay = await recordTokenScan(`scan-auth:${group.payload.nonce}`, 10 * 60);
+          if (!replay.allowed) {
+            return res.status(409).json({ success: false, error: 'This scan authorization has already been used.' });
+          }
+        }
+      }
+
       const incomingLedgers = (fullState.ledgerEntries || []).filter((l: any) => {
         if (!l || typeof l.id !== 'string' || !l.id || typeof l.customerId !== 'string' || !l.customerId) return false;
         if (!allowedRestoCode && user.role !== 'super_admin') return false;
@@ -2694,7 +2763,8 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         // Cashier/station staff may submit only negative meal-consumption events.
         // Positive credits, adjustments, reversals and transfers require server/admin authority.
         if (user.role === 'stand_staff' &&
-            (!['scan', 'extra'].includes(l.type) || l.platesDelta >= 0)) return false;
+            (!['scan', 'extra'].includes(l.type) || l.platesDelta !== -1 ||
+              !authorizedScanTokens.has(l.scanAuthorizationId))) return false;
         if (user.role === 'customer') return false;
 
         // Idempotency check also catches duplicates within the same submitted batch.
