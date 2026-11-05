@@ -141,7 +141,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
     const customStudentFee = resto.studentSubscriptionPriceRwf ?? resto.termsOverride?.studentSubscriptionPriceRwf ?? studentSubSettings.priceRwf ?? 500;
 
     setEditRestoMaxStations(lic?.maxScanPoints || resto.termsOverride?.maxScanPointsIncluded || plan.terms.maxScanPointsIncluded || 2);
-    setEditRestoBasePrice(resto.termsOverride?.basePriceRwf || plan.terms.basePriceRwf);
+    setEditRestoBasePrice(resto.saasSubscriptionPriceRwf || plan.terms.basePriceRwf);
     setEditRestoExtraScanFee(resto.termsOverride?.pricePerExtraScanPointRwf || plan.terms.pricePerExtraScanPointRwf);
     setEditRestoStudentSubPrice(customStudentFee);
     setEditRestoPlatePrice(resto.defaultPlatePriceRwf || 1200);
@@ -164,7 +164,6 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       return;
     }
     restoStore.updateRestaurantPricingAndTerms(editingResto.code, {
-      basePriceRwf: Number(editRestoBasePrice),
       saasSubscriptionPriceRwf: Number(editRestoBasePrice),
       pricePerExtraScanPointRwf: Number(editRestoExtraScanFee),
       studentSubscriptionPriceRwf: Number(editRestoStudentSubPrice),
@@ -204,7 +203,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       currency: 'RWF',
       planId: newPlanId,
       licensedScanPoints: Number(newMaxStations),
-      basePriceRwf: Number(newBasePrice),
+      saasSubscriptionPriceRwf: Number(newBasePrice),
       pricePerExtraScanPointRwf: Number(newExtraScanFee),
       studentSubscriptionPriceRwf: Number(newStudentSubPrice),
       singlePlatePriceRwf: Number(newSinglePlatePrice),
