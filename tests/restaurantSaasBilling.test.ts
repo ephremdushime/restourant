@@ -58,3 +58,31 @@ test('provider success is accepted only when amount, currency, reference and pay
 test('MSISDN normalization removes formatting but retains country code', () => {
   assert.equal(normalizeMsisdn('+250 788-123 456'), '250788123456');
 });
+
+test('cancelled subscription never becomes active because of an unexpired period', () => {
+  assert.equal(
+    getRestaurantSaasStatus('2027-01-01T00:00:00.000Z', Date.parse('2026-12-01T00:00:00Z'), true).status,
+    'cancelled'
+  );
+});
+
+test('invalid paid-through timestamps fail closed', () => {
+  assert.equal(getRestaurantSaasStatus('not-a-date', Date.parse('2026-12-01T00:00:00Z')).status, 'restricted');
+});
+
+test('payment matching rejects non-integer, zero, and negative amounts', () => {
+  const valid = {
+    providerStatus: 'SUCCESSFUL',
+    providerAmount: '65000',
+    expectedAmountRwf: 65000,
+    providerCurrency: 'RWF',
+    expectedCurrency: 'RWF',
+    providerExternalId: 'RPS-RESTO-123',
+    expectedExternalId: 'RPS-RESTO-123',
+    providerPayerMsisdn: '250788123456',
+    expectedPayerMsisdn: '+250 788 123 456',
+  };
+  assert.equal(validateSaasPaymentMatch({ ...valid, providerAmount: '65000.5' }), false);
+  assert.equal(validateSaasPaymentMatch({ ...valid, providerAmount: '0', expectedAmountRwf: 0 }), false);
+  assert.equal(validateSaasPaymentMatch({ ...valid, providerAmount: '-65000', expectedAmountRwf: -65000 }), false);
+});
