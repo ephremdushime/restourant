@@ -68,7 +68,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
   const [subModalOpen, setSubModalOpen] = useState(false);
   const [momoPhone, setMomoPhone] = useState(customer?.phone || '+250 788 ');
-  const [momoProvider, setMomoProvider] = useState<'mtn_momo' | 'airtel_money'>('mtn_momo');
+  const momoProvider = 'mtn_momo' as const;
   const [subCheckoutLoading, setSubCheckoutLoading] = useState(false);
   const [subCheckoutMessage, setSubCheckoutMessage] = useState<{
     text: string;
@@ -390,10 +390,9 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             <div className="text-sm font-bold text-white">
               Activate Dashboard Subscription via Mobile Money:
             </div>
-            <div className="grid grid-cols-2 gap-2.5 text-sm">
+            <div className="grid grid-cols-1 gap-2.5 text-sm">
               <button
                 type="button"
-                onClick={() => setMomoProvider('mtn_momo')}
                 className={`p-3 rounded-xl border-2 text-center font-bold transition-all cursor-pointer ${
                   momoProvider === 'mtn_momo'
                     ? 'bg-amber-500/20 border-amber-400 text-amber-200'
@@ -402,17 +401,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
               >
                 MTN MoMo (*182#)
               </button>
-              <button
-                type="button"
-                onClick={() => setMomoProvider('airtel_money')}
-                className={`p-3 rounded-xl border-2 text-center font-bold transition-all cursor-pointer ${
-                  momoProvider === 'airtel_money'
-                    ? 'bg-rose-500/20 border-rose-400 text-rose-200'
-                    : 'bg-slate-950 border-slate-700 text-slate-300 hover:text-white'
-                }`}
-              >
-                Airtel Money (*500#)
-              </button>
+              
             </div>
 
             <div>
@@ -740,7 +729,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                 <div>
                             {!restoStore.isDemoModeActive() && (
             <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
-              Mobile Money checkout is being prepared. MTN MoMo and Airtel Money will be enabled after provider API registration, credential verification, and secure callback testing. No payment will be requested or recorded yet.
+              Mobile Money checkout is being prepared. MTN MoMo will be enabled after merchant API registration, credential verification, and secure callback testing. No payment will be requested or recorded yet.
             </div>
           )}
 
@@ -1563,10 +1552,9 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
               <div className="space-y-3">
                 <div>
                   <label className="font-bold text-slate-200 block mb-1.5">Select Mobile Money Provider</label>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 gap-2">
                     <button
                       type="button"
-                      onClick={() => setMomoProvider('mtn_momo')}
                       className={`p-3 rounded-xl border-2 text-center font-bold text-xs sm:text-sm transition-all cursor-pointer ${
                         momoProvider === 'mtn_momo'
                           ? 'bg-amber-500/20 border-amber-400 text-amber-200'
@@ -1575,17 +1563,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                     >
                       MTN MoMo (*182#)
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setMomoProvider('airtel_money')}
-                      className={`p-3 rounded-xl border-2 text-center font-bold text-xs sm:text-sm transition-all cursor-pointer ${
-                        momoProvider === 'airtel_money'
-                          ? 'bg-rose-500/20 border-rose-400 text-rose-200'
-                          : 'bg-slate-950 border-slate-700 text-slate-300 hover:text-white'
-                      }`}
-                    >
-                      Airtel Money (*500#)
-                    </button>
+                    
                   </div>
                 </div>
 
