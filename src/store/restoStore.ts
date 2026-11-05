@@ -4662,7 +4662,6 @@ export class RestoStore {
         body: JSON.stringify({
           restaurantCode: customer.restaurantCode,
           memberNo: customer.memberNo,
-          keyVersion: customer.keyVersion,
         }),
       });
       const data = await response.json();
