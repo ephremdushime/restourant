@@ -4,12 +4,13 @@ import path from 'path';
 import crypto from 'crypto';
 import {
   isPostgresConfigured,
+  checkPostgresReady,
   initPostgres,
   loadStateFromPostgres,
   saveStateToPostgres,
   insertLedgerEntryPostgres,
 } from './src/services/db/postgresAdapter';
-import { recordTokenScan } from './src/services/cache/redisClient';
+import { recordTokenScan, isRedisConfigured, checkRedisReady } from './src/services/cache/redisClient';
 import { uploadBase64Photo } from './src/services/storage/objectStorage';
 
 const app = express();
@@ -571,6 +572,24 @@ app.get('/api/health', (_req, res) => {
     uptimeSeconds: Math.floor(process.uptime()),
     serverTime: new Date().toISOString(),
     hasState: !!serverDbState,
+  });
+});
+
+// Readiness is stricter than liveness: configured durable dependencies must answer.
+app.get('/api/ready', async (_req, res) => {
+  const checks: Record<string, boolean> = {
+    applicationState: Boolean(serverDbState),
+    database: !isPostgresConfigured(),
+    cache: !isRedisConfigured(),
+  };
+  if (isPostgresConfigured()) checks.database = await checkPostgresReady();
+  if (isRedisConfigured()) checks.cache = await checkRedisReady();
+
+  const ready = Object.values(checks).every(Boolean);
+  return res.status(ready ? 200 : 503).json({
+    status: ready ? 'ready' : 'not_ready',
+    checks,
+    serverTime: new Date().toISOString(),
   });
 });
 
@@ -2667,6 +2686,13 @@ async function startServer() {
     }
   } else {
     console.log('[Server Authority] Running in standalone local storage mode (Offline Reception Laptop compatible).');
+  }
+
+  if (isProduction && deploymentMode === 'cloud') {
+    const redisReady = await checkRedisReady();
+    if (!redisReady) {
+      throw new Error('Redis is configured but not ready. Refusing to start cloud production without distributed replay protection.');
+    }
   }
 
   if (!isProduction) {
