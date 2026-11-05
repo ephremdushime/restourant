@@ -59,7 +59,7 @@ export const RestaurantSaasBillingPanel: React.FC<{ restaurantCode: string; rest
       });
       const body = await response.json();
       if (!response.ok || !body.success) throw new Error(body.error || 'Payment verification failed.');
-      setMessage(body.status === 'successful' ? 'Payment verified. Your 30-day RestoPass subscription is active.' : 'MTN has not confirmed a successful payment yet. No access time has been granted.');
+      setMessage(body.status === 'successful' ? 'Payment verified. Your 30-day RestoPass subscription is active.' : body.status === 'review_required' ? 'MTN reports a successful transfer, but the payment details do not match. No access was activated; contact Bestie Companies Ltd for reconciliation.' : 'MTN has not confirmed a successful payment yet. No access time has been granted.');
       if (body.status === 'successful') {
         setPaymentId('');
         await restoStore.pullStateFromServer();
@@ -108,7 +108,7 @@ export const RestaurantSaasBillingPanel: React.FC<{ restaurantCode: string; rest
           <div className="space-y-2">{snapshot.payments!.map((payment) => (
             <div key={payment.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-950 border border-slate-800 p-3">
               <div><div className="text-sm font-semibold text-white">{Number(payment.amount_rwf).toLocaleString()} RWF · {payment.status}</div><div className="text-xs text-slate-500">{new Date(payment.created_at).toLocaleString()}</div></div>
-              {payment.status !== 'successful' && <button disabled={busy} onClick={() => { setPaymentId(payment.id); verify(payment.id); }} className="text-xs font-bold text-emerald-300 hover:text-white">Check status</button>}
+              {!['successful','review_required'].includes(payment.status) && <button disabled={busy} onClick={() => { setPaymentId(payment.id); verify(payment.id); }} className="text-xs font-bold text-emerald-300 hover:text-white">Check status</button>}
             </div>
           ))}</div>
         )}
