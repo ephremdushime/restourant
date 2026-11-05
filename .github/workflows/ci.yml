@@ -7,7 +7,7 @@ on:
   # Validate feature branches through their pull requests.
   # Do not also run on feature-branch pushes: that duplicates the PR run.
   pull_request:
-    branches: [main]
+    branches: [main, security/production-hardening]
   workflow_dispatch:
 
 # Cancel obsolete runs when a newer commit is pushed to the same PR/branch.
