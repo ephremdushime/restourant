@@ -430,6 +430,7 @@ setInterval(() => {
 }, 5 * 60 * 1000).unref();
 
 const authRateLimiter = createRateLimiter('auth', 20, 60 * 1000); // 20 attempts per minute
+const activationRateLimiter = createRateLimiter('activation', 5, 15 * 60 * 1000); // 5 activation attempts per 15 minutes
 const apiRateLimiter = createRateLimiter('api', 120, 60 * 1000); // 120 requests per minute
 const syncRateLimiter = createRateLimiter('sync', 40, 60 * 1000); // 40 syncs per minute
 
@@ -774,11 +775,16 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
   // 4. Customer Meal Pass Authentication
   if (role === 'customer') {
     const customers = serverDbState?.customers || [];
+    if (typeof restaurantCode !== 'string' || !restaurantCode.trim()) {
+      return res.status(400).json({ success: false, error: 'Restaurant selection is required.' });
+    }
+    const cleanCustomerIdentifier = typeof username === 'string' ? username.trim() : '';
     const cust = customers.find(
       (c: any) =>
-        c.memberNo === username ||
-        c.phone === username ||
-        c.id === username
+        c.restaurantCode === restaurantCode &&
+        (c.memberNo === cleanCustomerIdentifier ||
+          c.phone === cleanCustomerIdentifier ||
+          c.id === cleanCustomerIdentifier)
     );
 
     // Use the dedicated customer-authentication error to avoid account enumeration.
@@ -927,17 +933,21 @@ function verifyServerCustomerPin(enteredPin: string, customer: any): boolean {
 
 // POST /api/customer/auth/login: Authenticate phone number + 6+ digit PIN (Rate-limited, lockout, generic error)
 app.post('/api/customer/auth/login', authRateLimiter, async (req, res) => {
-  const { phone, pin, username } = req.body;
-  const cleanPhone = (phone || username || '').trim();
-  const cleanPin = (pin || '').trim();
+  const { phone, pin, username, restaurantCode } = req.body;
+  const cleanPhone = typeof phone === 'string' ? phone.trim() : typeof username === 'string' ? username.trim() : '';
+  const cleanPin = typeof pin === 'string' ? pin.trim() : '';
+  if (typeof restaurantCode !== 'string' || !restaurantCode.trim()) {
+    return res.status(400).json({ success: false, error: 'Restaurant selection is required.' });
+  }
 
   const customers = serverDbState?.customers || [];
   const cust = customers.find(
     (c: any) =>
-      c.phone === cleanPhone ||
-      (c.phone && c.phone.replace(/\s+/g, '') === cleanPhone.replace(/\s+/g, '')) ||
-      c.memberNo === cleanPhone ||
-      c.id === cleanPhone
+      c.restaurantCode === restaurantCode &&
+      (c.phone === cleanPhone ||
+        (c.phone && c.phone.replace(/\s+/g, '') === cleanPhone.replace(/\s+/g, '')) ||
+        c.memberNo === cleanPhone ||
+        c.id === cleanPhone)
   );
 
   // Generic error to prevent phone-number enumeration
@@ -1055,39 +1065,41 @@ app.post(
   '/api/customer/activation/request',
   apiRateLimiter,
   requireAuth(['stand_staff', 'restaurant_admin', 'super_admin']),
-  (req, res) => {
-    const { customerId, memberNo, phone } = req.body;
-    const customers = serverDbState?.customers || [];
-    const cust = customers.find(
-      (c: any) =>
-        c.id === customerId ||
-        c.memberNo === memberNo ||
-        (phone && c.phone === phone)
+  async (req, res) => {
+    if (!serverDbState) return res.status(503).json({ success: false, error: 'Server state is not initialized.' });
+    const { customerId, memberNo, phone } = req.body || {};
+    const requestedIdentifier = [customerId, memberNo, phone].find((value) => typeof value === 'string' && value.trim());
+    if (!requestedIdentifier) return res.status(400).json({ success: false, error: 'Customer identifier is required.' });
+    const cust = (serverDbState.customers || []).find((item: any) =>
+      (req.user!.role === 'super_admin' || item.restaurantCode === req.user!.restaurantCode) &&
+      (item.id === requestedIdentifier || item.memberNo === requestedIdentifier || item.phone === requestedIdentifier)
     );
-    if (!cust) return res.status(404).json({ success: false, error: 'Customer not found' });
+    if (!cust) return res.status(404).json({ success: false, error: 'Customer not found in your authorized restaurant.' });
     if (cust.provisionalStatus === 'pending_approval') {
       return res.status(400).json({ success: false, error: 'Registration is pending boss approval before activation.' });
     }
     if (cust.provisionalStatus === 'rejected' || cust.activationStatus === 'suspended') {
       return res.status(400).json({ success: false, error: 'Account is rejected or suspended.' });
     }
+    if (cust.activationStatus === 'active') {
+      return res.status(409).json({ success: false, error: 'Customer account is already active.' });
+    }
 
-    if (!serverDbState.activationRequests) serverDbState.activationRequests = [];
-    serverDbState.activationRequests.forEach((r: any) => {
-      if (r.customerId === cust.id && !r.used) r.used = true;
+    if (!Array.isArray(serverDbState.activationRequests)) serverDbState.activationRequests = [];
+    const previousRequests = serverDbState.activationRequests.map((item: any) => ({ ...item }));
+    serverDbState.activationRequests.forEach((item: any) => {
+      if (item.customerId === cust.id && !item.used) item.used = true;
     });
 
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const codeHash = serverHmac(MASTER_KEY, \`ACTIVATION:\${cust.id}:\${code}\`);
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-
     const activationRecord = {
-      id: `act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: \`act_\${crypto.randomUUID()}\`,
       customerId: cust.id,
       memberNo: cust.memberNo,
       phone: cust.phone,
       restaurantCode: cust.restaurantCode,
-      activationCode: code,
       codeHash,
       authorizingStaffId: req.user!.userId,
       authorizingStaffName: req.user!.username,
@@ -1096,7 +1108,11 @@ app.post(
       createdAt: new Date().toISOString(),
     };
     serverDbState.activationRequests.unshift(activationRecord);
-    queueDbSave(serverDbState);
+    const saved = await queueDbSave(serverDbState);
+    if (!saved) {
+      serverDbState.activationRequests = previousRequests;
+      return res.status(500).json({ success: false, error: 'Activation code could not be stored. No code was issued.' });
+    }
 
     return res.json({
       success: true,
@@ -1109,53 +1125,69 @@ app.post(
 );
 
 // POST /api/customer/activation/complete: Customer privately sets their 6+ digit PIN
-app.post('/api/customer/activation/complete', authRateLimiter, (req, res) => {
-  const { phoneOrMember, activationCode, newPin } = req.body;
-  const cleanIdentifier = (phoneOrMember || '').trim();
-  const cleanPin = (newPin || '').trim();
-  const cleanCode = (activationCode || '').trim();
-
+app.post('/api/customer/activation/complete', activationRateLimiter, async (req, res) => {
+  if (!serverDbState) return res.status(503).json({ success: false, error: 'Server state is not initialized.' });
+  const { phoneOrMember, activationCode, newPin, restaurantCode } = req.body || {};
+  const cleanIdentifier = typeof phoneOrMember === 'string' ? phoneOrMember.trim() : '';
+  const cleanPin = typeof newPin === 'string' ? newPin.trim() : '';
+  const cleanCode = typeof activationCode === 'string' ? activationCode.trim() : '';
+  if (typeof restaurantCode !== 'string' || !restaurantCode.trim() || !cleanIdentifier || !cleanCode) {
+    return res.status(400).json({ success: false, error: 'Restaurant, customer identifier and activation code are required.' });
+  }
   if (!/^\d{6,}$/.test(cleanPin)) {
     return res.status(400).json({ success: false, error: 'PIN must be at least 6 numeric digits.' });
   }
 
-  const customers = serverDbState?.customers || [];
-  const cust = customers.find(
-    (c: any) =>
-      c.phone === cleanIdentifier ||
-      (c.phone && c.phone.replace(/\s+/g, '') === cleanIdentifier.replace(/\s+/g, '')) ||
-      c.memberNo === cleanIdentifier ||
-      c.id === cleanIdentifier
+  const cust = (serverDbState.customers || []).find((item: any) =>
+    item.restaurantCode === restaurantCode &&
+    (item.phone === cleanIdentifier ||
+      (item.phone && item.phone.replace(/\s+/g, '') === cleanIdentifier.replace(/\s+/g, '')) ||
+      item.memberNo === cleanIdentifier ||
+      item.id === cleanIdentifier)
   );
-  if (!cust) return res.status(400).json({ success: false, error: 'Invalid activation credentials or code.' });
+  if (!cust || cust.provisionalStatus === 'pending_approval' ||
+      cust.provisionalStatus === 'rejected' || cust.activationStatus === 'suspended') {
+    return res.status(400).json({ success: false, error: 'Invalid activation credentials or code.' });
+  }
+  if (cust.activationStatus === 'active') {
+    return res.status(409).json({ success: false, error: 'Customer account is already active.' });
+  }
 
-  const requests = serverDbState?.activationRequests || [];
-  const codeHash = crypto.createHash('sha256').update(cleanCode).digest('hex');
-  const actReq = requests.find(
-    (r: any) =>
-      r.customerId === cust.id &&
-      !r.used &&
-      (r.activationCode === cleanCode || r.codeHash === codeHash) &&
-      new Date(r.expiresAt).getTime() > Date.now()
+  const requests = serverDbState.activationRequests || [];
+  const expectedCodeHash = serverHmac(MASTER_KEY, \`ACTIVATION:\${cust.id}:\${cleanCode}\`);
+  const legacyCodeHash = crypto.createHash('sha256').update(cleanCode).digest('hex');
+  const actReq = requests.find((item: any) =>
+    item.customerId === cust.id &&
+    item.restaurantCode === cust.restaurantCode &&
+    !item.used &&
+    new Date(item.expiresAt).getTime() > Date.now() &&
+    (timingSafeCompare(item.codeHash || '', expectedCodeHash) ||
+      item.activationCode === cleanCode ||
+      item.codeHash === legacyCodeHash)
   );
-
   if (!actReq) {
     return res.status(400).json({ success: false, error: 'Invalid, expired, or already used activation code.' });
   }
 
-  const pinHash = computeServerCustomerPinHash(cleanPin, cust.id, cust.memberNo);
-  cust.pinHash = pinHash;
+  const previousCustomer = { ...cust };
+  const previousRequest = { ...actReq };
+  cust.pinHash = computeServerCustomerPinHash(cleanPin, cust.id, cust.memberNo);
   cust.hasCustomPin = true;
   cust.pinSetAt = new Date().toISOString();
   cust.activationStatus = 'active';
   cust.failedLoginAttempts = 0;
   cust.lockedUntil = null;
   cust.cardReadyForPrint = true;
-
   actReq.used = true;
   actReq.usedAt = new Date().toISOString();
+  delete actReq.activationCode;
 
-  queueDbSave(serverDbState);
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    Object.assign(cust, previousCustomer);
+    Object.assign(actReq, previousRequest);
+    return res.status(500).json({ success: false, error: 'Activation could not be committed. No account changes were confirmed.' });
+  }
 
   const token = createSessionToken({
     userId: cust.id,
@@ -1163,7 +1195,6 @@ app.post('/api/customer/activation/complete', authRateLimiter, (req, res) => {
     role: 'customer',
     restaurantCode: cust.restaurantCode,
   });
-
   return res.json({
     success: true,
     token,
@@ -2093,7 +2124,7 @@ const SENSITIVE_CLIENT_FIELDS = new Set([
   'recoverycode', 'verificationcode', 'temporarycode', 'onetimecode', 'otp',
   'pairingkey', 'pairingsecret', 'secret', 'apisecret', 'apikey',
   'accesskey', 'secretaccesskey', 'accesstoken', 'refreshtoken',
-  'magicauthtoken', 'tokenhash', 'qrsecret', 'privatekey',
+  'magicauthtoken', 'tokenhash', 'qrsecret', 'privatekey', 'codehash', 'recoverycodehash',
 ]);
 
 /**
