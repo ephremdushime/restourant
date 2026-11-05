@@ -700,32 +700,42 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Restaurant code is required' });
     }
     const isProd = process.env.NODE_ENV === 'production';
-    const entered = (pin || password || '').trim();
+    const entered = typeof pin === 'string' ? pin.trim() : typeof password === 'string' ? password.trim() : '';
     const configuredStaffPin = process.env.RESTOPASS_STAFF_DEFAULT_PIN;
     const matchingStaffUser = (serverDbState?.stationUsers || []).find(
       (u: any) => u.restaurantCode === restaurantCode && (u.username === username || u.id === username)
     );
 
+    if (matchingStaffUser && matchingStaffUser.status !== 'active') {
+      return res.status(403).json({ success: false, error: 'This station account is blocked or inactive.' });
+    }
+
     let validPin = false;
-    if (matchingStaffUser?.pin) {
-      validPin = timingSafeCompare(entered, matchingStaffUser.pin);
+    if (matchingStaffUser) {
+      const credentialIdentity = { id: matchingStaffUser.id, memberNo: matchingStaffUser.username };
+      validPin = verifyServerCustomerPin(entered, { ...credentialIdentity, pinHash: matchingStaffUser.pinHash }) ||
+        verifyServerCustomerPin(entered, { ...credentialIdentity, pinHash: matchingStaffUser.passwordHash });
     } else if (configuredStaffPin && !isProd) {
       validPin = timingSafeCompare(entered, configuredStaffPin);
     } else if (!isProd) {
       validPin = timingSafeCompare(entered, '1234') || (entered.length >= 4);
     }
 
-    if (!validPin) {
+    if (!validPin || (isProd && !matchingStaffUser)) {
       return res.status(401).json({ success: false, error: 'Invalid Staff PIN or Password' });
     }
 
-    const safeStaffUsername = (username || 'operator').trim();
+    const safeStaffUsername = (matchingStaffUser?.username || (typeof username === 'string' ? username : '') || 'operator').trim();
+    const authorizedStationId = matchingStaffUser?.stationId || (!isProd ? stationId || 'stand_1' : '');
+    if (isProd && !authorizedStationId) {
+      return res.status(403).json({ success: false, error: 'This station account has no assigned scanning station.' });
+    }
     const token = createSessionToken({
-      userId: `staff_${safeStaffUsername}_${restaurantCode}`,
+      userId: matchingStaffUser?.id || `staff_${safeStaffUsername}_${restaurantCode}`,
       username: safeStaffUsername,
       role: 'stand_staff',
       restaurantCode,
-      stationId: stationId || 'stand_1',
+      stationId: authorizedStationId,
     });
     return res.json({
       success: true,
@@ -734,7 +744,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
         role: 'stand_staff',
         username: safeStaffUsername,
         restaurantCode,
-        stationId: stationId || 'stand_1',
+        stationId: authorizedStationId,
         userLabel: `Staff: ${safeStaffUsername || 'Stand Operator'}`,
       },
     });
@@ -897,6 +907,36 @@ function verifyServerCustomerPin(enteredPin: string, customer: any): boolean {
     return true;
   }
   return false;
+}
+
+function normalizeStationUserCredentials(state: any): boolean {
+  if (!Array.isArray(state?.stationUsers)) return false;
+  let changed = false;
+  for (const stationUser of state.stationUsers) {
+    if (!stationUser || typeof stationUser !== 'object') continue;
+    if (typeof stationUser.pin === 'string' && stationUser.pin.trim()) {
+      if (!stationUser.pinHash) {
+        stationUser.pinHash = computeServerCustomerPinHash(
+          stationUser.pin.trim(),
+          stationUser.id || 'station',
+          stationUser.username || 'operator'
+        );
+      }
+      delete stationUser.pin;
+      changed = true;
+    }
+    if (typeof stationUser.passwordHash === 'string' &&
+        stationUser.passwordHash.length > 0 &&
+        !stationUser.passwordHash.startsWith('scrypt$')) {
+      stationUser.passwordHash = computeServerCustomerPinHash(
+        stationUser.passwordHash,
+        stationUser.id || 'station',
+        stationUser.username || 'operator'
+      );
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 // POST /api/customer/auth/login: Authenticate phone number + 6+ digit PIN (Rate-limited, lockout, generic error)
@@ -2683,6 +2723,7 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         mergeScopedCollection('menuItems', true);
         mergeScopedCollection('branches', true);
         mergeScopedCollection('stationUsers', true);
+        normalizeStationUserCredentials(serverDbState);
         mergeScopedCollection('scanPoints', true);
         mergeScopedCollection('cashierSessions', true);
         mergeScopedCollection('expenses', true);
@@ -2803,6 +2844,13 @@ async function startServer() {
     }
   } else {
     console.log('[Server Authority] Running in standalone local storage mode (Offline Reception Laptop compatible).');
+  }
+
+  if (normalizeStationUserCredentials(serverDbState)) {
+    const stationCredentialsSaved = await queueDbSave(serverDbState);
+    if (!stationCredentialsSaved) {
+      throw new Error('Unable to persist upgraded station credentials. Refusing to start with legacy plaintext credentials.');
+    }
   }
 
   if (isProduction && deploymentMode === 'cloud') {
