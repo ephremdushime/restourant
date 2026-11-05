@@ -2215,6 +2215,141 @@ app.post(
   }
 );
 
+// POST /api/customer/transfer: Server-authoritative PIN-verified plate transfer.
+app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
+  ensureServerDbDefaults(serverDbState);
+  const user = req.user!;
+  const customer = (serverDbState.customers || []).find((item: any) => item.id === user.userId);
+  if (!customer || customer.restaurantCode !== user.restaurantCode) {
+    return res.status(401).json({ success: false, error: 'Customer session is no longer valid.' });
+  }
+  if (customer.activationStatus === 'suspended' || customer.provisionalStatus === 'pending_approval' || customer.provisionalStatus === 'rejected') {
+    return res.status(403).json({ success: false, error: 'Customer account is not eligible for transfers.' });
+  }
+  if (customer.lockedUntil && new Date(customer.lockedUntil).getTime() > Date.now()) {
+    return res.status(423).json({ success: false, error: 'Account temporarily locked. Please try again later.' });
+  }
+
+  const recipientIdentifier = typeof req.body?.recipientIdentifier === 'string' ? req.body.recipientIdentifier.trim() : '';
+  const pin = typeof req.body?.pin === 'string' ? req.body.pin.trim() : '';
+  const plates = Number(req.body?.plates);
+  const idempotencyKey = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
+  if (!recipientIdentifier || !/^\d{6,}$/.test(pin) || !Number.isSafeInteger(plates) || plates <= 0 ||
+      !/^[A-Za-z0-9_-]{16,128}$/.test(idempotencyKey)) {
+    return res.status(400).json({ success: false, error: 'Valid recipient, 6+ digit PIN, positive whole plate amount, and idempotency key are required.' });
+  }
+
+  const transferId = \`tr_\${crypto.createHash('sha256').update(\`\${customer.id}:\${idempotencyKey}\`).digest('hex').slice(0, 40)}\`;
+  const existingTransfer = (serverDbState.transfers || []).find((item: any) => item.id === transferId);
+  if (existingTransfer) {
+    return res.json({ success: true, idempotent: true, transfer: existingTransfer, senderBalance: getServerCustomerBalance(serverDbState, customer.id) });
+  }
+
+  const previousPinHash = customer.pinHash;
+  if (!verifyServerCustomerPin(pin, customer)) {
+    customer.failedLoginAttempts = (customer.failedLoginAttempts || 0) + 1;
+    if (customer.failedLoginAttempts >= 5) customer.lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    await queueDbSave(serverDbState);
+    return res.status(401).json({ success: false, error: 'Incorrect security PIN.' });
+  }
+
+  const entitlement = checkServerStudentEntitlement(customer.id, 'digital_plate_transfer');
+  if (!entitlement.allowed) {
+    if (customer.pinHash !== previousPinHash) await queueDbSave(serverDbState);
+    return res.status(402).json({ success: false, requiresSubscription: true, error: entitlement.reason || 'An active customer subscription is required.' });
+  }
+
+  const normalizedIdentifier = recipientIdentifier.replace(/[\s-]/g, '');
+  const recipient = (serverDbState.customers || []).find((item: any) =>
+    item.restaurantCode === customer.restaurantCode &&
+    (item.memberNo === recipientIdentifier ||
+      (typeof item.phone === 'string' && item.phone.replace(/[\s-]/g, '') === normalizedIdentifier))
+  );
+  if (!recipient || recipient.id === customer.id ||
+      recipient.activationStatus === 'suspended' ||
+      recipient.provisionalStatus === 'pending_approval' ||
+      recipient.provisionalStatus === 'rejected') {
+    if (customer.pinHash !== previousPinHash) await queueDbSave(serverDbState);
+    return res.status(400).json({ success: false, error: 'Recipient not found or not eligible in this restaurant.' });
+  }
+
+  const availableBalance = getServerCustomerBalance(serverDbState, customer.id);
+  if (availableBalance < plates) {
+    if (customer.pinHash !== previousPinHash) await queueDbSave(serverDbState);
+    return res.status(400).json({ success: false, error: \`Insufficient plates. Available balance: \${availableBalance}.\` });
+  }
+
+  const now = new Date().toISOString();
+  const transfer = {
+    id: transferId, idempotencyKey, restaurantCode: customer.restaurantCode,
+    senderCustomerId: customer.id, recipientCustomerId: recipient.id,
+    senderMemberNo: customer.memberNo, recipientMemberNo: recipient.memberNo,
+    senderName: customer.name, recipientName: recipient.name,
+    plates, timestamp: now, status: 'completed',
+  };
+  const ledgerOut = {
+    id: \`led_\${transferId}_out\`, idempotencyKey: \`transfer:\${transferId}:out\`,
+    customerId: customer.id, restaurantCode: customer.restaurantCode,
+    type: 'transfer_out', platesDelta: -plates, timestamp: now,
+    reason: \`Transfer to #\${recipient.memberNo}\`, reference: transferId,
+  };
+  const ledgerIn = {
+    id: \`led_\${transferId}_in\`, idempotencyKey: \`transfer:\${transferId}:in\`,
+    customerId: recipient.id, restaurantCode: recipient.restaurantCode,
+    type: 'transfer_in', platesDelta: plates, timestamp: now,
+    reason: \`Transfer from #\${customer.memberNo}\`, reference: transferId,
+  };
+
+  const oldLedger = serverDbState.ledgerEntries;
+  const oldTransfers = serverDbState.transfers;
+  const oldAuditLogs = serverDbState.auditLogs;
+  const oldNotifications = serverDbState.notifications;
+  const oldAttempts = customer.failedLoginAttempts;
+  const oldLockedUntil = customer.lockedUntil;
+  serverDbState.ledgerEntries = [...(oldLedger || []), ledgerOut, ledgerIn];
+  serverDbState.transfers = [transfer, ...(oldTransfers || [])];
+  serverDbState.auditLogs = [{
+    id: \`audit_\${transferId}\`, restaurantCode: customer.restaurantCode,
+    actorRole: 'customer', actorName: customer.name, action: 'PLATES_TRANSFERRED',
+    details: \`Transferred \${plates} plates to #\${recipient.memberNo}\`, timestamp: now,
+  }, ...(oldAuditLogs || [])];
+  serverDbState.notifications = [
+    {
+      id: \`notif_\${transferId}_sender\`, restaurantCode: customer.restaurantCode, target: customer.id,
+      senderRole: 'system', senderName: 'RestoPass Transfer', type: 'plate_transfer',
+      title: \`Sent \${plates} plates\`, message: \`You transferred \${plates} plates to #\${recipient.memberNo}.\`,
+      priority: 'normal', timestamp: now, readByCustomerIds: [],
+    },
+    {
+      id: \`notif_\${transferId}_recipient\`, restaurantCode: recipient.restaurantCode, target: recipient.id,
+      senderRole: 'system', senderName: 'RestoPass Transfer', type: 'plate_transfer',
+      title: \`Received \${plates} plates\`, message: \`You received \${plates} plates from #\${customer.memberNo}.\`,
+      priority: 'normal', timestamp: now, readByCustomerIds: [],
+    },
+    ...(oldNotifications || []),
+  ];
+  customer.failedLoginAttempts = 0;
+  customer.lockedUntil = null;
+  if (customer.pinHash !== previousPinHash) console.info('[Auth] Upgraded legacy customer PIN hash to scrypt.');
+
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    serverDbState.ledgerEntries = oldLedger;
+    serverDbState.transfers = oldTransfers;
+    serverDbState.auditLogs = oldAuditLogs;
+    serverDbState.notifications = oldNotifications;
+    customer.failedLoginAttempts = oldAttempts;
+    customer.lockedUntil = oldLockedUntil;
+    return res.status(500).json({ success: false, error: 'Transfer could not be committed. No transfer was confirmed.' });
+  }
+
+  return res.json({
+    success: true, transfer,
+    senderBalance: getServerCustomerBalance(serverDbState, customer.id),
+    recipientBalance: getServerCustomerBalance(serverDbState, recipient.id),
+  });
+});
+
 // POST /api/sync: Authenticated, validated incremental synchronization with Idempotency (Findings 5 & 6)
 app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
   const { fullState } = req.body;
