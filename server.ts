@@ -3217,8 +3217,9 @@ function getSaasMtnConfig() {
   const apiUser = process.env.MTN_MOMO_COLLECTION_API_USER || '';
   const apiKey = process.env.MTN_MOMO_COLLECTION_API_KEY || '';
   const subscriptionKey = process.env.MTN_MOMO_COLLECTION_SUBSCRIPTION_KEY || '';
-  if (!apiUser || !apiKey || !subscriptionKey) return null;
-  return { environment, targetEnvironment: environment === 'production' ? (process.env.MTN_MOMO_PRODUCTION_TARGET || '') : 'sandbox',
+  const targetEnvironment = environment === 'production' ? (process.env.MTN_MOMO_PRODUCTION_TARGET || '') : 'sandbox';
+  if (!apiUser || !apiKey || !subscriptionKey || !targetEnvironment) return null;
+  return { environment, targetEnvironment,
     baseUrl: environment === 'production' ? 'https://momodeveloper.mtn.com' : 'https://sandbox.momodeveloper.mtn.com',
     apiUser, apiKey, subscriptionKey };
 }
