@@ -230,6 +230,8 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
       NODE_ENV: 'production',
       SESSION_SECRET: strongSession,
       RESTOPASS_MASTER_SECRET: strongMaster,
+      RESTOPASS_SUPERADMIN_PASSWORD: 'a_long_unique_superadmin_password_2026',
+      RESTOPASS_BOSS_PASSWORD: 'a_long_unique_restaurant_boss_password_2026',
     } as unknown as NodeJS.ProcessEnv);
     assert.equal(valid.sessionSecret, strongSession);
     assert.equal(valid.masterSecret, strongMaster);
