@@ -127,13 +127,14 @@ case "$*" in
 esac
 EOF
 chmod 0755 "$TMP/bin/pg_restore" "$TMP/bin/psql"
-restore_report="$(DATABASE_URL=postgres://production/live RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
+restore_report="$(DATABASE_URL=postgres://production/live RESTOPASS_DR_RESTORE_TARGET_ISOLATED=true \
+RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
 RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" PATH="$TMP/bin:$TMP/image-bin:$PATH" \
   restopass-restore-drill "$TMP/valid-backup.enc" postgres://isolated-target/drill)"
 printf '%s\n' "$restore_report" | grep -q 'DISASTER RECOVERY RESTORE DRILL — SUCCESS'
 printf '%s\n' "$restore_report" | grep -q 'restaurants=1'
 if DATABASE_URL=postgres://same/live TARGET_DATABASE_URL=postgres://same/live \
-RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
+RESTOPASS_DR_RESTORE_TARGET_ISOLATED=true RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
 RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" PATH="$TMP/bin:$TMP/image-bin:$PATH" \
   restopass-restore-drill "$TMP/valid-backup.enc" >/dev/null 2>&1; then
   echo "DR drill unexpectedly allowed restore into DATABASE_URL" >&2
