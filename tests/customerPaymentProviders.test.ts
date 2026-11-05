@@ -68,7 +68,28 @@ test('customer permanent card QR is server-issued and uses the stored card versi
     server.indexOf('// POST /api/qr/verify')
   );
   assert.match(cardRoute, /customerRecord\.cardVersion/);
-  assert.match(cardRoute, /requireAuth\(\['super_admin', 'restaurant_admin', 'customer'\]\)/);
+  assert.match(cardRoute, /requireAuth\(\['super_admin', 'restaurant_admin', 'stand_staff', 'customer'\]\)/);
   assert.match(store, /getServerCustomerCardQr/);
   assert.match(customerView, /restoStore\.getServerCustomerCardQr\(customer\)/);
+});
+
+test('production card printing, registration and admin copy use server-signed tokens', () => {
+  const cardPrint = fs.readFileSync(
+    path.resolve(process.cwd(), 'src/components/restaurant/CardPrintStudio.tsx'),
+    'utf8'
+  );
+  const provisional = fs.readFileSync(
+    path.resolve(process.cwd(), 'src/components/scanner/ScannerProvisionalModal.tsx'),
+    'utf8'
+  );
+  const admin = fs.readFileSync(
+    path.resolve(process.cwd(), 'src/components/restaurant/RestaurantAdminView.tsx'),
+    'utf8'
+  );
+  assert.match(cardPrint, /restoStore\.getServerCustomerCardQr\(customer\)/);
+  assert.match(cardPrint, /restoStore\.getServerCustomerCardQr\(c\)/);
+  assert.match(provisional, /await restoStore\.getServerCustomerCardQr\(result\.customer\)/);
+  assert.match(provisional, /await restoStore\.getServerCustomerCardQr\(selectedCustomer\)/);
+  assert.match(admin, /restoStore\.getServerCustomerCardQr\(manageCustomer\)/);
+  assert.match(admin, /manageCardToken/);
 });
