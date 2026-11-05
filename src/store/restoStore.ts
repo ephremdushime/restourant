@@ -2369,6 +2369,7 @@ export class RestoStore {
         status: 'blocked',
         blockedReason: rejectionReason,
         tokenPayload: payload,
+        scanAuthorizationId: serverVerification?.authorizationId,
       };
       this.state.scanEvents.unshift(failEvent);
       if (customer) {
@@ -2628,6 +2629,7 @@ export class RestoStore {
           staffId,
           reference: `SCAN-${customer.memberNo}`,
           idempotencyKey,
+          scanAuthorizationId: serverVerification?.authorizationId,
         };
         this.appendLedgerEntry(newLedgerEntry);
         this.queueOutboxItem('ledger_entry', newLedgerEntry.id, newLedgerEntry);
@@ -2794,6 +2796,7 @@ export class RestoStore {
       staffId: scanEvent.staffId,
       reason: 'Second plate added on scan screen',
       reference: `EXTRA-2ND-${scanEvent.memberNo}`,
+      scanAuthorizationId: scanEvent.scanAuthorizationId,
     };
 
     this.state.ledgerEntries.push(extraEntry);
