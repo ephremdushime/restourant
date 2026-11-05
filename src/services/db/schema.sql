@@ -365,7 +365,7 @@ CREATE TABLE IF NOT EXISTS restaurant_subscription_payments (
     amount_rwf INT NOT NULL CHECK (amount_rwf > 0),
     currency CHAR(3) NOT NULL DEFAULT 'RWF' CHECK (currency = 'RWF'),
     status VARCHAR(24) NOT NULL DEFAULT 'created'
-      CHECK (status IN ('created','provider_pending','successful','failed','cancelled','expired')),
+      CHECK (status IN ('created','provider_pending','successful','failed','cancelled','expired','review_required')),
     idempotency_key VARCHAR(128) NOT NULL UNIQUE,
     request_fingerprint VARCHAR(64) NOT NULL,
     provider_status VARCHAR(64),
@@ -374,6 +374,13 @@ CREATE TABLE IF NOT EXISTS restaurant_subscription_payments (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Existing deployments must accept a final provider-success that fails a strict match.
+ALTER TABLE restaurant_subscription_payments
+  DROP CONSTRAINT IF EXISTS restaurant_subscription_payments_status_check;
+ALTER TABLE restaurant_subscription_payments
+  ADD CONSTRAINT restaurant_subscription_payments_status_check
+  CHECK (status IN ('created','provider_pending','successful','failed','cancelled','expired','review_required'));
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_restaurant_saas_provider_transaction
   ON restaurant_subscription_payments (provider, provider_environment, provider_transaction_id)
   WHERE provider_transaction_id IS NOT NULL;
