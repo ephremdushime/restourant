@@ -59,6 +59,9 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     userId: 'admin_' + otherRestaurantCode, username: 'other.admin',
     role: 'restaurant_admin', restaurantCode: otherRestaurantCode,
   });
+  const superAdminToken = serverModule.createSessionToken({
+    userId: 'saas_test_super_admin', username: 'saas.test.superadmin', role: 'super_admin',
+  });
 
   const originalFetch = globalThis.fetch;
   let requestToPayCount = 0;
@@ -105,6 +108,19 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
   };
 
   try {
+    // Super Admin browser sync must not be able to manufacture a paid licence.
+    const syncLicenseBypass = await request('POST', '/api/sync', superAdminToken, {
+      fullState: { licenses: [{
+        id: 'LIC-BYPASS-' + suffix, restaurantCode, planId: 'plan_integration',
+        maxScanPoints: 3, validUntil: '2099-01-01T00:00:00.000Z', graceDays: 3,
+        featureFlags: {}, signature: 'forged', issuedAt: new Date().toISOString(),
+        paidUntil: '2099-01-01T00:00:00.000Z',
+      }] },
+    });
+    assert.equal(syncLicenseBypass.status, 200);
+    const forgedLicense = await pool!.query('SELECT id FROM licenses WHERE id=$1', ['LIC-BYPASS-' + suffix]);
+    assert.equal(forgedLicense.rowCount, 0);
+
     const initial = await request('GET', '/api/restaurant-saas/subscription', adminToken);
     assert.equal(initial.status, 200);
     assert.equal(initial.body.subscription.status, 'pending_payment');
