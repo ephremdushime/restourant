@@ -9,6 +9,7 @@ import {
   loadStateFromPostgres,
   saveStateToPostgres,
   insertLedgerEntryPostgres,
+  commitPlateTransferPostgres,
 } from './src/services/db/postgresAdapter';
 import { recordTokenScan, isRedisConfigured, checkRedisReady } from './src/services/cache/redisClient';
 import { uploadBase64Photo } from './src/services/storage/objectStorage';
@@ -2330,34 +2331,86 @@ app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), as
     reason: `Transfer from #${customer.memberNo}`, reference: transferId,
   };
 
+  const auditLog = {
+    id: `audit_${transferId}`,
+    restaurantCode: customer.restaurantCode,
+    actorRole: 'customer',
+    actorName: customer.name,
+    userId: customer.id,
+    action: 'PLATES_TRANSFERRED',
+    details: `Transferred ${plates} plates to #${recipient.memberNo}`,
+    timestamp: now,
+  };
+  const notifications = [
+    {
+      id: `notif_${transferId}_sender`,
+      restaurantCode: customer.restaurantCode,
+      target: customer.id,
+      senderRole: 'system',
+      senderName: 'RestoPass Transfer',
+      type: 'plate_transfer',
+      title: `Sent ${plates} plates`,
+      message: `You transferred ${plates} plates to #${recipient.memberNo}.`,
+      priority: 'normal',
+      timestamp: now,
+      readByCustomerIds: [],
+    },
+    {
+      id: `notif_${transferId}_recipient`,
+      restaurantCode: recipient.restaurantCode,
+      target: recipient.id,
+      senderRole: 'system',
+      senderName: 'RestoPass Transfer',
+      type: 'plate_transfer',
+      title: `Received ${plates} plates`,
+      message: `You received ${plates} plates from #${customer.memberNo}.`,
+      priority: 'normal',
+      timestamp: now,
+      readByCustomerIds: [],
+    },
+  ];
+
+  if (isPostgresConfigured()) {
+    const committed = await commitPlateTransferPostgres({
+      transfer, ledgerOut, ledgerIn, auditLog, notifications,
+    });
+    if (!committed.ok) {
+      const status = committed.code === 'INSUFFICIENT_BALANCE' ? 400
+        : committed.code === 'CUSTOMER_NOT_FOUND' ? 404
+        : committed.code === 'NOT_READY' ? 503
+        : committed.code === 'IDEMPOTENCY_CONFLICT' ? 409 : 500;
+      return res.status(status).json({
+        success: false,
+        code: committed.code,
+        error: committed.message,
+      });
+    }
+
+    if (!committed.idempotent) {
+      serverDbState.ledgerEntries = [...(serverDbState.ledgerEntries || []), ledgerOut, ledgerIn];
+      serverDbState.transfers = [transfer, ...(serverDbState.transfers || [])];
+      serverDbState.auditLogs = [auditLog, ...(serverDbState.auditLogs || [])];
+      serverDbState.notifications = [...notifications, ...(serverDbState.notifications || [])];
+    }
+    return res.json({
+      success: true,
+      idempotent: committed.idempotent,
+      transfer: committed.transfer,
+      senderBalance: committed.senderBalance,
+      recipientBalance: committed.recipientBalance,
+    });
+  }
+
+  // Standalone mode is a single local process; Node's synchronous validation above
+  // completes before the first await, then this atomic snapshot persists the operation.
   const oldLedger = serverDbState.ledgerEntries;
   const oldTransfers = serverDbState.transfers;
   const oldAuditLogs = serverDbState.auditLogs;
   const oldNotifications = serverDbState.notifications;
   serverDbState.ledgerEntries = [...(oldLedger || []), ledgerOut, ledgerIn];
   serverDbState.transfers = [transfer, ...(oldTransfers || [])];
-  serverDbState.auditLogs = [{
-    id: `audit_${transferId}`, restaurantCode: customer.restaurantCode,
-    actorRole: 'customer', actorName: customer.name, action: 'PLATES_TRANSFERRED',
-    details: `Transferred ${plates} plates to #${recipient.memberNo}`, timestamp: now,
-  }, ...(oldAuditLogs || [])];
-  serverDbState.notifications = [
-    {
-      id: `notif_${transferId}_sender`, restaurantCode: customer.restaurantCode, target: customer.id,
-      senderRole: 'system', senderName: 'RestoPass Transfer', type: 'plate_transfer',
-      title: `Sent ${plates} plates`, message: `You transferred ${plates} plates to #${recipient.memberNo}.`,
-      priority: 'normal', timestamp: now, readByCustomerIds: [],
-    },
-    {
-      id: `notif_${transferId}_recipient`, restaurantCode: recipient.restaurantCode, target: recipient.id,
-      senderRole: 'system', senderName: 'RestoPass Transfer', type: 'plate_transfer',
-      title: `Received ${plates} plates`, message: `You received ${plates} plates from #${customer.memberNo}.`,
-      priority: 'normal', timestamp: now, readByCustomerIds: [],
-    },
-    ...(oldNotifications || []),
-  ];
-  if (customer.pinHash !== previousPinHash) console.info('[Auth] Upgraded legacy customer PIN hash to scrypt.');
-
+  serverDbState.auditLogs = [auditLog, ...(oldAuditLogs || [])];
+  serverDbState.notifications = [...notifications, ...(oldNotifications || [])];
   const saved = await queueDbSave(serverDbState);
   if (!saved) {
     serverDbState.ledgerEntries = oldLedger;
