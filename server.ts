@@ -134,7 +134,9 @@ try {
 let serverDbState: any = null;
 
 function isValidAppState(obj: any): boolean {
-  return Boolean(obj && typeof obj === 'object' && Array.isArray(obj.restaurants) && obj.restaurants.length > 0 && Array.isArray(obj.customers));
+  // An empty but correctly shaped database is valid on first cloud boot;
+  // the super-admin must be able to onboard the first restaurant.
+  return Boolean(obj && typeof obj === 'object' && Array.isArray(obj.restaurants) && Array.isArray(obj.customers));
 }
 
 if (fs.existsSync(DB_FILE)) {
