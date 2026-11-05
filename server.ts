@@ -86,7 +86,7 @@ function validateProductionSecrets(env: NodeJS.ProcessEnv = process.env): {
     }
 
     const staffPin = env.RESTOPASS_STAFF_DEFAULT_PIN?.trim();
-    if (staffPin && !/^\\d{6,8}$/.test(staffPin)) {
+    if (staffPin && !/^\d{6,8}$/.test(staffPin)) {
       throw new Error('[FATAL SECURITY ERROR] RESTOPASS_STAFF_DEFAULT_PIN must be 6-8 digits when configured.');
     }
 
