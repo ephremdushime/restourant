@@ -1721,8 +1721,11 @@ app.post(
     const currentRestaurant = (serverDbState?.restaurants || []).find((r: any) => r.code === restaurantCode);
     const restaurantLicenses = (serverDbState?.licenses || []).filter((l: any) => l.restaurantCode === restaurantCode);
     const licenseStatus = restaurantLicenses.find((l: any) => l.id === currentRestaurant?.currentLicenseId) || restaurantLicenses[restaurantLicenses.length - 1];
-    if (!currentRestaurant || currentRestaurant.status !== 'active' || !licenseStatus || new Date(licenseStatus.validUntil).getTime() <= Date.now()) {
-      return res.status(403).json({ success: false, error: 'Restaurant license is inactive or expired.' });
+    const paidUntilMs = licenseStatus ? new Date(licenseStatus.validUntil).getTime() : 0;
+    const graceEndsAtMs = paidUntilMs + 72 * 60 * 60 * 1000;
+    const blockedRestaurantStates = ['pending_payment', 'suspended', 'expired'];
+    if (!currentRestaurant || blockedRestaurantStates.includes(currentRestaurant.status) || !licenseStatus || !Number.isFinite(paidUntilMs) || Date.now() >= graceEndsAtMs) {
+      return res.status(403).json({ success: false, error: 'Restaurant subscription is inactive or the 72-hour renewal grace period has ended.' });
     }
 
     const parts = payload.split('.');
