@@ -3400,7 +3400,6 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
     const subscription = subResult.rows[0];
     const verifiedAt = new Date();
     const period = calculateRenewalPeriod(subscription.current_period_end, verifiedAt.toISOString());
-    const startMs = Date.parse(period.periodStart);
     const end = period.periodEnd;
     const graceEnd = period.gracePeriodEnd;
     const plan = (serverDbState?.plans||[]).find((item:any)=>item.id===restaurant.planId);
