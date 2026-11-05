@@ -74,7 +74,9 @@ services:
       - "127.0.0.1:3000:3000"
     environment:
       NODE_ENV: production
+      RESTOPASS_DEPLOYMENT_MODE: cloud
       PORT: 3000
+      PGMAX_CONNECTIONS: 10
       # Relational persistence connection
       DATABASE_URL: postgres://${POSTGRES_USER:-restopass_app}:${POSTGRES_PASSWORD:?Set_POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-restopass}
       PGSSLMODE: disable
