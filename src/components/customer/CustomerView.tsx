@@ -79,7 +79,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
   // Dynamic 30-second token rotation (only generated when dashboard subscription is active)
   const [tokenInfo, setTokenInfo] = useState(() =>
-    customer && !isDashboardGated
+    customer && !isDashboardGated && restoStore.isDemoModeActive()
       ? restoStore.getCustomerPhoneQr(customer)
       : { token: '', step: 0, secondsRemaining: 0 }
   );
