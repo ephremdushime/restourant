@@ -3275,7 +3275,8 @@ app.get('/api/restaurant-saas/subscription', apiRateLimiter, requireAuth(['resta
     const subscription = ensured.subscription;
     const periodEndMs = subscription.current_period_end ? new Date(subscription.current_period_end).getTime() : NaN;
     const nowMs = Date.now();
-    const computedStatus = !Number.isFinite(periodEndMs) ? 'pending_payment'
+    const computedStatus = subscription.status === 'cancelled' ? 'cancelled'
+      : !Number.isFinite(periodEndMs) ? 'pending_payment'
       : nowMs < periodEndMs ? 'active'
       : nowMs < periodEndMs + 72 * 60 * 60 * 1000 ? 'grace_period' : 'restricted';
     if (subscription.status !== computedStatus) {
