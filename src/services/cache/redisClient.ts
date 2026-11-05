@@ -15,6 +15,17 @@ export function isRedisConfigured(): boolean {
   return Boolean(process.env.REDIS_URL);
 }
 
+export async function checkRedisReady(): Promise<boolean> {
+  const client = getRedisClient();
+  if (!client) return false;
+  try {
+    return (await client.ping()) === 'PONG';
+  } catch (err: any) {
+    console.error('[Redis Replay Guard] Readiness check failed:', err?.message || err);
+    return false;
+  }
+}
+
 export function getRedisClient(): Redis | null {
   if (!isRedisConfigured()) return null;
 
@@ -40,7 +51,7 @@ export function getRedisClient(): Redis | null {
       });
 
       redisInstance.connect().catch((err) => {
-        console.warn('[Redis Replay Guard] Initial connection failed, falling back to in-memory mode:', err.message);
+        console.warn('[Redis Replay Guard] Initial connection failed; distributed replay protection remains unavailable:', err.message);
       });
     } catch (err: any) {
       console.warn('[Redis Replay Guard] Failed to initialize Redis client:', err.message);
@@ -85,7 +96,7 @@ export async function recordTokenScan(
         reason: 'REPLAY_DETECTED',
       };
     } catch (err: any) {
-      console.warn('[Redis Replay Guard] Redis query failed, using memory fallback:', err.message);
+      console.warn('[Redis Replay Guard] Redis query failed; distributed replay protection remains unavailable:', err.message);
     }
   }
 
