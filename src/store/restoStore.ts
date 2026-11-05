@@ -4212,7 +4212,7 @@ export class RestoStore {
       email: data.email.trim(),
       address: data.address.trim(),
       currency: data.currency || 'RWF',
-      status: 'active',
+      status: 'pending_payment',
       planId: data.planId,
       termsOverride,
       defaultPlatePriceRwf: data.singlePlatePriceRwf ? Number(data.singlePlatePriceRwf) : 1200,
@@ -4234,31 +4234,15 @@ export class RestoStore {
       isUsed: false,
     });
 
-    // Auto issue initial 30-day signed license with configured stations quota
-    const scanPointsLimit = data.licensedScanPoints || selectedPlan?.terms?.maxScanPointsIncluded || 2;
-    try {
-      this.issueLicense({
-        restaurantCode: code,
-        planId: data.planId,
-        maxScanPoints: Number(scanPointsLimit),
-        validDays: 30,
-        graceDays: selectedPlan?.terms?.graceDays || 7,
-        featureFlags: {
-          spotChecksEnabled: true,
-          multiStationEnabled: Number(scanPointsLimit) > 1,
-          secondPlateAllowed: true,
-          customerTransfersEnabled: true,
-        },
-      });
-    } catch (e) {
-      console.warn('Initial license issuance skipped in createRestaurant:', e);
-    }
+    // SaaS entitlement is deliberately not issued at registration.
+    // The restaurant remains pending_payment until a verified payment is
+    // applied by the authoritative billing service.
 
     this.logAudit({
       actorRole: 'super_admin',
       actorName: 'Ephrem (Founder)',
       action: 'RESTAURANT_ONBOARDED',
-      details: `Created restaurant ${code} - ${restaurant.name} on ${selectedPlan?.name || data.planId} with ${scanPointsLimit} licensed scan point stations. Generated activation code ${codeStr}`,
+      details: `Created restaurant ${code} - ${restaurant.name} on ${selectedPlan?.name || data.planId}; subscription pending verified payment. Generated activation code ${codeStr}`,
     });
 
     this.scheduleSaveState();
