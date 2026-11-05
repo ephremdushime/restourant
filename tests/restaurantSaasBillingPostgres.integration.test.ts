@@ -64,6 +64,7 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
   let requestToPayCount = 0;
   let requestBody: any = null;
   let providerAmount = '64999';
+  let providerStatus = 'PENDING';
   (globalThis as any).fetch = async (input: any, init?: any) => {
     const url = String(input);
     if (url.endsWith('/collection/token/')) {
@@ -78,7 +79,7 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     }
     if (url.includes('/collection/v1_0/requesttopay/')) {
       return new Response(JSON.stringify({
-        status: 'SUCCESSFUL',
+        status: providerStatus,
         amount: providerAmount,
         currency: 'RWF',
         externalId: requestBody.externalId,
@@ -145,6 +146,7 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     const noLicense = await pool!.query('SELECT id FROM licenses WHERE restaurant_code=$1', [restaurantCode]);
     assert.equal(noLicense.rowCount, 0);
 
+    providerStatus = 'SUCCESSFUL';
     providerAmount = '65000';
     const verified = await request(
       'POST', '/api/restaurant-saas/payment/' + encodeURIComponent(paymentId) + '/verify',
@@ -174,6 +176,37 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     );
     assert.equal(repeatedVerify.status, 200);
     assert.equal(repeatedVerify.body.alreadyApplied, true);
+
+    const otherInitial = await request('GET', '/api/restaurant-saas/subscription', otherAdminToken);
+    assert.equal(otherInitial.status, 200);
+    const otherInitiated = await request('POST', '/api/restaurant-saas/payment/initiate', otherAdminToken, {
+      payerMsisdn: '+250 788 123 456', idempotencyKey: 'saas-init-' + otherRestaurantCode + '-001',
+    });
+    assert.equal(otherInitiated.status, 202);
+    providerAmount = '64000';
+    const mismatchedSuccess = await request(
+      'POST', '/api/restaurant-saas/payment/' + encodeURIComponent(otherInitiated.body.paymentId) + '/verify',
+      otherAdminToken, {}
+    );
+    assert.equal(mismatchedSuccess.status, 200);
+    assert.equal(mismatchedSuccess.body.status, 'review_required');
+    const quarantined = await pool!.query(
+      'SELECT status,entitlement_applied_at FROM restaurant_subscription_payments WHERE id=$1',
+      [otherInitiated.body.paymentId]
+    );
+    assert.equal(quarantined.rows[0].status, 'review_required');
+    assert.equal(quarantined.rows[0].entitlement_applied_at, null);
+    const otherSubscription = await pool!.query(
+      'SELECT status,current_period_end FROM restaurant_subscriptions WHERE restaurant_code=$1',
+      [otherRestaurantCode]
+    );
+    assert.equal(otherSubscription.rows[0].status, 'pending_payment');
+    assert.equal(otherSubscription.rows[0].current_period_end, null);
+    const repeatedMismatch = await request(
+      'POST', '/api/restaurant-saas/payment/' + encodeURIComponent(otherInitiated.body.paymentId) + '/verify',
+      otherAdminToken, {}
+    );
+    assert.equal(repeatedMismatch.body.status, 'review_required');
 
     await pool!.query(
       "UPDATE restaurant_subscriptions SET status='restricted',current_period_end=NOW()-INTERVAL '73 hours' WHERE restaurant_code=$1",
