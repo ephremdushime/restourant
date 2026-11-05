@@ -2869,4 +2869,6 @@ export {
   setServerDbState,
   validateProductionSecrets,
   sanitizeSensitiveState,
+  normalizeStationUserCredentials,
+  verifyServerCustomerPin,
 };
