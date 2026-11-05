@@ -1228,42 +1228,53 @@ app.post(
 );
 
 // POST /api/customer/recovery/complete: Customer privately sets new PIN
-app.post('/api/customer/recovery/complete', authRateLimiter, (req, res) => {
-  const { requestId, recoveryCode, newPin } = req.body;
-  const cleanPin = (newPin || '').trim();
-  if (!/^\d{6,}$/.test(cleanPin)) {
-    return res.status(400).json({ success: false, error: 'PIN must be at least 6 numeric digits.' });
+app.post('/api/customer/recovery/complete', recoveryRateLimiter, async (req, res) => {
+  const { requestId, recoveryCode, newPin } = req.body || {};
+  const cleanPin = typeof newPin === 'string' ? newPin.trim() : '';
+  const cleanCode = typeof recoveryCode === 'string' ? recoveryCode.trim() : '';
+  if (!/^\d{6,}$/.test(cleanPin) || !cleanCode) {
+    return res.status(400).json({ success: false, error: 'A 6+ digit PIN and recovery code are required.' });
   }
 
   const requests = serverDbState?.pinRecoveryRequests || [];
-  const recReq = requests.find((r: any) => r.id === requestId);
+  const recReq = requests.find((item: any) => item.id === requestId);
   if (!recReq) return res.status(404).json({ success: false, error: 'Recovery request not found' });
   if (recReq.status !== 'approved') return res.status(400).json({ success: false, error: 'Request not authorized for reset.' });
-  if (recReq.expiresAt && new Date(recReq.expiresAt).getTime() < Date.now()) {
+  if (!recReq.expiresAt || new Date(recReq.expiresAt).getTime() <= Date.now()) {
     return res.status(400).json({ success: false, error: 'Recovery code expired' });
   }
 
-  const cleanCode = (recoveryCode || '').trim();
-  const codeHash = crypto.createHash('sha256').update(cleanCode).digest('hex');
-  if (recReq.recoveryCode !== cleanCode && recReq.recoveryCodeHash !== codeHash) {
+  const expectedCodeHash = serverHmac(MASTER_KEY, \`RECOVERY:\${recReq.id}:\${cleanCode}\`);
+  const legacyCodeHash = crypto.createHash('sha256').update(cleanCode).digest('hex');
+  if (!timingSafeCompare(recReq.recoveryCodeHash || '', expectedCodeHash) &&
+      recReq.recoveryCode !== cleanCode &&
+      recReq.recoveryCodeHash !== legacyCodeHash) {
     return res.status(400).json({ success: false, error: 'Invalid recovery code' });
   }
 
-  const customers = serverDbState?.customers || [];
-  const cust = customers.find((c: any) => c.id === recReq.customerId);
+  const cust = (serverDbState?.customers || []).find((item: any) =>
+    item.id === recReq.customerId && item.restaurantCode === recReq.restaurantCode
+  );
   if (!cust) return res.status(404).json({ success: false, error: 'Customer not found' });
 
-  const pinHash = computeServerCustomerPinHash(cleanPin, cust.id, cust.memberNo);
-  cust.pinHash = pinHash;
+  const previousCustomer = { ...cust };
+  const previousRequest = { ...recReq };
+  cust.pinHash = computeServerCustomerPinHash(cleanPin, cust.id, cust.memberNo);
   cust.hasCustomPin = true;
   cust.pinSetAt = new Date().toISOString();
   cust.failedLoginAttempts = 0;
   cust.lockedUntil = null;
-  cust.keyVersion = (cust.keyVersion || 1) + 1; // revokes previous session keys
+  cust.keyVersion = (cust.keyVersion || 1) + 1;
   recReq.status = 'completed';
   recReq.completedAt = new Date().toISOString();
+  delete recReq.recoveryCode;
 
-  queueDbSave(serverDbState);
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    Object.assign(cust, previousCustomer);
+    Object.assign(recReq, previousRequest);
+    return res.status(500).json({ success: false, error: 'PIN reset could not be committed. No account changes were confirmed.' });
+  }
   return res.json({ success: true, message: 'PIN reset successfully. You can now log in.' });
 });
 
