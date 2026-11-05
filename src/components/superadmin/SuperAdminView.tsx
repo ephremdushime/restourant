@@ -1563,7 +1563,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
             <form onSubmit={handleSavePlanTerms} className="space-y-3 text-xs">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-300 block mb-1 font-semibold">Monthly Base Price (RWF) *</label>
+                  <label className="text-slate-300 block mb-1 font-semibold">Monthly SaaS Subscription Price (RWF) *</label>
                   <input
                     type="number"
                     min={0}
