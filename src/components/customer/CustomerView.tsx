@@ -227,6 +227,8 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   const [platesToTransfer, setPlatesToTransfer] = useState(2);
   const [transferPin, setTransferPin] = useState('');
   const [transferMessage, setTransferMessage] = useState<{ text: string; isError: boolean } | null>(null);
+  const [transferRequestId, setTransferRequestId] = useState<string | null>(null);
+  const [transferSubmitting, setTransferSubmitting] = useState(false);
 
   // Recipient Lookup Helper
   const foundRecipient = customer
@@ -246,33 +248,60 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
       .join(' ');
   };
 
-  const handleExecuteTransfer = () => {
+  const handleExecuteTransfer = async () => {
     if (!customer || !foundRecipient) {
       setTransferMessage({ text: 'Recipient not found in this restaurant', isError: true });
       return;
     }
+    if (!navigator.onLine) {
+      setTransferMessage({ text: 'An internet connection is required to securely authorize a plate transfer. Reconnect and retry.', isError: true });
+      return;
+    }
+    const authToken = restoStore.getAuthToken();
+    if (!authToken) {
+      setTransferMessage({ text: 'Your secure session has expired. Please sign in again.', isError: true });
+      return;
+    }
 
-    const res = restoStore.transferPlates({
-      senderCustomerId: customer.id,
-      recipientIdentifier: foundRecipient.memberNo,
-      plates: Number(platesToTransfer),
-      pin: transferPin,
-    });
+    const requestId = transferRequestId || globalThis.crypto.randomUUID();
+    setTransferRequestId(requestId);
+    setTransferSubmitting(true);
+    try {
+      const response = await fetch('/api/customer/transfer', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          recipientIdentifier: foundRecipient.memberNo,
+          plates: Number(platesToTransfer),
+          pin: transferPin,
+          idempotencyKey: requestId,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        setTransferMessage({ text: result.error || 'Transfer failed. No transfer was confirmed.', isError: true });
+        if (result.requiresSubscription) setTransferRequiresSub(true);
+        return;
+      }
 
-    if (res.success) {
+      await restoStore.pullStateFromServer();
       setTransferMessage({ text: t.customer.transferSuccess, isError: false });
       setTransferRequiresSub(false);
+      setTransferRequestId(null);
       setTimeout(() => {
         setTransferModalOpen(false);
         setTransferMessage(null);
         setTransferPin('');
         setRecipientQuery('');
       }, 1500);
-    } else {
-      setTransferMessage({ text: res.error || 'Transfer failed', isError: true });
-      if (res.requiresSubscription) {
-        setTransferRequiresSub(true);
-      }
+    } catch {
+      // Keep the same idempotency key so a retry cannot create a duplicate transfer.
+      setTransferMessage({ text: 'Network error. Retry when connected; the request is protected against duplicate processing.', isError: true });
+    } finally {
+      setTransferSubmitting(false);
     }
   };
 
@@ -1444,10 +1473,10 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             <button
               type="button"
               onClick={handleExecuteTransfer}
-              disabled={!foundRecipient || !transferPin}
+              disabled={!foundRecipient || !transferPin || transferSubmitting}
               className="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-sm shadow-md transition-colors cursor-pointer"
             >
-              Confirm &amp; Transfer Plates
+              {transferSubmitting ? 'Processing securely…' : 'Confirm &amp; Transfer Plates'}
             </button>
           </div>
         </div>
