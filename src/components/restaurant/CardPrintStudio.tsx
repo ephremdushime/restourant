@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Customer, Package, Restaurant } from '../../types';
 import { restoStore } from '../../store/restoStore';
 import { QrCanvas } from '../common/QrCanvas';
@@ -108,8 +108,17 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
   };
 
   // Export Onboarding Manifest (CSV)
-  const handleExportManifestCsv = () => {
+  const handleExportManifestCsv = async () => {
     const cardsToExport = lastGeneratedBatch || restoCustomers;
+    const cardTokens = await Promise.all(cardsToExport.map((c) =>
+      restoStore.isDemoModeActive()
+        ? Promise.resolve(restoStore.getCustomerCardQr(c))
+        : restoStore.getServerCustomerCardQr(c)
+    ));
+    if (cardTokens.some((token) => !token)) {
+      setBatchSuccessNotice('Unable to retrieve a server-signed card token for every customer. Check your connection and try again.');
+      return;
+    }
     const headers = [
       'Member Number',
       'Card Serial',
@@ -118,8 +127,8 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
       'WhatsApp Invite Link',
     ];
 
-    const rows = cardsToExport.map((c) => {
-      const cardToken = restoStore.getCustomerCardQr(c);
+    const rows = cardsToExport.map((c, index) => {
+      const cardToken = cardTokens[index];
       const inviteMsg = encodeURIComponent(
         `Hello! Welcome to ${restaurant?.name || 'RestoPass'}. Your meal pass Member Number is #${c.memberNo}. Tap this link to set your PIN: https://restopass.rw/activate?token=${c.onboardingToken}`
       );
@@ -705,7 +714,20 @@ export const CardFrontView: React.FC<CardFrontViewProps> = ({
   isOnboarding,
   restaurant,
 }) => {
-  const cardToken = restoStore.getCustomerCardQr(customer);
+  const [cardToken, setCardToken] = useState(() =>
+    restoStore.isDemoModeActive() ? restoStore.getCustomerCardQr(customer) : ''
+  );
+  useEffect(() => {
+    let active = true;
+    const loadToken = async () => {
+      const token = restoStore.isDemoModeActive()
+        ? restoStore.getCustomerCardQr(customer)
+        : await restoStore.getServerCustomerCardQr(customer);
+      if (active) setCardToken(token);
+    };
+    void loadToken();
+    return () => { active = false; };
+  }, [customer.id, customer.restaurantCode, customer.memberNo, customer.cardVersion, customer.cardStatus]);
   const serialNo = `RP2026${customer.memberNo}`;
   const studentNo = customer.studentProfile?.registrationNumber?.trim() || null;
   const theme = getCardThemePalette(restaurant?.badgeStyle, restaurant?.primaryColor);
