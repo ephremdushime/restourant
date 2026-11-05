@@ -223,6 +223,30 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
       /placeholder/i
     );
 
+    // Administrator credentials are mandatory and cannot be left at known placeholders.
+    assert.throws(
+      () =>
+        validateProductionSecrets({
+          NODE_ENV: 'production',
+          SESSION_SECRET: 'prod_session_secret_with_at_least_32_characters_random_2026',
+          RESTOPASS_MASTER_SECRET: 'prod_master_secret_with_at_least_32_characters_random_2026!',
+        } as unknown as NodeJS.ProcessEnv),
+      /RESTOPASS_SUPERADMIN_PASSWORD/
+    );
+
+    assert.throws(
+      () =>
+        validateProductionSecrets({
+          NODE_ENV: 'production',
+          SESSION_SECRET: 'prod_session_secret_with_at_least_32_characters_random_2026',
+          RESTOPASS_MASTER_SECRET: 'prod_master_secret_with_at_least_32_characters_random_2026!',
+          RESTOPASS_SUPERADMIN_PASSWORD: 'a_long_unique_superadmin_password_2026',
+          RESTOPASS_BOSS_PASSWORD: 'a_long_unique_restaurant_boss_password_2026',
+          RESTOPASS_STAFF_DEFAULT_PIN: '1234',
+        } as unknown as NodeJS.ProcessEnv),
+      /6-8 digits/
+    );
+
     // Strong 32+ char secrets in production succeed
     const strongSession = 'prod_session_secret_with_at_least_32_characters_random_2026';
     const strongMaster = 'prod_master_secret_with_at_least_32_characters_random_2026!';
