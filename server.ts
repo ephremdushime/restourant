@@ -16,12 +16,19 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 // Configure trust proxy for cloud deployment (Cloudflare, AWS ALB, Nginx, Railway, Render)
-const trustProxySetting = process.env.TRUST_PROXY;
-if (trustProxySetting) {
-  app.set('trust proxy', trustProxySetting === 'true' ? true : Number(trustProxySetting) || trustProxySetting);
+const trustProxySetting = process.env.TRUST_PROXY?.trim().toLowerCase();
+if (trustProxySetting === 'true') {
+  app.set('trust proxy', true);
+} else if (trustProxySetting === 'false' || trustProxySetting === '0') {
+  app.set('trust proxy', false);
+} else if (trustProxySetting && /^\\d+$/.test(trustProxySetting)) {
+  app.set('trust proxy', Number(trustProxySetting));
+} else if (trustProxySetting) {
+  // Explicit trusted proxy subnet(s), e.g. loopback or a private reverse-proxy network.
+  app.set('trust proxy', trustProxySetting);
 } else {
-  // Default to 1 hop behind cloud reverse proxy
-  app.set('trust proxy', 1);
+  // Do not trust client-supplied X-Forwarded-* headers unless the operator opts in.
+  app.set('trust proxy', false);
 }
 
 // Cryptographic secrets for session signing & data integrity
