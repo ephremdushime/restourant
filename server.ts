@@ -3384,6 +3384,7 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
     if (actor.role !== 'super_admin' && payment.restaurant_code !== actor.restaurantCode) return res.status(403).json({success:false,error:'Payment belongs to another restaurant.'});
     if (payment.provider_environment !== config.environment) return res.status(409).json({success:false,error:'Payment environment mismatch.'});
     if (payment.entitlement_applied_at) return res.json({success:true,status:'successful',alreadyApplied:true});
+    if (payment.status === 'review_required') return res.json({success:true,status:'review_required',message:'MTN reported a successful transfer with mismatched payment details. No access was granted; manual reconciliation is required.'});
     const token = await getSaasMtnAccessToken(config);
     const lookup = payment.internal_reference.replace(/^RPS-/,'');
     const response = await fetch(config.baseUrl+'/collection/v1_0/requesttopay/'+encodeURIComponent(lookup),{method:'GET',headers:{
