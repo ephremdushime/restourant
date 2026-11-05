@@ -553,6 +553,20 @@ export async function commitPlateTransferPostgres(input: {
     );
     if (prior.rows.length) {
       const existing = prior.rows[0].data;
+      // An idempotency key may only replay the exact same transfer. Reusing it
+      // with altered parties, tenant, or amount is a conflict, never success.
+      const sameRequest =
+        existing?.id === transfer.id &&
+        existing?.idempotencyKey === transfer.idempotencyKey &&
+        existing?.restaurantCode === transfer.restaurantCode &&
+        existing?.senderCustomerId === transfer.senderCustomerId &&
+        existing?.recipientCustomerId === transfer.recipientCustomerId &&
+        Number(existing?.plates) === Number(transfer.plates);
+      if (!sameRequest) {
+        await client.query('ROLLBACK');
+        transactionOpen = false;
+        return { ok: false, code: 'IDEMPOTENCY_CONFLICT', message: 'This idempotency key was already used for a different transfer.' };
+      }
       const balances = await client.query(
         'SELECT customer_id, COALESCE(SUM(plates_delta), 0)::int AS balance FROM ledger_entries WHERE restaurant_code = $1 AND customer_id = ANY($2::varchar[]) GROUP BY customer_id',
         [transfer.restaurantCode, [transfer.senderCustomerId, transfer.recipientCustomerId]]
