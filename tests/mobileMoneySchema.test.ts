@@ -27,6 +27,8 @@ test('restaurant SaaS billing has isolated payment tables and one unresolved req
   assert.match(schema, /CREATE TABLE IF NOT EXISTS restaurant_subscription_audit_logs/);
   assert.match(schema, /uq_restaurant_saas_provider_transaction/);
   assert.match(schema, /uq_restaurant_saas_one_unresolved_payment/);
+  assert.match(schema, /'review_required'/);
+  assert.match(server, /SAAS_PAYMENT_REVIEW_REQUIRED/);
   assert.match(schema, /WHERE status IN \('created','provider_pending'\)/);
   assert.match(server, /An earlier MTN request is still unresolved/);
   assert.match(server, /RESTOPASS_SAAS_MTN_PRODUCTION_APPROVED/);
