@@ -2264,7 +2264,44 @@ export class RestoStore {
 
   private activeScanLocks: Set<string> = new Set();
 
-  public processScan(payload: string): {
+  public async processScanWithServer(payload: string): Promise<ReturnType<RestoStore['processScan']>> {
+    const restaurantCode = this.state.currentRestaurantCode;
+    const stationId = this.state.currentStationId;
+    const sessionToken = this.getAuthToken();
+    if (!sessionToken) {
+      return this.processScan(payload, {
+        valid: false, type: 'phone', restaurantCode, memberNo: '', version: 1,
+        isCard: false, error: 'Your scanning session has expired. Sign in again.',
+      });
+    }
+    const customerKeyVersionMap: Record<string, { keyVersion: number; cardVersion: number; cardStatus: string }> = {};
+    this.state.customers
+      .filter((customer) => customer.restaurantCode === restaurantCode)
+      .forEach((customer) => {
+        customerKeyVersionMap[customer.memberNo] = {
+          keyVersion: customer.keyVersion,
+          cardVersion: customer.cardVersion,
+          cardStatus: customer.cardStatus,
+        };
+      });
+    try {
+      const verification = await verifyQrTokenServer(
+        payload,
+        restaurantCode,
+        stationId,
+        sessionToken,
+        customerKeyVersionMap
+      );
+      return this.processScan(payload, verification);
+    } catch {
+      return this.processScan(payload, {
+        valid: false, type: 'phone', restaurantCode, memberNo: '', version: 1,
+        isCard: false, error: 'Server verification is unavailable. Scan was not accepted.',
+      });
+    }
+  }
+
+  public processScan(payload: string, serverVerification?: TokenVerificationResult): {
     outcome: 'ACCEPTED' | 'REJECTED';
     accepted: boolean;
     deducted: number;
@@ -2385,7 +2422,7 @@ export class RestoStore {
         };
       });
 
-    const verifyResult = verifyQrToken(payload, restaurantCode, customerKeyVersionMap);
+    const verifyResult = serverVerification || verifyQrToken(payload, restaurantCode, customerKeyVersionMap);
     const matchedCustomer = this.state.customers.find(
       (c) => c.memberNo === verifyResult.memberNo && c.restaurantCode === restaurantCode
     );
