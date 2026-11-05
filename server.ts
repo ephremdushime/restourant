@@ -1191,31 +1191,38 @@ app.post('/api/customer/recovery/request', recoveryRateLimiter, async (req, res)
   return res.json({ success: true, requestId });
 });
 
-// POST /api/customer/recovery/approve: Manager authorizes recovery and issues reset code
+// POST /api/customer/recovery/approve: Tenant administrator authorizes recovery and issues reset code
 app.post(
   '/api/customer/recovery/approve',
   apiRateLimiter,
   requireAuth(['restaurant_admin', 'super_admin']),
-  (req, res) => {
-    const { requestId } = req.body;
+  async (req, res) => {
+    const { requestId } = req.body || {};
     const requests = serverDbState?.pinRecoveryRequests || [];
-    const recReq = requests.find((r: any) => r.id === requestId);
+    const recReq = requests.find((item: any) => item.id === requestId);
     if (!recReq) return res.status(404).json({ success: false, error: 'Recovery request not found' });
+    if (req.user!.role !== 'super_admin' && recReq.restaurantCode !== req.user!.restaurantCode) {
+      return res.status(403).json({ success: false, error: 'This recovery request belongs to another restaurant.' });
+    }
     if (recReq.status !== 'pending') return res.status(400).json({ success: false, error: 'Request is already reviewed' });
 
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+    const previous = { ...recReq };
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const codeHash = serverHmac(MASTER_KEY, \`RECOVERY:\${recReq.id}:\${code}\`);
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-
     recReq.status = 'approved';
-    recReq.recoveryCode = code;
     recReq.recoveryCodeHash = codeHash;
+    delete recReq.recoveryCode;
     recReq.authorizingStaffId = req.user!.userId;
     recReq.authorizingStaffName = req.user!.username;
     recReq.approvedAt = new Date().toISOString();
     recReq.expiresAt = expiresAt;
 
-    queueDbSave(serverDbState);
+    const saved = await queueDbSave(serverDbState);
+    if (!saved) {
+      Object.assign(recReq, previous);
+      return res.status(500).json({ success: false, error: 'Recovery authorization could not be committed.' });
+    }
     return res.json({ success: true, recoveryCode: code, expiresAt });
   }
 );
