@@ -22,6 +22,18 @@ export function isPostgresConfigured(): boolean {
   return Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL);
 }
 
+export async function checkPostgresReady(): Promise<boolean> {
+  const p = getPostgresPool();
+  if (!p || !isInitialized) return false;
+  try {
+    await p.query('SELECT 1');
+    return true;
+  } catch (err) {
+    console.error('[PostgreSQL Adapter] Readiness check failed:', err);
+    return false;
+  }
+}
+
 export function getPostgresPool(): Pool | null {
   if (!isPostgresConfigured()) return null;
   if (!pool) {
