@@ -74,7 +74,8 @@ Payment verification and entitlement extension must commit atomically. Version 1
 The collection integration expects server-side secrets only:
 
 - `RESTOPASS_SAAS_MTN_ENABLED=true`
-- `MTN_MOMO_TARGET_ENVIRONMENT=sandbox` (or `production`)
+- For production-like staging only, `MTN_MOMO_TARGET_ENVIRONMENT=sandbox` also requires `RESTOPASS_SAAS_MTN_SANDBOX_APPROVED=true`; the API base URL remains the MTN sandbox host.
+- `MTN_MOMO_TARGET_ENVIRONMENT=production` (production only)
 - `MTN_MOMO_COLLECTION_API_USER`
 - `MTN_MOMO_COLLECTION_API_KEY`
 - `MTN_MOMO_COLLECTION_SUBSCRIPTION_KEY`
