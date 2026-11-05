@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Language } from '../../types';
 import { restoStore } from '../../store/restoStore';
 import { translations } from '../../services/i18n';
-import { generateCardToken } from '../../services/cryptoService';
+import { requestCardTokenFromServer, requestPhoneTokenFromServer } from '../../services/cryptoService';
 import { QrCanvas } from '../common/QrCanvas';
 import {
   Send,
@@ -78,11 +78,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   const [transferRequiresSub, setTransferRequiresSub] = useState(false);
 
   // Dynamic 30-second token rotation (only generated when dashboard subscription is active)
-  const [tokenInfo, setTokenInfo] = useState(() =>
-    customer && !isDashboardGated
-      ? restoStore.getCustomerPhoneQr(customer)
-      : { token: '', step: 0, secondsRemaining: 0 }
-  );
+  const [tokenInfo, setTokenInfo] = useState({ token: '', step: 0, secondsRemaining: 0 });
   const [qrPassType, setQrPassType] = useState<'dynamic' | 'permanent'>('dynamic');
   const [copiedRef, setCopiedRef] = useState(false);
   const [plansExpanded, setPlansExpanded] = useState(false);
@@ -172,15 +168,36 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
   const badgeTheme = getBadgeTheme(currentRestaurant?.badgeStyle);
 
-  const permanentCardToken =
-    customer && !isDashboardGated
-      ? generateCardToken(customer.restaurantCode, customer.memberNo, customer.cardVersion)
-      : '';
+  const [permanentCardToken, setPermanentCardToken] = useState('');
 
-  const handleForceRefresh = () => {
-    if (customer && !isDashboardGated) {
-      setTokenInfo(restoStore.getCustomerPhoneQr(customer));
-    }
+  useEffect(() => {
+    let cancelled = false;
+    const loadCardToken = async () => {
+      if (!customer || isDashboardGated) {
+        setPermanentCardToken('');
+        return;
+      }
+      const token = await requestCardTokenFromServer(
+        customer.restaurantCode,
+        customer.memberNo,
+        customer.cardVersion,
+        restoStore.getAuthToken() || undefined
+      );
+      if (!cancelled) setPermanentCardToken(token);
+    };
+    void loadCardToken();
+    return () => { cancelled = true; };
+  }, [customer?.id, customer?.cardVersion, isDashboardGated]);
+
+  const handleForceRefresh = async () => {
+    if (!customer || isDashboardGated) return;
+    const token = await requestPhoneTokenFromServer(
+      customer.restaurantCode,
+      customer.memberNo,
+      customer.keyVersion,
+      restoStore.getAuthToken() || undefined
+    );
+    setTokenInfo(token);
   };
 
   useEffect(() => {
@@ -188,13 +205,20 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
       setTokenInfo({ token: '', step: 0, secondsRemaining: 0 });
       return;
     }
-    const updateToken = () => {
-      setTokenInfo(restoStore.getCustomerPhoneQr(customer));
+    let cancelled = false;
+    const updateToken = async () => {
+      const token = await requestPhoneTokenFromServer(
+        customer.restaurantCode,
+        customer.memberNo,
+        customer.keyVersion,
+        restoStore.getAuthToken() || undefined
+      );
+      if (!cancelled) setTokenInfo(token);
     };
-    updateToken();
-    const interval = setInterval(updateToken, 1000);
-    return () => clearInterval(interval);
-  }, [customer, isDashboardGated]);
+    void updateToken();
+    const interval = setInterval(() => { void updateToken(); }, 5000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [customer?.id, customer?.keyVersion, isDashboardGated]);
 
   // View Mode: 'qr_pass' | 'notifications' | 'history'
   const [activeTab, setActiveTab] = useState<'qr_pass' | 'notifications' | 'history'>('qr_pass');
