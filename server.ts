@@ -2247,7 +2247,7 @@ app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), as
     return res.status(400).json({ success: false, error: 'Valid recipient, 6+ digit PIN, positive whole plate amount, and idempotency key are required.' });
   }
 
-  const transferId = \`tr_\${crypto.createHash('sha256').update(\`\${customer.id}:\${idempotencyKey}\`).digest('hex').slice(0, 40)}\`;
+  const transferId = `tr_${crypto.createHash('sha256').update(`${customer.id}:${idempotencyKey}`).digest('hex').slice(0, 40)}`;
   const existingTransfer = (serverDbState.transfers || []).find((item: any) => item.id === transferId);
   if (existingTransfer) {
     return res.json({ success: true, idempotent: true, transfer: existingTransfer, senderBalance: getServerCustomerBalance(serverDbState, customer.id) });
@@ -2284,7 +2284,7 @@ app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), as
   const availableBalance = getServerCustomerBalance(serverDbState, customer.id);
   if (availableBalance < plates) {
     if (customer.pinHash !== previousPinHash) await queueDbSave(serverDbState);
-    return res.status(400).json({ success: false, error: \`Insufficient plates. Available balance: \${availableBalance}.\` });
+    return res.status(400).json({ success: false, error: `Insufficient plates. Available balance: ${availableBalance}.` });
   }
 
   const now = new Date().toISOString();
@@ -2296,16 +2296,16 @@ app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), as
     plates, timestamp: now, status: 'completed',
   };
   const ledgerOut = {
-    id: \`led_\${transferId}_out\`, idempotencyKey: \`transfer:\${transferId}:out\`,
+    id: `led_${transferId}_out`, idempotencyKey: `transfer:${transferId}:out`,
     customerId: customer.id, restaurantCode: customer.restaurantCode,
     type: 'transfer_out', platesDelta: -plates, timestamp: now,
-    reason: \`Transfer to #\${recipient.memberNo}\`, reference: transferId,
+    reason: `Transfer to #${recipient.memberNo}`, reference: transferId,
   };
   const ledgerIn = {
-    id: \`led_\${transferId}_in\`, idempotencyKey: \`transfer:\${transferId}:in\`,
+    id: `led_${transferId}_in`, idempotencyKey: `transfer:${transferId}:in`,
     customerId: recipient.id, restaurantCode: recipient.restaurantCode,
     type: 'transfer_in', platesDelta: plates, timestamp: now,
-    reason: \`Transfer from #\${customer.memberNo}\`, reference: transferId,
+    reason: `Transfer from #${customer.memberNo}`, reference: transferId,
   };
 
   const oldLedger = serverDbState.ledgerEntries;
@@ -2317,21 +2317,21 @@ app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), as
   serverDbState.ledgerEntries = [...(oldLedger || []), ledgerOut, ledgerIn];
   serverDbState.transfers = [transfer, ...(oldTransfers || [])];
   serverDbState.auditLogs = [{
-    id: \`audit_\${transferId}\`, restaurantCode: customer.restaurantCode,
+    id: `audit_${transferId}`, restaurantCode: customer.restaurantCode,
     actorRole: 'customer', actorName: customer.name, action: 'PLATES_TRANSFERRED',
-    details: \`Transferred \${plates} plates to #\${recipient.memberNo}\`, timestamp: now,
+    details: `Transferred ${plates} plates to #${recipient.memberNo}`, timestamp: now,
   }, ...(oldAuditLogs || [])];
   serverDbState.notifications = [
     {
-      id: \`notif_\${transferId}_sender\`, restaurantCode: customer.restaurantCode, target: customer.id,
+      id: `notif_${transferId}_sender`, restaurantCode: customer.restaurantCode, target: customer.id,
       senderRole: 'system', senderName: 'RestoPass Transfer', type: 'plate_transfer',
-      title: \`Sent \${plates} plates\`, message: \`You transferred \${plates} plates to #\${recipient.memberNo}.\`,
+      title: `Sent ${plates} plates`, message: `You transferred ${plates} plates to #${recipient.memberNo}.`,
       priority: 'normal', timestamp: now, readByCustomerIds: [],
     },
     {
-      id: \`notif_\${transferId}_recipient\`, restaurantCode: recipient.restaurantCode, target: recipient.id,
+      id: `notif_${transferId}_recipient`, restaurantCode: recipient.restaurantCode, target: recipient.id,
       senderRole: 'system', senderName: 'RestoPass Transfer', type: 'plate_transfer',
-      title: \`Received \${plates} plates\`, message: \`You received \${plates} plates from #\${customer.memberNo}.\`,
+      title: `Received ${plates} plates`, message: `You received ${plates} plates from #${customer.memberNo}.`,
       priority: 'normal', timestamp: now, readByCustomerIds: [],
     },
     ...(oldNotifications || []),
