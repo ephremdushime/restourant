@@ -3232,7 +3232,7 @@ async function getSaasMtnAccessToken(config: NonNullable<ReturnType<typeof getSa
   const response = await fetch(config.baseUrl + '/collection/token/', { method: 'POST', headers: {
     Authorization: 'Basic ' + credentials, 'Ocp-Apim-Subscription-Key': config.subscriptionKey,
     'X-Target-Environment': config.targetEnvironment,
-  }});
+  }, signal: AbortSignal.timeout(10000) });
   if (!response.ok) throw new Error('MTN token request failed: HTTP ' + response.status);
   const body: any = await response.json();
   if (typeof body.access_token !== 'string' || !body.access_token) throw new Error('MTN access token missing');
