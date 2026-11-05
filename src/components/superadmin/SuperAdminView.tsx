@@ -147,9 +147,22 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
     setEditRestoPlatePrice(resto.defaultPlatePriceRwf || 1200);
   };
 
-  const handleSaveRestoPricing = (e: React.FormEvent) => {
+  const handleSaveRestoPricing = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingResto) return;
+    try {
+      const token = restoStore.getAuthToken();
+      const response = await fetch('/api/restaurant-saas/subscription/price', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+        body: JSON.stringify({ restaurantCode: editingResto.code, amountRwf: Number(editRestoBasePrice) }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || 'Could not update SaaS subscription price.');
+    } catch (error: any) {
+      showToast(error?.message || 'Could not update SaaS subscription price.');
+      return;
+    }
     restoStore.updateRestaurantPricingAndTerms(editingResto.code, {
       basePriceRwf: Number(editRestoBasePrice),
       pricePerExtraScanPointRwf: Number(editRestoExtraScanFee),
@@ -1354,7 +1367,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
                   <div>
                     <label className="text-slate-300 block mb-1 font-semibold">
-                      Monthly Base Price (RWF) *
+                      RestoPass Monthly SaaS Subscription (RWF) *
                     </label>
                     <input
                       type="number"
@@ -1365,7 +1378,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                       onChange={(e) => setNewBasePrice(Math.max(0, parseInt(e.target.value) || 0))}
                       className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white font-mono"
                     />
-                    <span className="text-[10px] text-slate-500">Base monthly fee</span>
+                    <span className="text-[10px] text-slate-500">Charged to the restaurant for 30 days of software access</span>
                   </div>
                 </div>
 
