@@ -46,6 +46,7 @@ import {
 import {
   deriveRestaurantKey,
   deriveCustomerKey,
+  TokenVerificationResult,
   hashIdNumber,
   signLicensePayload,
   generateActivationCode,
