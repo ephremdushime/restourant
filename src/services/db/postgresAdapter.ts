@@ -11,6 +11,9 @@
 import { Pool, PoolConfig } from 'pg';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'node:url';
+
+const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 
 let pool: Pool | null = null;
 let isInitialized = false;
@@ -70,7 +73,7 @@ export async function initPostgres(initialStateToMigrate?: any): Promise<boolean
   }
 
   try {
-    const schemaPath = path.resolve(__dirname, 'schema.sql');
+    const schemaPath = path.resolve(moduleDirectory, 'schema.sql');
     let ddl = '';
     if (fs.existsSync(schemaPath)) {
       ddl = fs.readFileSync(schemaPath, 'utf-8');
