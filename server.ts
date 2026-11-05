@@ -232,10 +232,15 @@ function atomicSaveDb(state: any): boolean {
       }
     }
     if (!saved) {
-      try { fs.writeFileSync(DB_FILE, serialized, 'utf-8'); } catch {}
+      try {
+        fs.writeFileSync(DB_FILE, serialized, { encoding: 'utf-8', flag: 'w' });
+        saved = true;
+      } catch (writeErr) {
+        console.error('[Server Authority] Final persistence fallback failed:', writeErr);
+      }
       try { fs.unlinkSync(tempFile); } catch {}
     }
-    return true;
+    return saved;
   } catch (err) {
     console.error('[Server Authority] Critical Error persisting database:', err);
     return false;
@@ -2355,16 +2360,20 @@ async function startServer() {
     console.log('[Server Authority] PostgreSQL detected. Connecting and initializing schema...');
     try {
       const initialized = await initPostgres(serverDbState);
-      if (initialized) {
-        const pgState = await loadStateFromPostgres();
-        if (pgState && isValidAppState(pgState)) {
-          serverDbState = pgState;
-          ensureServerDbDefaults(serverDbState);
-          console.log('[Server Authority] Authoritative state loaded from PostgreSQL.');
-        }
+      if (!initialized) {
+        throw new Error('PostgreSQL is configured but initialization failed. Refusing to start with a non-authoritative local JSON database.');
       }
+      const pgState = await loadStateFromPostgres();
+      if (!pgState || !isValidAppState(pgState)) {
+        throw new Error('PostgreSQL is configured but authoritative state could not be loaded. Refusing split-brain fallback.');
+      }
+      serverDbState = pgState;
+      ensureServerDbDefaults(serverDbState);
+      console.log('[Server Authority] Authoritative state loaded from PostgreSQL.');
     } catch (pgBootErr) {
-      console.error('[Server Authority] PostgreSQL startup initialization failed, falling back to db.json:', pgBootErr);
+      console.error('[Server Authority] PostgreSQL startup initialization failed:', pgBootErr);
+      if (isProduction) throw pgBootErr;
+      console.warn('[Server Authority] Development-only fallback to local db.json is active.');
     }
   } else {
     console.log('[Server Authority] Running in standalone local storage mode (Offline Reception Laptop compatible).');
