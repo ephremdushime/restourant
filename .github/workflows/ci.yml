@@ -3,7 +3,7 @@ name: RestoPass CI Security & Quality Gate
 on:
   # Validate direct changes to the production branch.
   push:
-    branches: [main]
+    branches: [main, security/production-hardening]
   # Validate feature branches through their pull requests.
   # Do not also run on feature-branch pushes: that duplicates the PR run.
   pull_request:
