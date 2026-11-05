@@ -72,6 +72,8 @@ jobs:
           sh -n deploy/restore-offsite.sh
           sh -n deploy/restore-drill.sh
           sh -n deploy/backup-healthcheck.sh
+          sh -n deploy/restore-drill.sh
+          bash -n deploy/verify-staging.sh
           sh -n tests/backup-recovery.test.sh
           sh tests/backup-recovery.test.sh
 
