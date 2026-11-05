@@ -420,6 +420,26 @@ export interface UserSession {
 
 const revokedTokens = new Set<string>();
 
+// Bound the in-memory revocation registry by pruning expired or malformed tokens.
+// Tokens are still checked synchronously by verifySessionToken; this only reclaims
+// entries that can no longer represent a valid session.
+setInterval(() => {
+  const now = Date.now();
+  for (const token of revokedTokens) {
+    const parts = token.slice('rp_sess_'.length).split('.');
+    if (parts.length !== 2) {
+      revokedTokens.delete(token);
+      continue;
+    }
+    try {
+      const payload = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf-8'));
+      if (!Number.isFinite(payload.exp) || payload.exp <= now) revokedTokens.delete(token);
+    } catch {
+      revokedTokens.delete(token);
+    }
+  }
+}, 10 * 60 * 1000).unref();
+
 /**
  * Constant-time string equality check to prevent timing side channels
  */
