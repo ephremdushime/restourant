@@ -20,3 +20,9 @@ test('mobile-money persistence is provider-neutral, idempotent and separated fro
   assert.match(server, /PAYMENT_PROVIDER_NOT_CONFIGURED/);
   assert.match(server, /Payment callback verification is not configured/);
 });
+
+
+test('restaurant SaaS unresolved payment guard includes review-required transactions', () => {
+  assert.match(schema, /uq_restaurant_saas_one_unresolved_payment[\\s\\S]*?status IN \\('created','provider_pending','review_required'\\)/);
+  assert.match(server, /review_required.*manual reconciliation|unresolved or requires manual reconciliation/);
+});
