@@ -1,6 +1,6 @@
 # RestoPass Restaurant SaaS Subscription Billing
 
-**Status:** Design approved; implementation in progress.  
+**Status:** Implemented on the production-hardening branch; automated verification and MTN Rwanda sandbox/UAT evidence remain pending.  
 **Merchant:** Bestie Companies Ltd.  
 **Purpose:** Collect RestoPass software-access fees from restaurants only.  
 **Provider target:** MTN MoMo Collections.  
@@ -86,8 +86,8 @@ Do not configure the production gate until MTN has approved the own-merchant col
 
 ## Remaining release gates
 
-- Run the full CI build, lint and automated test suite against this branch.
-- Run the new PostgreSQL-backed billing integration test and extend it to cover database rollback, concurrent renewals and transaction-status reconciliation races.
+- Run the full CI build, lint and automated test suite against the exact current hardening-branch SHA; no passing run is currently recorded for that SHA.
+- Execute the PostgreSQL-backed billing integration test. It covers payment verification, tenant isolation, entitlement restriction, idempotent verification, mismatch quarantine and duplicate-charge blocking; database rollback, concurrent renewals and reconciliation races still need dedicated tests.
 - Confirm the MTN RequestToPay response fields and status lookup behavior against the exact Rwanda merchant sandbox credentials and UAT workbook; the current integration test uses a mocked provider and is not an MTN sandbox test.
 - Complete security review of manual Super Admin licence overrides and make the override reason mandatory.
 - Add automated production monitoring/reconciliation for payment attempts left pending after network timeouts; v1 exposes manual server-side status checks only.
