@@ -3342,12 +3342,12 @@ app.post('/api/restaurant-saas/payment/initiate', apiRateLimiter, requireAuth(['
       await client.query('COMMIT'); return res.json({success:true,payment:prior.rows[0],reused:true});
     }
     const pending = await client.query(
-      "SELECT * FROM restaurant_subscription_payments WHERE restaurant_code=$1 AND status IN ('created','provider_pending') ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
+      "SELECT * FROM restaurant_subscription_payments WHERE restaurant_code=$1 AND status IN ('created','provider_pending','review_required') ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
       [req.user!.restaurantCode]
     );
     if (pending.rows[0]) {
       await client.query('COMMIT');
-      return res.status(202).json({success:true,payment:pending.rows[0],reused:true,message:'An earlier MTN request is still unresolved. Check its status before starting another payment.'});
+      return res.status(202).json({success:true,payment:pending.rows[0],reused:true,message:'An earlier MTN payment is unresolved or requires manual reconciliation. Do not start another payment until it is resolved.'});
     }
     await client.query("INSERT INTO restaurant_subscription_payments (id,restaurant_code,provider,provider_environment,internal_reference,payer_msisdn,amount_rwf,currency,status,idempotency_key,request_fingerprint) VALUES ($1,$2,'mtn_momo',$3,$4,$5,$6,'RWF','created',$7,$8)",
       [paymentId,req.user!.restaurantCode,config.environment,reference,payer,amount,idempotencyKey,fingerprint]);
@@ -3408,8 +3408,9 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
       const providerSaysSuccessful = provider?.status === 'SUCCESSFUL';
       const status = providerSaysSuccessful ? 'review_required'
         : ['FAILED','REJECTED','TIMEOUT','EXPIRED'].includes(provider?.status) ? 'failed' : 'provider_pending';
-      await pool.query('UPDATE restaurant_subscription_payments SET status=$2,provider_status=$3,updated_at=NOW() WHERE id=$1 AND entitlement_applied_at IS NULL',
-        [payment.id,status,String(provider?.status||'UNKNOWN').slice(0,64)]);
+      await pool.query('UPDATE restaurant_subscription_payments SET status=$2,provider_status=$3,provider_transaction_id=CASE WHEN $2='review_required' THEN $4 ELSE provider_transaction_id END,updated_at=NOW() WHERE id=$1 AND entitlement_applied_at IS NULL',
+        [payment.id,status,String(provider?.status||'UNKNOWN').slice(0,64),
+          status === 'review_required' && typeof provider?.financialTransactionId === 'string' ? provider.financialTransactionId : null]);
       if (status === 'review_required') {
         await pool.query("INSERT INTO restaurant_subscription_audit_logs (id,restaurant_code,actor_type,action,payment_id,data) VALUES ($1,$2,'system','SAAS_PAYMENT_REVIEW_REQUIRED',$3,$4)",
           ['rsa_'+crypto.randomUUID(),payment.restaurant_code,payment.id,JSON.stringify({
