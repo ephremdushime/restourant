@@ -50,6 +50,12 @@ Based on the memory budget above, we assess the standard AOS Cloud virtual machi
 
 ---
 
+
+
+## 2.3 Constrained 4 GiB pilot option (not the default production recommendation)
+
+The default production Compose profile remains sized for 8 GiB RAM / 4 vCPU. A separate constrained override is available at `deploy/docker-compose.4gb.yml`, with a detailed acceptance gate in `docs/4GB_PILOT_PROFILE.md`. It reduces the five service memory ceilings to 2,240 MiB combined and applies conservative PostgreSQL, Redis and Node.js limits. This is a candidate for a single small pilot only; it has not been proven under hosted meal-service load. Do not apply the original 8 GiB profile on a 4 GiB host. Do not represent the 4 GiB profile as production-capacity validated until the actual VM passes load, backup, restore and OOM monitoring tests. The 8 GiB / 4 vCPU profile remains the recommended first production deployment.
+
 ## 3. Realistic Operational Capacity & Scaling Limits
 
 ### 3.1 Pilot Baseline Capacity
