@@ -20,3 +20,14 @@ test('mobile-money persistence is provider-neutral, idempotent and separated fro
   assert.match(server, /PAYMENT_PROVIDER_NOT_CONFIGURED/);
   assert.match(server, /Payment callback verification is not configured/);
 });
+
+test('restaurant SaaS billing has isolated payment tables and one unresolved request per tenant', () => {
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS restaurant_subscriptions/);
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS restaurant_subscription_payments/);
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS restaurant_subscription_audit_logs/);
+  assert.match(schema, /uq_restaurant_saas_provider_transaction/);
+  assert.match(schema, /uq_restaurant_saas_one_unresolved_payment/);
+  assert.match(schema, /WHERE status IN \\('created','provider_pending'\\)/);
+  assert.match(server, /An earlier MTN request is still unresolved/);
+  assert.match(server, /RESTOPASS_SAAS_MTN_PRODUCTION_APPROVED/);
+});
