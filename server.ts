@@ -1731,185 +1731,25 @@ app.get('/api/customer/subscription', apiRateLimiter, requireAuth(), (req, res) 
   });
 });
 
-// POST /api/customer/subscription/checkout: Initiates Mobile Money checkout (strictly 500 RWF)
-app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
-  ensureServerDbDefaults(serverDbState);
-  const { phoneNumber, provider } = req.body;
-  const user = req.user!;
-
-  const cleanPhone = (phoneNumber || '').trim();
-  if (!cleanPhone || cleanPhone.length < 8) {
-    return res.status(400).json({ success: false, error: 'Valid mobile money phone number is required' });
-  }
-
-  const customer = (serverDbState.customers || []).find((c: any) => c.id === user.userId || c.memberNo === user.username);
-  if (!customer) {
-    return res.status(404).json({ success: false, error: 'Customer record not found' });
-  }
-
-  const internalReference = `SUB-MOMO-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-  const now = new Date().toISOString();
-
-  let sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === customer.id);
-  if (!sub) {
-    sub = {
-      id: `sub_${customer.id}_${Date.now()}`,
-      customerId: customer.id,
-      memberNo: customer.memberNo,
-      restaurantCode: customer.restaurantCode,
-      status: 'pending_payment',
-      planName: 'Student Digital Pass',
-      priceRwf: 500, // Strictly 500 RWF integer safe
-      currency: 'RWF',
-      paymentMethod: provider || 'mtn_momo',
-      lastPaymentRef: internalReference,
-      createdAt: now,
-      updatedAt: now,
-    };
-    serverDbState.customerSubscriptions.push(sub);
-  } else {
-    sub.status = 'pending_payment';
-    sub.lastPaymentRef = internalReference;
-    sub.paymentMethod = provider || 'mtn_momo';
-    sub.updatedAt = now;
-  }
-
-  const payment = {
-    id: `spay_${Date.now()}`,
-    subscriptionId: sub.id,
-    customerId: customer.id,
-    memberNo: customer.memberNo,
-    restaurantCode: customer.restaurantCode,
-    internalReference,
-    provider: provider || 'mtn_momo',
-    phoneNumber: cleanPhone,
-    amountRwf: 500, // Strictly 500 RWF integer safe
-    currency: 'RWF',
-    status: 'pending',
-    initiatedAt: now,
-  };
-  serverDbState.studentSubscriptionPayments.unshift(payment);
-
-  await queueDbSave(serverDbState);
-
-  const providerLabel = provider === 'airtel_money' ? 'Airtel Money (*500#)' : 'MTN Mobile Money (*182#)';
-  return res.json({
-    success: true,
-    payment,
-    amountRwf: 500,
-    currency: 'RWF',
-    instructions: `Please approve the 500 RWF prompt sent via ${providerLabel} to ${cleanPhone}. Access will activate instantly upon confirmation.`,
+// POST /api/customer/subscription/checkout
+// Deliberately fail closed until the MTN Collections adapter is implemented.
+// The previous local-instruction flow did not initiate a provider transaction.
+app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['customer']), (_req, res) => {
+  return res.status(503).json({
+    success: false,
+    code: 'MTN_COLLECTIONS_NOT_CONFIGURED',
+    error: 'Mobile Money checkout is temporarily unavailable. No payment has been requested or collected.',
   });
 });
 
-// POST /api/payments/mobile-money/callback: Webhook callback from Mobile Money provider with Idempotency
-app.post('/api/payments/mobile-money/callback', apiRateLimiter, async (req, res) => {
-  ensureServerDbDefaults(serverDbState);
-
-  // Webhook security guard for production cloud environments
-  const webhookSecret = process.env.MOMO_WEBHOOK_SECRET || process.env.PAYMENT_WEBHOOK_SECRET;
-  if (webhookSecret) {
-    const authHeader = req.headers['x-callback-token'] || req.headers['authorization'] || req.headers['x-webhook-secret'];
-    const expected = `Bearer ${webhookSecret}`;
-    const provided = typeof authHeader === 'string' ? authHeader.trim() : '';
-    const isValid = timingSafeCompare(provided, webhookSecret) || timingSafeCompare(provided, expected);
-    if (!isValid) {
-      console.warn('[Security Warning] Rejected unauthorized Mobile Money webhook callback attempt');
-      return res.status(401).json({ success: false, error: 'Unauthorized webhook callback' });
-    }
-  }
-
-  const { internalReference, providerTransactionId, amountRwf, currency, status } = req.body;
-
-  if (!internalReference) {
-    return res.status(400).json({ success: false, error: 'internalReference is required' });
-  }
-
-  const payment = (serverDbState.studentSubscriptionPayments || []).find(
-    (p: any) => p.internalReference === internalReference
-  );
-  if (!payment) {
-    return res.status(404).json({ success: false, error: 'Payment record not found' });
-  }
-
-  // Idempotency: Duplicate callbacks must not re-activate or extend access
-  if (payment.status === 'verified') {
-    const sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.id === payment.subscriptionId);
-    return res.json({ success: true, message: 'Payment already processed (idempotent)', subscription: sub });
-  }
-
-  // Verify amount: Strictly 500 RWF
-  if (typeof amountRwf === 'number' && amountRwf !== 500) {
-    payment.status = 'failed';
-    payment.failureReason = `Amount mismatch: Expected 500 RWF, received ${amountRwf}`;
-    await queueDbSave(serverDbState);
-    return res.status(400).json({ success: false, error: 'Payment amount mismatch. Expected exactly 500 RWF.' });
-  }
-
-  if (currency && currency !== 'RWF') {
-    payment.status = 'failed';
-    payment.failureReason = `Currency mismatch: Expected RWF, received ${currency}`;
-    await queueDbSave(serverDbState);
-    return res.status(400).json({ success: false, error: 'Currency mismatch. Expected RWF.' });
-  }
-
-  if (status === 'failed') {
-    payment.status = 'failed';
-    payment.failureReason = req.body.failureReason || 'Customer declined or insufficient funds';
-    await queueDbSave(serverDbState);
-    return res.json({ success: true, message: 'Marked payment as failed' });
-  }
-
-  const nowMs = Date.now();
-  const periodEndMs = nowMs + 30 * 24 * 3600 * 1000;
-  const graceDays = serverDbState.studentSubscriptionSettings?.graceDays || 3;
-  const graceEndMs = periodEndMs + graceDays * 24 * 3600 * 1000;
-
-  payment.status = 'verified';
-  payment.verifiedAt = new Date(nowMs).toISOString();
-  payment.providerTransactionId = providerTransactionId || `MPAY_${Date.now()}`;
-
-  let sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.id === payment.subscriptionId);
-  if (!sub) {
-    sub = {
-      id: payment.subscriptionId,
-      customerId: payment.customerId,
-      memberNo: payment.memberNo,
-      restaurantCode: payment.restaurantCode,
-      status: 'active',
-      planName: 'Student Digital Pass',
-      priceRwf: 500,
-      currency: 'RWF',
-      currentPeriodStart: new Date(nowMs).toISOString(),
-      currentPeriodEnd: new Date(periodEndMs).toISOString(),
-      gracePeriodEnd: new Date(graceEndMs).toISOString(),
-      cancelAtPeriodEnd: false,
-      paymentMethod: payment.provider,
-      lastPaymentRef: payment.internalReference,
-      createdAt: new Date(nowMs).toISOString(),
-      updatedAt: new Date(nowMs).toISOString(),
-    };
-    serverDbState.customerSubscriptions.push(sub);
-  } else {
-    sub.status = 'active';
-    sub.priceRwf = 500;
-    sub.currency = 'RWF';
-    sub.currentPeriodStart = new Date(nowMs).toISOString();
-    sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
-    sub.gracePeriodEnd = new Date(graceEndMs).toISOString();
-    sub.cancelAtPeriodEnd = false;
-    sub.paymentMethod = payment.provider;
-    sub.lastPaymentRef = payment.internalReference;
-    sub.updatedAt = new Date(nowMs).toISOString();
-  }
-
-  await queueDbSave(serverDbState);
-
-  return res.json({
-    success: true,
-    status: 'active',
-    subscription: sub,
-    message: 'Mobile Money payment verified and student subscription activated successfully.',
+// POST /api/payments/mobile-money/callback
+// Deliberately disabled until callbacks are reconciled against MTN's server-to-server
+// transaction-status API. A shared secret or client-supplied status is not payment proof.
+app.post('/api/payments/mobile-money/callback', apiRateLimiter, (_req, res) => {
+  return res.status(503).json({
+    success: false,
+    code: 'MTN_CALLBACK_VERIFICATION_NOT_CONFIGURED',
+    error: 'Payment callback processing is disabled until server-side MTN transaction verification is implemented.',
   });
 });
 
