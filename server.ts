@@ -2454,27 +2454,30 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
       );
 
       const incomingLedgers = (fullState.ledgerEntries || []).filter((l: any) => {
-        if (!l || !l.id || !l.customerId) return false;
+        if (!l || typeof l.id !== 'string' || !l.id || typeof l.customerId !== 'string' || !l.customerId) return false;
+        if (!allowedRestoCode && user.role !== 'super_admin') return false;
         if (allowedRestoCode && l.restaurantCode !== allowedRestoCode) return false;
-        // Schema check: amountRwf must be a valid finite number if present
-        if (l.amountRwf !== undefined && (typeof l.amountRwf !== 'number' || !Number.isFinite(l.amountRwf))) return false;
-        if (typeof l.platesDelta !== 'number' || !Number.isFinite(l.platesDelta) || l.platesDelta === 0) return false;
+        const ledgerCustomer = (serverDbState.customers || []).find(
+          (customer: any) => customer.id === l.customerId && customer.restaurantCode === l.restaurantCode
+        );
+        if (!ledgerCustomer) return false;
 
-        // Role-based ledger write guard:
-        // Customers can NEVER push 'purchase', 'adjustment', 'reversal', 'scan', 'extra', or 'undo' entries,
-        // and can NEVER credit their own account (platesDelta > 0 for customerId === user.userId).
-        if (user.role === 'customer') {
-          if (l.type !== 'transfer_out' && l.type !== 'transfer_in') return false;
-          if (l.type === 'transfer_out' && (l.customerId !== user.userId || l.platesDelta >= 0)) return false;
-          if (l.type === 'transfer_in' && (l.customerId === user.userId || l.platesDelta <= 0)) return false;
-        }
-        if (user.role === 'stand_staff') {
-          if (l.type === 'adjustment' || l.type === 'reversal') return false;
-        }
+        const allowedTypes = new Set(['purchase', 'scan', 'extra', 'undo', 'transfer_out', 'transfer_in', 'adjustment', 'reversal']);
+        if (!allowedTypes.has(l.type)) return false;
+        if (l.amountRwf !== undefined && (!Number.isSafeInteger(l.amountRwf) || l.amountRwf < 0)) return false;
+        if (!Number.isSafeInteger(l.platesDelta) || l.platesDelta === 0) return false;
 
-        // Idempotency check: Reject duplicate transactions / replay syncs
+        // Cashier/station staff may submit only negative meal-consumption events.
+        // Positive credits, adjustments, reversals and transfers require server/admin authority.
+        if (user.role === 'stand_staff' &&
+            (!['scan', 'extra'].includes(l.type) || l.platesDelta >= 0)) return false;
+        if (user.role === 'customer') return false;
+
+        // Idempotency check also catches duplicates within the same submitted batch.
         if (existingLedgerIds.has(l.id)) return false;
         if (l.idempotencyKey && existingIdempotencyKeys.has(l.idempotencyKey)) return false;
+        existingLedgerIds.add(l.id);
+        if (l.idempotencyKey) existingIdempotencyKeys.add(l.idempotencyKey);
         return true;
       });
 
