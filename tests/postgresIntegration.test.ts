@@ -116,6 +116,18 @@ test('PostgreSQL persistence round-trip and concurrent transfer invariants', {
     assert.equal([first, second].filter((result) => result.ok).length, 1);
     assert.equal([first, second].filter((result) => !result.ok && result.code === 'INSUFFICIENT_BALANCE').length, 1);
 
+    const winningLabel = first.ok ? 'a' : 'b';
+    const winningKey = `idem_${suffix}_${winningLabel}`;
+    const exactRetry = await commitPlateTransferPostgres(buildTransfer(winningLabel, winningKey));
+    assert.equal(exactRetry.ok, true);
+    if (exactRetry.ok) assert.equal(exactRetry.idempotent, true);
+
+    const alteredRetry = buildTransfer(winningLabel, winningKey);
+    alteredRetry.transfer.plates = 6;
+    const conflict = await commitPlateTransferPostgres(alteredRetry);
+    assert.equal(conflict.ok, false);
+    if (!conflict.ok) assert.equal(conflict.code, 'IDEMPOTENCY_CONFLICT');
+
     const after = await loadStateFromPostgres();
     assert.equal(after.ledgerEntries.filter((item: any) => item.customerId === senderId).reduce((sum: number, item: any) => sum + item.platesDelta, 0), 3);
     assert.equal(after.ledgerEntries.filter((item: any) => item.customerId === recipientId).reduce((sum: number, item: any) => sum + item.platesDelta, 0), 7);
