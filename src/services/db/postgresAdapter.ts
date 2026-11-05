@@ -199,6 +199,8 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         studentSubscriptionPayments: settingsMap.get('studentSubscriptionPayments') || [],
         restaurantSubscriptions: settingsMap.get('restaurantSubscriptions') || [],
         restaurantSubscriptionPayments: settingsMap.get('restaurantSubscriptionPayments') || [],
+        subscriptionPayments: settingsMap.get('subscriptionPayments') || [],
+        activationCodes: settingsMap.get('activationCodes') || [],
         usedTokens: [],
       };
 
@@ -469,6 +471,8 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
       ['studentSubscriptionPayments', state.studentSubscriptionPayments],
       ['restaurantSubscriptions', state.restaurantSubscriptions],
       ['restaurantSubscriptionPayments', state.restaurantSubscriptionPayments],
+      ['subscriptionPayments', state.subscriptionPayments],
+      ['activationCodes', state.activationCodes],
     ];
 
     for (const [key, val] of settingsToSave) {
