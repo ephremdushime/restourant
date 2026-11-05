@@ -3419,7 +3419,7 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
     await client.query("UPDATE restaurant_subscription_payments SET status='successful',provider_transaction_id=$2,provider_status='SUCCESSFUL',verified_at=$3,entitlement_applied_at=$3,updated_at=NOW() WHERE id=$1",
       [pay.id,provider.financialTransactionId,verifiedAt.toISOString()]);
     await client.query("INSERT INTO restaurant_subscription_audit_logs (id,restaurant_code,actor_type,actor_id,action,payment_id,data) VALUES ($1,$2,'mtn_momo',$3,'SAAS_PAYMENT_VERIFIED',$4,$5)",
-      ['rsa_'+crypto.randomUUID(),pay.restaurant_code,provider.financialTransactionId,pay.id,JSON.stringify({amountRwf:Number(pay.amount_rwf),currency:'RWF',periodStart:periodStart:period.periodStart,periodEnd:end,licenseId})]);
+      ['rsa_'+crypto.randomUUID(),pay.restaurant_code,provider.financialTransactionId,pay.id,JSON.stringify({amountRwf:Number(pay.amount_rwf),currency:'RWF',periodStart:period.periodStart,periodEnd:end,licenseId})]);
     await client.query('COMMIT');
     if (serverDbState) {
       serverDbState.restaurants=(serverDbState.restaurants||[]).map((item:any)=>item.code===pay.restaurant_code?updatedRestaurant:item);
