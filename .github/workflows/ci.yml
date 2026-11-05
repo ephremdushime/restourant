@@ -33,5 +33,15 @@ jobs:
       - name: Execute Security & Integrity Tests
         run: npm test
 
+      - name: Validate production Docker Compose configuration
+        run: |
+          export POSTGRES_PASSWORD="$(openssl rand -hex 32)"
+          export REDIS_PASSWORD="$(openssl rand -hex 32)"
+          export SESSION_SECRET="$(openssl rand -hex 32)"
+          export RESTOPASS_MASTER_SECRET="$(openssl rand -hex 32)"
+          export RESTOPASS_SUPERADMIN_PASSWORD="$(openssl rand -hex 24)"
+          export RESTOPASS_BOSS_PASSWORD="$(openssl rand -hex 24)"
+          docker compose -f deploy/docker-compose.prod.yml config --quiet
+
       - name: Build Production Bundle
         run: npm run build
