@@ -76,13 +76,13 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
   const [userBranchId, setUserBranchId] = useState<string>(branches[0]?.id || '');
   const [userStationName, setUserStationName] = useState('Stand 1 - Main Buffet');
   const [userPassword, setUserPassword] = useState('');
-  const [userPin, setUserPin] = useState('1234');
+  const [userPin, setUserPin] = useState('');
   const [showUserPassword, setShowUserPassword] = useState(false);
 
   // Reset Password Modal
   const [userToReset, setUserToReset] = useState<StationUser | null>(null);
   const [resetPasswordInput, setResetPasswordInput] = useState('');
-  const [resetPinInput, setResetPinInput] = useState('1234');
+  const [resetPinInput, setResetPinInput] = useState('');
   const [showResetPassword, setShowResetPassword] = useState(false);
 
   // Delete User Confirmation
@@ -147,8 +147,12 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
   // Handle Add Station User
   const handleCreateStationUser = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userFullName.trim() || !userUsername.trim() || !userPassword.trim()) {
+    if (!userFullName.trim() || !userUsername.trim() || !userPassword.trim() || !userPin.trim()) {
       showToast('Please fill out all required credentials', 'error');
+      return;
+    }
+    if (userPassword.trim().length < 12 || !/^\\d{6,}$/.test(userPin.trim())) {
+      showToast('Use a password of at least 12 characters and a numeric POS PIN of at least 6 digits.', 'error');
       return;
     }
 
@@ -178,7 +182,7 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
           role: 'scanner',
           status: 'active',
           passwordHash: userPassword,
-          pin: userPin.trim() || '1234',
+          pin: userPin.trim(),
           lastLoginAt: new Date().toISOString(),
           lastActiveAt: new Date().toISOString(),
         },
@@ -189,7 +193,7 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
       setUserFullName('');
       setUserUsername('');
       setUserPassword('');
-      setUserPin('1234');
+      setUserPin('');
       showToast(`Station operator account "@${userUsername}" created with active credentials!`);
     } catch (err: any) {
       showToast(err.message || 'Failed to create cashier account', 'error');
@@ -200,8 +204,12 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
   const handleExecutePasswordReset = (e: React.FormEvent) => {
     e.preventDefault();
     if (!userToReset) return;
-    if (!resetPasswordInput.trim()) {
-      showToast('New password cannot be empty', 'error');
+    if (resetPasswordInput.trim().length < 12) {
+      showToast('New password must be at least 12 characters.', 'error');
+      return;
+    }
+    if (resetPinInput.trim() && !/^\\d{6,}$/.test(resetPinInput.trim())) {
+      showToast('POS PIN must be at least 6 numeric digits.', 'error');
       return;
     }
 
@@ -216,7 +224,7 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
       showToast(`Updated login password & POS PIN for "${userToReset.name}" (@${userToReset.username})`);
       setUserToReset(null);
       setResetPasswordInput('');
-      setResetPinInput('1234');
+      setResetPinInput('');
     } else {
       showToast('Failed to reset credentials', 'error');
     }
