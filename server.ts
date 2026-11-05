@@ -1539,7 +1539,7 @@ app.post('/api/upload/photo', apiRateLimiter, requireAuth(['stand_staff', 'resta
 
 // POST /api/qr/token/phone: Authoritative generation of dynamic phone pass QR
 app.post('/api/qr/token/phone', apiRateLimiter, requireAuth(), (req, res) => {
-  const { restaurantCode, memberNo, keyVersion } = req.body;
+  const { restaurantCode, memberNo } = req.body;
   const user = req.user!;
 
   if (!restaurantCode || !memberNo) {
@@ -1597,20 +1597,35 @@ app.post('/api/qr/token/phone', apiRateLimiter, requireAuth(), (req, res) => {
 app.post(
   '/api/qr/token/card',
   apiRateLimiter,
-  requireAuth(['super_admin', 'restaurant_admin']),
+  requireAuth(['super_admin', 'restaurant_admin', 'customer']),
   (req, res) => {
-    const { restaurantCode, memberNo, cardVersion } = req.body;
+    const { restaurantCode, memberNo } = req.body;
     const user = req.user!;
 
     if (!restaurantCode || !memberNo) {
       return res.status(400).json({ success: false, error: 'restaurantCode and memberNo are required' });
     }
 
-    if (user.role === 'restaurant_admin' && user.restaurantCode !== restaurantCode) {
+    const customerRecord = (serverDbState?.customers || []).find((customer: any) =>
+      customer.restaurantCode === restaurantCode && customer.memberNo === memberNo
+    );
+    if (!customerRecord) {
+      return res.status(404).json({ success: false, error: 'Customer not found in this restaurant.' });
+    }
+
+    if (user.role === 'customer') {
+      if (customerRecord.id !== user.userId || user.restaurantCode !== restaurantCode) {
+        return res.status(403).json({ success: false, error: 'Forbidden: Customers may only generate their own card pass' });
+      }
+      if (customerRecord.cardStatus === 'locked') {
+        return res.status(403).json({ success: false, error: 'This card is locked and cannot be presented for scanning.' });
+      }
+    } else if (user.role === 'restaurant_admin' && user.restaurantCode !== restaurantCode) {
       return res.status(403).json({ success: false, error: 'Forbidden: Cannot generate cards for other restaurants' });
     }
 
-    const cVer = typeof cardVersion === 'number' ? cardVersion : 1;
+    // Card version is sourced from the authoritative customer record, never the browser.
+    const cVer = Number(customerRecord.cardVersion) || 1;
     const restoKey = deriveServerRestaurantKey(restaurantCode);
     const fullMac = serverHmac(restoKey, `CARD:${memberNo}:V${cVer}`);
     const mac = fullMac.slice(0, 16);
