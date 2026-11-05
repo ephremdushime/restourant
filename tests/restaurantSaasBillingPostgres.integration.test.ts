@@ -207,7 +207,7 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     assert.equal(mismatchedSuccess.status, 200);
     assert.equal(mismatchedSuccess.body.status, 'review_required');
     const quarantined = await pool!.query(
-      'SELECT status,entitlement_applied_at FROM restaurant_subscription_payments WHERE id=$1',
+      'SELECT status,entitlement_applied_at,provider_transaction_id FROM restaurant_subscription_payments WHERE id=$1',
       [otherInitiated.body.paymentId]
     );
     assert.equal(quarantined.rows[0].status, 'review_required');
