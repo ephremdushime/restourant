@@ -3270,8 +3270,9 @@ app.get('/api/restaurant-saas/subscription', apiRateLimiter, requireAuth(['resta
   if (!pool) return res.status(503).json({success:false,error:'SaaS billing requires PostgreSQL.'});
   const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     const ensured = await ensureRestaurantSaasSubscription(client, code);
-    if (!ensured) return res.status(404).json({success:false,error:'Restaurant not found.'});
+    if (!ensured) { await client.query('ROLLBACK'); return res.status(404).json({success:false,error:'Restaurant not found.'}); }
     const subscription = ensured.subscription;
     const periodEndMs = subscription.current_period_end ? new Date(subscription.current_period_end).getTime() : NaN;
     const nowMs = Date.now();
@@ -3288,8 +3289,9 @@ app.get('/api/restaurant-saas/subscription', apiRateLimiter, requireAuth(['resta
       subscription.status = updated.rows[0]?.status || computedStatus;
     }
     const payments = await client.query('SELECT id,internal_reference,amount_rwf,currency,status,provider_status,created_at,verified_at,entitlement_applied_at FROM restaurant_subscription_payments WHERE restaurant_code=$1 ORDER BY created_at DESC LIMIT 20',[code]);
+    await client.query('COMMIT');
     return res.json({success:true,subscription,payments:payments.rows});
-  } catch (error) { console.error('[SaaS subscription read]',error); return res.status(503).json({success:false,error:'Subscription details unavailable.'}); }
+  } catch (error) { try { await client.query('ROLLBACK'); } catch {} console.error('[SaaS subscription read]',error); return res.status(503).json({success:false,error:'Subscription details unavailable.'}); }
   finally { client.release(); }
 });
 
