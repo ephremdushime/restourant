@@ -1,66 +1,52 @@
 #!/usr/bin/env tsx
 /**
- * RestoPass MTN MoMo Sandbox 15-Point Certification Runner
- * 
- * Executes all 15 scenarios from the official MTN MoMo Sandbox test matrix:
- * - Test cases 1-2: Sandbox User Provisioning
- * - Test cases 3-7: Collection API
- * - Test cases 8-13: Disbursement API
- * - Test cases 14-15: Remittance API
- * 
- * Usage:
- *   npx tsx scripts/runMomoSandboxTests.ts
+ * MTN MoMo API smoke-test harness.
+ *
+ * Mock mode is useful for deterministic regression but is NOT MTN sandbox
+ * evidence. For live API checks, configure credentials and explicitly set
+ * MOMO_USE_MOCK=false and MOMO_TARGET_ENV=sandbox.
  */
-
 import { momoService } from '../src/services/momoService';
 
 async function main() {
+  const mockMode = momoService.isMock();
   console.log('\n========================================================================================');
-  console.log('       RestoPass MTN Mobile Money (MoMo) Sandbox Integration & Certification Suite      ');
+  console.log('                 RestoPass MTN MoMo API Smoke-Test Harness                               ');
   console.log('========================================================================================');
-  console.log(`Execution Mode : ${momoService.isMock() ? 'Mock Sandbox Mode (Deterministic)' : 'Live MTN Sandbox Gateway'}`);
-  console.log(`Target Host    : https://sandbox.momodeveloper.mtn.com`);
+  console.log(`Execution Mode : ${mockMode ? 'MOCK SIMULATION — NOT LIVE MTN' : 'LIVE MTN API REQUESTS'}`);
+  console.log('Target Host    : https://sandbox.momodeveloper.mtn.com');
   console.log(`Timestamp      : ${new Date().toISOString()}\n`);
 
-  console.log('Running all 15 test scenarios...');
+  if (!mockMode && process.env.MOMO_TARGET_ENV !== 'sandbox') {
+    throw new Error('Refusing sandbox smoke tests unless MOMO_TARGET_ENV=sandbox');
+  }
+
   const results = await momoService.runFullSandboxTestMatrix();
-
-  console.log('\n========================================================================================================================');
-  console.log('| ID | Scenario Title             | Step Description                   | HTTP | Exp | Act | Latency | Result |');
-  console.log('|---|----------------------------|------------------------------------|------|-----|-----|---------|--------|');
-
+  console.log('| ID | Scenario | Step | HTTP | Expected | Actual | Latency | Result |');
+  console.log('|---:|---|---|---:|---:|---:|---:|---|');
   let passed = 0;
   let failed = 0;
-
   for (const r of results) {
     if (r.result === 'PASS') passed++;
     else failed++;
+    console.log(`| ${r.testCaseId} | ${r.scenarioTitle} | ${r.stepDescription} | ${r.httpMethod} | ${r.expectedStatus} | ${r.actualStatus} | ${r.executionTimeMs}ms | ${r.result} |`);
+  }
+  console.log(`\nSummary: ${results.length} scenarios | ${passed} passed | ${failed} failed`);
 
-    const idStr = String(r.testCaseId).padStart(2, ' ');
-    const title = r.scenarioTitle.padEnd(26, ' ');
-    const desc = r.stepDescription.padEnd(34, ' ');
-    const method = r.httpMethod.padEnd(4, ' ');
-    const exp = String(r.expectedStatus).padEnd(3, ' ');
-    const act = String(r.actualStatus).padEnd(3, ' ');
-    const latency = `${r.executionTimeMs}ms`.padStart(7, ' ');
-    const res = r.result === 'PASS' ? ' PASS ' : ' FAIL ';
-
-    console.log(`| ${idStr} | ${title} | ${desc} | ${method} | ${exp} | ${act} | ${latency} | ${res} |`);
+  if (results.length !== 15 || failed > 0) {
+    console.error('MoMo smoke-test checks failed or did not execute all 15 scenarios.');
+    process.exitCode = 1;
+    return;
   }
 
-  console.log('========================================================================================================================\n');
-  console.log(`Execution Summary: ${results.length} total tests | ${passed} passed | ${failed} failed`);
-
-  if (failed > 0) {
-    console.error('\n>>> SOME MOMO SANDBOX TESTS FAILED <<<\n');
-    process.exit(1);
+  if (mockMode) {
+    console.warn('\nMOCK SIMULATION PASSED. This is NOT evidence of live MTN sandbox connectivity, payer authorization, transaction settlement, RWF support, or merchant certification.');
   } else {
-    console.log('\n>>> ALL 15 MOMO SANDBOX TEST SCENARIOS PASSED SUCCESSFULLY <<<\n');
-    process.exit(0);
+    console.warn('\nLIVE API HTTP smoke checks completed. HTTP 202 is pending/accepted, not a successful payment. Verify terminal SUCCESSFUL status and reconcile amount, currency, externalId, payer and financialTransactionId before claiming end-to-end success.');
   }
 }
 
 main().catch((err) => {
-  console.error('Fatal error running MoMo test matrix:', err);
-  process.exit(1);
+  console.error('Fatal error running MoMo smoke tests:', err instanceof Error ? err.message : 'Unknown error');
+  process.exitCode = 1;
 });
