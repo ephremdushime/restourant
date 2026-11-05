@@ -43,14 +43,14 @@ Restaurant SaaS subscription payments must use dedicated persistence, separate f
 
 The new persistence must record the restaurant, price snapshot, currency, internal reference, MTN transaction ID, payer number (masked where displayed), status, initiation/verification timestamps, and idempotency key. Database uniqueness must prevent duplicate provider transaction IDs and duplicate entitlement application.
 
-Payment verification and entitlement extension must commit atomically. Callback processing must be authenticated and idempotent; uncertain attempts must be reconciled through MTN's transaction-status API.
+Payment verification and entitlement extension must commit atomically. Version 1 uses server-to-server MTN transaction-status polling; no client callback or browser redirect can grant entitlement. Pending/uncertain attempts remain pending until a status lookup confirms a final provider result.
 
 ## Current release constraints
 
 - MTN merchant onboarding and production credentials are not yet confirmed.
-- Live payment initiation and callback activation remain disabled until MTN approves Bestie Companies Ltd's own-merchant collection arrangement and credentials are securely configured.
+- Live payment initiation remains disabled until MTN approves Bestie Companies Ltd's own-merchant collection arrangement and production credentials are securely configured. Version 1 does not expose a public payment callback endpoint.
 - Sandbox tests must cover success, pending, failure, timeout, wrong amount, wrong currency, wrong restaurant, duplicate callback, delayed callback and concurrent renewal.
-- Manual super-admin extension remains an audited fallback during migration.
+- Manual Super Admin licence issuance and renewal controls are disabled in the UI; they must not be used as a payment bypass. Any future emergency override needs a separate, reason-coded, audited and access-controlled design.
 - Do not merge or deploy this module until CI, database-backed integration tests, staging acceptance and production release gates pass.
 
 
@@ -65,7 +65,7 @@ Payment verification and entitlement extension must commit atomically. Callback 
   - `POST /api/restaurant-saas/payment/initiate` (restaurant administrator)
   - `POST /api/restaurant-saas/payment/:paymentId/verify`
 - RequestToPay is user-authorized for each 30-day cycle. It is not an automatic recurring debit mandate.
-- Tenant write APIs are fail-closed after the 72-hour grace period; GET reads and SaaS billing endpoints remain available. Scanner authorization independently enforces the same grace boundary.
+- Protected tenant write APIs, including the server-authoritative scanner-consumption endpoint, are fail-closed when no active/grace SaaS entitlement exists or the 72-hour grace period has ended. GET reads and SaaS billing endpoints remain available.
 - The MTN adapter is feature-gated. HTTP 202 is stored as pending only. A successful entitlement is applied in one PostgreSQL transaction after checking provider status, exact amount, RWF currency, external reference, payer MSISDN and provider financial transaction ID.
 - Renewal starts at the later of the existing paid-through timestamp or verified payment time, then adds 30 days. The 72-hour grace period follows the new paid-through timestamp.
 
@@ -89,5 +89,5 @@ Do not configure the production gate until MTN has approved the own-merchant col
 - Add PostgreSQL-backed integration tests for payment idempotency, duplicate verification, transaction rollback, tenant isolation and 72-hour write restrictions.
 - Confirm the MTN RequestToPay response fields and status lookup behavior against the exact Rwanda merchant sandbox credentials and UAT workbook.
 - Complete security review of manual Super Admin licence overrides and make the override reason mandatory.
-- Add production monitoring/reconciliation for payment attempts left pending after network timeouts.
+- Add automated production monitoring/reconciliation for payment attempts left pending after network timeouts; v1 exposes manual server-side status checks only.
 - Validate the full registration-to-payment journey with a real restaurant administrator and MTN sandbox handset before enabling production collection.
