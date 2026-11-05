@@ -3334,7 +3334,7 @@ app.post('/api/restaurant-saas/payment/initiate', apiRateLimiter, requireAuth(['
       Authorization:'Bearer '+token,'X-Reference-Id':reference.replace(/^RPS-/,''),'X-Target-Environment':config.targetEnvironment,
       'Ocp-Apim-Subscription-Key':config.subscriptionKey,'Content-Type':'application/json'
     },body:JSON.stringify({amount:String(amount),currency:'RWF',externalId:reference,payer:{partyIdType:'MSISDN',partyId:payer},
-      payerMessage:'RestoPass restaurant software subscription',payeeNote:'RestoPass SaaS access - 30 days'})});
+      payerMessage:'RestoPass restaurant software subscription',payeeNote:'RestoPass SaaS access - 30 days'}),signal:AbortSignal.timeout(10000)});
     if (response.status !== 202) {
       await pool.query("UPDATE restaurant_subscription_payments SET status='failed',provider_status=$2,updated_at=NOW() WHERE id=$1 AND status='created'",[paymentId,'REQUEST_REJECTED_HTTP_'+response.status]);
       return res.status(502).json({success:false,error:'MTN did not accept the request. No subscription time was granted.'});
@@ -3363,7 +3363,7 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
     const lookup = payment.internal_reference.replace(/^RPS-/,'');
     const response = await fetch(config.baseUrl+'/collection/v1_0/requesttopay/'+encodeURIComponent(lookup),{method:'GET',headers:{
       Authorization:'Bearer '+token,'X-Target-Environment':config.targetEnvironment,'Ocp-Apim-Subscription-Key':config.subscriptionKey
-    }});
+    },signal:AbortSignal.timeout(10000)});
     if (!response.ok) return res.status(502).json({success:false,error:'MTN status unavailable; no entitlement changed.'});
     const provider:any = await response.json();
     const verified = provider?.status === 'SUCCESSFUL' && Number(provider?.amount) === Number(payment.amount_rwf)
