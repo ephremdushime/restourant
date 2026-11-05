@@ -89,7 +89,13 @@ export async function recordTokenScan(
     }
   }
 
-  // In-memory fallback
+  // In-memory fallback is safe only for an explicitly local/single-process deployment.
+  // If Redis was configured but is unavailable, failing open would allow replay across
+  // application instances. Deny the scan until the shared replay guard recovers.
+  if (isRedisConfigured()) {
+    return { allowed: false, reason: 'REPLAY_GUARD_UNAVAILABLE' };
+  }
+
   const now = Date.now();
   pruneMemoryCache(now);
 
