@@ -98,6 +98,26 @@ RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" PATH="$TMP/bin:$TMP/image
   exit 1
 fi
 
+# Supplying a database URL alone is insufficient: the operator must explicitly
+# attest that the target is disposable and isolated.
+if RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
+RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" PATH="$TMP/bin:$TMP/image-bin:$PATH" \
+  restopass-restore-drill "$TMP/valid-backup.enc" "postgres://test:test@127.0.0.1/restopass_drill_test" >/dev/null 2>&1; then
+  echo "DR drill without explicit isolation confirmation unexpectedly passed" >&2
+  exit 1
+fi
+
+# Even explicit confirmation cannot target the configured application database.
+if RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
+RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" \
+RESTOPASS_DR_RESTORE_TARGET_ISOLATED=true \
+DATABASE_URL="postgres://test:test@127.0.0.1/restopass" \
+PATH="$TMP/bin:$TMP/image-bin:$PATH" \
+  restopass-restore-drill "$TMP/valid-backup.enc" "postgres://test:test@127.0.0.1/restopass" >/dev/null 2>&1; then
+  echo "DR drill targeting DATABASE_URL unexpectedly passed" >&2
+  exit 1
+fi
+
 # CI may validate archive integrity/structure, but the report must clearly state
 # that this is not a database restore or production DR sign-off.
 archive_report="$(RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
