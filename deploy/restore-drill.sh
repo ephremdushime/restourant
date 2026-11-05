@@ -1,118 +1,114 @@
 #!/bin/sh
-# ==============================================================================
-# RestoPass Disaster Recovery & Backup Restoration Drill Utility
-# Usage:
-#   restopass-restore-drill <backup-archive-file> [optional-target-database-url]
-# ==============================================================================
+# RestoPass disaster-recovery drill.
+# A real drill requires an isolated disposable PostgreSQL target. CI may use
+# --archive-only to validate encryption, integrity and archive structure, but
+# that mode must never be reported as a successful database restore.
 set -eu
 umask 077
 
-backup_file="${1:?Usage: restopass-restore-drill <backup-archive-file> [target-database-url]}"
+mode="restore"
+if [ "${1:-}" = "--archive-only" ]; then
+  mode="archive-only"
+  shift
+fi
+backup_file="${1:?Usage: restopass-restore-drill [--archive-only] <backup-archive-file> [isolated-target-database-url]}"
 target_db="${2:-${TARGET_DATABASE_URL:-}}"
 : "${RESTOPASS_BACKUP_ENCRYPTION_KEY:?RESTOPASS_BACKUP_ENCRYPTION_KEY is required}"
 : "${RESTOPASS_BACKUP_HMAC_KEY:?RESTOPASS_BACKUP_HMAC_KEY is required}"
 
-[ -f "$backup_file" ] || { echo "[dr-drill] ERROR: Backup file not found: $backup_file" >&2; exit 1; }
-[ -f "$backup_file.hmac" ] || { echo "[dr-drill] ERROR: Integrity sidecar (.hmac) not found: $backup_file.hmac" >&2; exit 1; }
+[ -f "$backup_file" ] || { echo "[dr-drill] ERROR: Backup file not found" >&2; exit 1; }
+[ -f "$backup_file.hmac" ] || { echo "[dr-drill] ERROR: Integrity sidecar is missing" >&2; exit 1; }
+if [ "$mode" = "restore" ] && [ -z "$target_db" ]; then
+  echo "[dr-drill] ERROR: a disposable isolated target database is required; use --archive-only only for structural CI validation" >&2
+  exit 2
+fi
+if [ "$mode" = "restore" ] && [ "$target_db" = "${DATABASE_URL:-}" ]; then
+  echo "[dr-drill] ERROR: refusing to restore into DATABASE_URL; provide a separate disposable TARGET_DATABASE_URL" >&2
+  exit 2
+fi
 
 echo "=============================================================================="
 echo "RestoPass Disaster Recovery Verification Drill"
 echo "=============================================================================="
-echo "Target archive: $backup_file"
 start_time="$(date +%s)"
-
-# 1. Step 1: Cryptographic Integrity Verification
-echo "[dr-drill] Step 1/4: Verifying HMAC-SHA256 cryptographic integrity sidecar..."
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 if command -v restopass-backup-verify >/dev/null 2>&1; then
   restopass-backup-verify "$backup_file"
 else
   sh "$SCRIPT_DIR/backup-verify.sh" "$backup_file"
 fi
-echo "[dr-drill] Cryptographic integrity sidecar verified."
 
-# 2. Step 2: Decryption and Archive Extraction
 workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT HUP INT TERM
 extract_dir="$workdir/extracted"
 mkdir -p "$extract_dir"
-trap 'rm -rf "$workdir"' EXIT HUP INT TERM
-
-echo "[dr-drill] Step 2/4: Decrypting AES-256-CBC archive and verifying members..."
 if command -v restopass-restore >/dev/null 2>&1; then
   restopass-restore "$backup_file" "$extract_dir"
 else
   sh "$SCRIPT_DIR/restore.sh" "$backup_file" "$extract_dir"
 fi
+[ -s "$extract_dir/database.dump" ] || { echo "[dr-drill] ERROR: database dump is missing" >&2; exit 1; }
+[ -s "$extract_dir/uploads.tar.gz" ] || { echo "[dr-drill] ERROR: uploads archive is missing" >&2; exit 1; }
 
-[ -s "$extract_dir/database.dump" ] || { echo "[dr-drill] ERROR: database.dump is missing or empty" >&2; exit 1; }
-[ -s "$extract_dir/uploads.tar.gz" ] || { echo "[dr-drill] ERROR: uploads.tar.gz is missing or empty" >&2; exit 1; }
-
-db_dump_size="$(wc -c < "$extract_dir/database.dump" | tr -d ' ')"
-uploads_size="$(wc -c < "$extract_dir/uploads.tar.gz" | tr -d ' ')"
-echo "[dr-drill] Decrypted database.dump ($db_dump_size bytes) and uploads.tar.gz ($uploads_size bytes)."
-
-# 3. Step 3: Patron Photos & Uploads Integrity Audit
-echo "[dr-drill] Step 3/4: Auditing patron photos in uploads archive..."
 uploads_audit_dir="$workdir/uploads_audit"
 mkdir -p "$uploads_audit_dir"
+tar -tzf "$extract_dir/uploads.tar.gz" >/dev/null || { echo "[dr-drill] ERROR: uploads archive is corrupt" >&2; exit 1; }
 tar -xzf "$extract_dir/uploads.tar.gz" -C "$uploads_audit_dir"
 photo_count="$(find "$uploads_audit_dir" -type f | wc -l | tr -d ' ')"
-echo "[dr-drill] Uploads archive unpacked: $photo_count files validated."
 
-# 4. Step 4: Target Database Restoration & Balance Verification (Optional/Live)
-if [ -n "$target_db" ]; then
-  echo "[dr-drill] Step 4/4: Restoring database.dump into isolated target database..."
-  if command -v pg_restore >/dev/null 2>&1; then
-    pg_restore --clean --if-exists --no-owner --no-privileges --dbname="$target_db" "$extract_dir/database.dump" || {
-      echo "[dr-drill] WARNING: pg_restore exited with warnings (expected for pre-existing non-fatal drops)" >&2
-    }
-    echo "[dr-drill] PostgreSQL restore executed successfully into target database."
-    if command -v psql >/dev/null 2>&1; then
-      echo "[dr-drill] Querying restored database record counts:"
-      psql "$target_db" -c "
-        SELECT 'restaurants' AS entity, COUNT(*) AS count FROM restaurants
-        UNION ALL
-        SELECT 'customers', COUNT(*) FROM customers
-        UNION ALL
-        SELECT 'ledger_entries', COUNT(*) FROM ledger_entries
-        UNION ALL
-        SELECT 'scan_events', COUNT(*) FROM scan_events
-        UNION ALL
-        SELECT 'pending_approvals', COUNT(*) FROM pending_approvals;
-      "
-    fi
-  else
-    echo "[dr-drill] pg_restore command not found on host; skipping live database import."
-  fi
-else
-  echo "[dr-drill] Step 4/4: Target database URL not provided; verified standalone dump structure."
+if [ "$mode" = "archive-only" ]; then
+  echo "ARCHIVE VALIDATION ONLY — NOT A DATABASE RESTORE"
+  echo "Integrity: verified; decryption: verified; database dump: present; uploads archive: valid ($photo_count files)"
+  echo "No PostgreSQL restore was performed. Do not use this result as production DR sign-off."
+  exit 0
 fi
+
+command -v pg_restore >/dev/null 2>&1 || { echo "[dr-drill] ERROR: pg_restore is required" >&2; exit 1; }
+command -v psql >/dev/null 2>&1 || { echo "[dr-drill] ERROR: psql is required for post-restore validation" >&2; exit 1; }
+
+echo "[dr-drill] Restoring into the explicitly supplied isolated target database..."
+pg_restore --exit-on-error --no-owner --no-privileges --dbname="$target_db" "$extract_dir/database.dump"
+
+# Require core tables and execute actual reads; pg_restore exit status alone is
+# not sufficient evidence that the expected RestoPass schema is present.
+psql "$target_db" -v ON_ERROR_STOP=1 -Atqc "
+  SELECT CASE WHEN
+    to_regclass('public.restaurants') IS NOT NULL AND
+    to_regclass('public.customers') IS NOT NULL AND
+    to_regclass('public.ledger_entries') IS NOT NULL AND
+    to_regclass('public.scan_events') IS NOT NULL AND
+    to_regclass('public.pending_approvals') IS NOT NULL
+  THEN 'schema-ok' ELSE 'schema-missing' END;
+" | grep -qx 'schema-ok' || { echo "[dr-drill] ERROR: required RestoPass tables are missing after restore" >&2; exit 1; }
+
+counts="$(psql "$target_db" -v ON_ERROR_STOP=1 -Atqc "
+  SELECT 'restaurants=' || COUNT(*) FROM restaurants
+  UNION ALL SELECT 'customers=' || COUNT(*) FROM customers
+  UNION ALL SELECT 'ledger_entries=' || COUNT(*) FROM ledger_entries
+  UNION ALL SELECT 'scan_events=' || COUNT(*) FROM scan_events
+  UNION ALL SELECT 'pending_approvals=' || COUNT(*) FROM pending_approvals;
+")"
+[ -n "$counts" ] || { echo "[dr-drill] ERROR: post-restore validation returned no counts" >&2; exit 1; }
 
 end_time="$(date +%s)"
 rto_seconds=$((end_time - start_time))
-
-# Calculate RPO from backup filename timestamp if standard format
 archive_name="$(basename "$backup_file")"
-rpo_info="N/A"
+rpo_info="not calculated"
 case "$archive_name" in
   restopass-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z.tar.gz.enc)
-    backup_stamp="${archive_name#restopass-}"
-    backup_stamp="${backup_stamp%.tar.gz.enc}"
-    rpo_info="Archive timestamp: $backup_stamp"
+    rpo_info="${archive_name#restopass-}"
+    rpo_info="${rpo_info%.tar.gz.enc}"
     ;;
 esac
 
-echo ""
 echo "=============================================================================="
-echo "DISASTER RECOVERY DRILL REPORT — SUCCESS"
+echo "DISASTER RECOVERY RESTORE DRILL — SUCCESS"
+echo "Target: isolated database supplied by operator"
+echo "Archive: $backup_file"
+echo "Uploads files validated: $photo_count"
+echo "Restored row counts:"
+printf '%s\n' "$counts"
+echo "Measured RTO: ${rto_seconds}s"
+echo "Backup timestamp (RPO reference): $rpo_info"
+echo "Integrity: HMAC-SHA256 verified; AES-256-CBC decrypted"
 echo "=============================================================================="
-echo "Archive file:       $backup_file"
-echo "Archive size:       $(wc -c < "$backup_file" | tr -d ' ') bytes"
-echo "Database dump:      $db_dump_size bytes"
-echo "Uploads archive:    $uploads_size bytes ($photo_count files)"
-echo "Recovery Time (RTO): ${rto_seconds}s"
-echo "Recovery Point (RPO): $rpo_info"
-echo "Integrity Status:   VERIFIED (HMAC-SHA256 authentic, AES-256-CBC decrypted)"
-echo "=============================================================================="
-exit 0
-
