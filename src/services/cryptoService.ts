@@ -6,9 +6,14 @@
 // In production, authoritative key derivation and cryptographic verification
 // are strictly executed on the backend server (`server.ts`).
 // In client browser builds, a scoped local offline key is used for standalone operation.
-export const MASTER_KEY =
-  (typeof process !== 'undefined' && process.env?.RESTOPASS_MASTER_SECRET) ||
-  'RESTOPASS_RWANDA_MASTER_2026_SUPER_ADMIN_EPHREM';
+const IS_PRODUCTION_BROWSER = typeof window !== 'undefined' && (import.meta as any).env?.PROD === true;
+
+// A browser bundle must never contain the server's master signing secret.
+// Production QR and magic-link operations are server-authoritative.
+export const MASTER_KEY = IS_PRODUCTION_BROWSER
+  ? ''
+  : ((typeof process !== 'undefined' && process.env?.RESTOPASS_MASTER_SECRET) ||
+    'RESTOPASS_LOCAL_DEVELOPMENT_ONLY_NOT_FOR_PRODUCTION');
 
 /**
  * Fast synchronous SHA-256 and HMAC implementation for instant UI & QR generation
@@ -172,6 +177,7 @@ export function generatePhoneToken(
   keyVersion: number,
   clockOffsetMs = 0
 ): { token: string; step: number; secondsRemaining: number } {
+  if (IS_PRODUCTION_BROWSER) return { token: '', step: 0, secondsRemaining: 0 };
   const restaurantKey = deriveRestaurantKey(restaurantCode);
   const customerKey = deriveCustomerKey(restaurantKey, memberNo, keyVersion);
   const step = getCurrentTimeStep(clockOffsetMs);
@@ -194,6 +200,7 @@ export function generateCardToken(
   memberNo: string,
   cardVersion: number
 ): string {
+  if (IS_PRODUCTION_BROWSER) return '';
   const restaurantKey = deriveRestaurantKey(restaurantCode);
   // Card MAC uses version-specific tag
   const fullMac = hmacSha256(restaurantKey, `CARD:${memberNo}:V${cardVersion}`);
@@ -233,6 +240,12 @@ export function verifyQrToken(
   currentRestaurantCode: string,
   customerKeyVersionMap: Record<string, { keyVersion: number; cardVersion: number; cardStatus: string }>
 ): TokenVerificationResult {
+  if (IS_PRODUCTION_BROWSER) {
+    return {
+      valid: false, type: 'phone', restaurantCode: '', memberNo: '', version: 1,
+      isCard: false, error: 'Server verification is required in production.',
+    };
+  }
   const cleanPayload = payload.trim();
   const parts = cleanPayload.split('.');
 
@@ -619,6 +632,7 @@ export async function requestPhoneTokenFromServer(
     // Offline fallback
   }
 
+  if (IS_PRODUCTION_BROWSER) return { token: '', step: 0, secondsRemaining: 0 };
   return generatePhoneToken(restaurantCode, memberNo, keyVersion);
 }
 
@@ -652,6 +666,7 @@ export async function requestCardTokenFromServer(
     // Offline fallback
   }
 
+  if (IS_PRODUCTION_BROWSER) return '';
   return generateCardToken(restaurantCode, memberNo, cardVersion);
 }
 
@@ -697,7 +712,10 @@ export async function verifyQrTokenServer(
     // Network offline; proceed to local verification
   }
 
-  // Graceful offline fallback
+  // Production clients fail closed; the local server must remain reachable for offline-campus operation.
+  if (IS_PRODUCTION_BROWSER) {
+    return { valid: false, type: 'phone', restaurantCode: currentRestaurantCode, memberNo: '', version: 1, isCard: false, error: 'Server verification unavailable. Scan was not accepted.' };
+  }
   return verifyQrToken(payload, currentRestaurantCode, customerKeyVersionMap || {});
 }
 
@@ -726,6 +744,7 @@ export async function signLicensePayloadServer(
     }
   } catch {}
 
+  if (IS_PRODUCTION_BROWSER) return '';
   return signLicensePayload(payload);
 }
 
