@@ -115,23 +115,29 @@ export RESTOPASS_BACKUP_HMAC_KEY="YOUR_32_CHAR_HMAC_KEY"
 
 # Download the specific backup file and its HMAC sidecar into an empty directory
 mkdir -p /tmp/dr-recovery
-sh deploy/restore-offsite.sh restopass-20261103T000000Z.tar.gz.enc /tmp/dr-recovery
+aws s3 cp s3://restopass-backups-private/restopass/restopass-YYYYMMDDTHHMMSSZ.tar.gz.enc /tmp/dr-recovery/backup.enc
+aws s3 cp s3://restopass-backups-private/restopass/restopass-YYYYMMDDTHHMMSSZ.tar.gz.enc.hmac /tmp/dr-recovery/backup.enc.hmac
+
+# Use the exact same timestamped object name for both files. For an S3-compatible
+# provider, add --endpoint-url https://YOUR-S3-ENDPOINT to each aws command.
 ```
 
 ### Step 2: Execute Automated Restoration Drill
 Run the automated verification drill utility:
 
 ```bash
-sh deploy/restore-drill.sh /tmp/dr-recovery/restopass-20261103T000000Z.tar.gz.enc "postgres://restopass:staging_pass@staging-pg:5432/restopass_staging"
+export TARGET_DATABASE_URL="postgres://restopass:staging_pass@staging-pg:5432/restopass_drill"
+# TARGET_DATABASE_URL must identify a disposable, isolated database, never production.
+sh deploy/restore-drill.sh /tmp/dr-recovery/backup.enc "$TARGET_DATABASE_URL"
 ```
 
 The script will automatically:
 1. Verify the HMAC-SHA256 signature sidecar.
 2. Decrypt the AES-256-CBC payload.
 3. Verify top-level archive members (`database.dump` and `uploads.tar.gz`).
-4. Audit unpacked patron photo count and byte integrity.
-5. Restore `database.dump` into the target PostgreSQL instance via `pg_restore`.
-6. Output the formal Disaster Recovery Drill Report.
+4. Validate the uploads archive can be listed and extracted in a temporary audit directory; the script reports the extracted file count, not per-file checksums.
+5. Restore `database.dump` into the explicitly supplied isolated PostgreSQL instance via `pg_restore`, then check the required RestoPass tables and read row counts.
+6. Output a measured restore duration and backup timestamp reference. The script does not calculate actual RPO, restore the live uploads volume, or prove application-level recovery.
 
 ### Step 3: Financial & Ledger Reconciliation Audit
 Connect to the staging PostgreSQL instance and verify financial ledger continuity:
@@ -166,12 +172,20 @@ FROM (
 ) t;
 ```
 
-### Step 4: Record Drill Evidence in Operator Audit Log
-Log the following metrics in your production deployment log:
-- **Date & Time**: `2026-11-03 00:45:00 UTC`
-- **Drill Operator**: Named Platform Engineer
-- **Source Archive**: `restopass-20261103T000000Z.tar.gz.enc`
-- **Measured RTO**: `3.4 seconds` (extraction + database restore)
-- **Measured RPO**: `2 hours 15 minutes` (age of archive at restoration)
-- **Integrity Status**: Passed (0 balance discrepancies, 100% photo SHA256 match)
+### Step 4: Record Actual Drill Evidence in Operator Audit Log
 
+Complete this record only after an operator has run the drill against a disposable database and verified the application-level recovery. Do not pre-fill sample dates, timings, row counts or success claims.
+
+- **Date & Time (UTC):** Pending actual drill
+- **Drill Operator:** Pending
+- **Source Archive:** Pending actual archive name
+- **Target:** Disposable isolated PostgreSQL database (identify host/database without exposing credentials)
+- **Measured RTO:** Pending measurement from the agreed recovery start point through readiness verification
+- **Measured RPO:** Pending; calculate from the latest recoverable backup timestamp versus the incident/recovery point
+- **Database restore:** Pending; attach command output and required-table/row-count evidence
+- **Uploads restore:** Pending; restore the extracted archive into an isolated private uploads volume and verify representative files
+- **Financial reconciliation:** Pending; attach ledger/balance reconciliation output
+- **Integrity Status:** Pending actual verification
+- **Evidence location:** Pending
+
+The numerical RTO/RPO values in Section 1 are **targets, not measured results**. The repository currently contains no evidence of a completed production or off-site restore drill.
