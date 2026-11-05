@@ -217,6 +217,7 @@ export interface TokenVerificationResult {
   step?: number;
   error?: string;
   isCard: boolean;
+  authorizationId?: string;
 }
 
 /**
@@ -705,6 +706,7 @@ export async function verifyQrTokenServer(
           step: data.step,
           isCard: Boolean(data.isCard),
           error: data.error,
+          authorizationId: data.authorizationId,
         };
       }
     }
