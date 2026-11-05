@@ -35,8 +35,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
-          memory: 256M
+          cpus: '1.0'
+          memory: 1024M
 
   # ----------------------------------------------------------------------------
   # 2. Managed Redis 7 In-Memory Cache (Multi-Instance QR Replay Guard)
@@ -58,8 +58,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.0'
-          memory: 1024M
+          cpus: '0.5'
+          memory: 256M
 
   # ----------------------------------------------------------------------------
   # 3. RestoPass Cloud Application Node
