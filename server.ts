@@ -1546,11 +1546,19 @@ app.post('/api/qr/token/phone', apiRateLimiter, requireAuth(), (req, res) => {
     return res.status(400).json({ success: false, error: 'restaurantCode and memberNo are required' });
   }
 
-  // Authorization: Customers can only generate their own pass; staff/admin can generate for their restaurant
-  if (user.role === 'customer' && (user.username !== memberNo || user.restaurantCode !== restaurantCode)) {
-    return res.status(403).json({ success: false, error: 'Forbidden: Customers may only generate their own pass' });
+  // Resolve the member and key version from server-authoritative state.
+  // Never trust a browser-supplied keyVersion for a signed credential.
+  const customerRecord = (serverDbState?.customers || []).find((customer: any) =>
+    customer.restaurantCode === restaurantCode && customer.memberNo === memberNo
+  );
+  if (!customerRecord) {
+    return res.status(404).json({ success: false, error: 'Customer not found in this restaurant.' });
   }
+
   if (user.role === 'customer') {
+    if (customerRecord.id !== user.userId || user.restaurantCode !== restaurantCode) {
+      return res.status(403).json({ success: false, error: 'Forbidden: Customers may only generate their own pass' });
+    }
     const qrEnt = checkServerStudentEntitlement(user.userId, 'digital_qr');
     if (!qrEnt.allowed) {
       return res.status(402).json({
@@ -1559,12 +1567,15 @@ app.post('/api/qr/token/phone', apiRateLimiter, requireAuth(), (req, res) => {
         error: qrEnt.reason || 'Digital dashboard QR requires an active subscription (500 RWF/mo).',
       });
     }
-  }
-  if ((user.role === 'stand_staff' || user.role === 'restaurant_admin') && user.restaurantCode !== restaurantCode) {
-    return res.status(403).json({ success: false, error: 'Forbidden: Cross-restaurant token generation not allowed' });
+  } else if (user.role === 'stand_staff' || user.role === 'restaurant_admin') {
+    if (user.restaurantCode !== restaurantCode) {
+      return res.status(403).json({ success: false, error: 'Forbidden: Cross-restaurant token generation not allowed' });
+    }
+  } else if (user.role !== 'super_admin') {
+    return res.status(403).json({ success: false, error: 'Forbidden: Role cannot generate customer passes' });
   }
 
-  const kVer = typeof keyVersion === 'number' ? keyVersion : 1;
+  const kVer = Number(customerRecord.keyVersion) || 1;
   const restoKey = deriveServerRestaurantKey(restaurantCode);
   const custKey = deriveServerCustomerKey(restoKey, memberNo, kVer);
   const step = getCurrentServerTimeStep();
