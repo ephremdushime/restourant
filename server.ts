@@ -2054,6 +2054,31 @@ app.delete('/api/admin/customers/:customerId/entitlements/:entitlementId', apiRa
 /**
  * Sanitizes and scopes database state according to caller's role (Finding 1)
  */
+const SENSITIVE_CLIENT_FIELDS = new Set([
+  'pin', 'pinhash', 'pinsalt', 'password', 'passwordhash', 'passwordsalt',
+  'idhash', 'onboardingtoken', 'activationtoken', 'activationcode',
+  'recoverycode', 'verificationcode', 'temporarycode', 'onetimecode', 'otp',
+  'pairingkey', 'pairingsecret', 'secret', 'apisecret', 'apikey',
+  'accesskey', 'secretaccesskey', 'accesstoken', 'refreshtoken',
+  'magicauthtoken', 'tokenhash', 'qrsecret', 'privatekey',
+]);
+
+/**
+ * Never send authentication material, PINs, recovery codes or replay state
+ * to browser clients, including tenant administrators and platform admins.
+ */
+function sanitizeSensitiveState(value: any): any {
+  if (Array.isArray(value)) return value.map(sanitizeSensitiveState);
+  if (!value || typeof value !== 'object') return value;
+  const sanitized: Record<string, any> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (SENSITIVE_CLIENT_FIELDS.has(key.toLowerCase())) continue;
+    if (key === 'usedTokens' || key === 'revokedTokens') continue;
+    sanitized[key] = sanitizeSensitiveState(item);
+  }
+  return sanitized;
+}
+
 function scopeStateForUser(state: any, user: UserSession): any {
   if (!state) return null;
   const checkpointList = state.balanceCheckpoints || state.checkpoints || [];
@@ -2188,7 +2213,7 @@ app.get('/api/state', apiRateLimiter, requireAuth(), (req, res) => {
     });
   }
 
-  const scopedState = scopeStateForUser(serverDbState, req.user!);
+  const scopedState = sanitizeSensitiveState(scopeStateForUser(serverDbState, req.user!));
   res.json({
     success: true,
     hasServerState: true,
@@ -2811,4 +2836,5 @@ export {
   getServerDbState,
   setServerDbState,
   validateProductionSecrets,
+  sanitizeSensitiveState,
 };
