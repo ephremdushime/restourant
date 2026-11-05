@@ -9,6 +9,8 @@ import {
   atomicSaveDb,
   validateProductionSecrets,
   sanitizeSensitiveState,
+  normalizeStationUserCredentials,
+  verifyServerCustomerPin,
   UserSession,
 } from '../server';
 import { restoStore } from '../src/store/restoStore';
@@ -135,6 +137,30 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     const scopedSuper = scopeStateForUser(fullMockDbState, superSession);
     assert.equal(scopedSuper.restaurants.length, 2);
     assert.equal(scopedSuper.customers.length, 3);
+  });
+
+  test('migrates legacy station passwords and PINs to scrypt before persistence', () => {
+    const stationUser: any = {
+      id: 'station_1',
+      username: 'cashier_1',
+      pin: '654321',
+      passwordHash: 'legacy-password-value',
+    };
+    const state = { stationUsers: [stationUser] };
+    assert.equal(normalizeStationUserCredentials(state), true);
+    assert.equal(stationUser.pin, undefined);
+    assert.match(stationUser.pinHash, /^scrypt\\$16384\\$8\\$1\\$/);
+    assert.match(stationUser.passwordHash, /^scrypt\\$16384\\$8\\$1\\$/);
+    assert.equal(verifyServerCustomerPin('654321', {
+      id: stationUser.id,
+      memberNo: stationUser.username,
+      pinHash: stationUser.pinHash,
+    }), true);
+    assert.equal(verifyServerCustomerPin('wrong-pin', {
+      id: stationUser.id,
+      memberNo: stationUser.username,
+      pinHash: stationUser.pinHash,
+    }), false);
   });
 
   test('redacts PINs, password hashes, recovery codes and replay state from every client payload', () => {
