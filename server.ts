@@ -3211,7 +3211,9 @@ app.post(
 
 
 function getSaasMtnConfig() {
-  const environment = process.env.MTN_MOMO_TARGET_ENVIRONMENT === 'production' ? 'production' : 'sandbox';
+  const configuredEnvironment = process.env.MTN_MOMO_TARGET_ENVIRONMENT;
+  if (configuredEnvironment !== 'sandbox' && configuredEnvironment !== 'production') return null;
+  const environment = configuredEnvironment;
   if (process.env.RESTOPASS_SAAS_MTN_ENABLED !== 'true' ||
       (environment === 'production' && (process.env.NODE_ENV !== 'production' || process.env.RESTOPASS_SAAS_MTN_PRODUCTION_APPROVED !== 'true'))) return null;
   const apiUser = process.env.MTN_MOMO_COLLECTION_API_USER || '';
