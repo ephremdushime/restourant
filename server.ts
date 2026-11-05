@@ -746,7 +746,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       return res.status(401).json({ success: false, error: 'Invalid Staff PIN or Password' });
     }
 
-    const safeStaffUsername = (matchingStaffUser?.username || username || 'operator').trim();
+    const safeStaffUsername = (matchingStaffUser?.username || (typeof username === 'string' ? username : '') || 'operator').trim();
     const authorizedStationId = matchingStaffUser?.stationId || (!isProd ? stationId || 'stand_1' : '');
     if (isProd && !authorizedStationId) {
       return res.status(403).json({ success: false, error: 'This station account has no assigned scanning station.' });
@@ -765,7 +765,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
         role: 'stand_staff',
         username: safeStaffUsername,
         restaurantCode,
-        stationId: stationId || 'stand_1',
+        stationId: authorizedStationId,
         userLabel: `Staff: ${safeStaffUsername || 'Stand Operator'}`,
       },
     });
