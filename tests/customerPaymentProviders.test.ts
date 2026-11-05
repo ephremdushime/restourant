@@ -55,3 +55,20 @@ test('server-issued customer QR uses the stored customer key version', () => {
   assert.doesNotMatch(qrRoute, /typeof keyVersion === 'number' \? keyVersion/);
   assert.match(qrRoute, /customerRecord\.id !== user\.userId/);
 });
+
+test('customer permanent card QR is server-issued and uses the stored card version', () => {
+  const server = fs.readFileSync(path.resolve(process.cwd(), 'server.ts'), 'utf8');
+  const store = fs.readFileSync(path.resolve(process.cwd(), 'src/store/restoStore.ts'), 'utf8');
+  const customerView = fs.readFileSync(
+    path.resolve(process.cwd(), 'src/components/customer/CustomerView.tsx'),
+    'utf8'
+  );
+  const cardRoute = server.slice(
+    server.indexOf("'/api/qr/token/card'"),
+    server.indexOf('// POST /api/qr/verify')
+  );
+  assert.match(cardRoute, /customerRecord\.cardVersion/);
+  assert.match(cardRoute, /requireAuth\(\['super_admin', 'restaurant_admin', 'customer'\]\)/);
+  assert.match(store, /getServerCustomerCardQr/);
+  assert.match(customerView, /restoStore\.getServerCustomerCardQr\(customer\)/);
+});
