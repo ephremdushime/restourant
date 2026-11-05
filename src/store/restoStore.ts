@@ -4644,6 +4644,39 @@ export class RestoStore {
     return generatePhoneToken(customer.restaurantCode, customer.memberNo, customer.keyVersion);
   }
 
+  /**
+   * Production QR credentials must be minted by the server with its private master key.
+   * The browser-side generator above is retained only for isolated demo mode.
+   */
+  public async getServerCustomerPhoneQr(customer: Customer): Promise<{ token: string; step: number; secondsRemaining: number }> {
+    const empty = { token: '', step: 0, secondsRemaining: 0 };
+    if (!this.authToken || typeof window === 'undefined' || !navigator.onLine) return empty;
+
+    try {
+      const response = await fetch('/api/qr/token/phone', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.authToken}`,
+        },
+        body: JSON.stringify({
+          restaurantCode: customer.restaurantCode,
+          memberNo: customer.memberNo,
+          keyVersion: customer.keyVersion,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data?.success || typeof data.token !== 'string' || !data.token) return empty;
+      return {
+        token: data.token,
+        step: Number(data.step) || 0,
+        secondsRemaining: Math.max(0, Math.min(30, Number(data.secondsRemaining) || 0)),
+      };
+    } catch {
+      return empty;
+    }
+  }
+
   // --- IN-APP & SYSTEM NOTIFICATIONS ENGINE ---
 
   /**
