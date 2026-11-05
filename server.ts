@@ -2879,6 +2879,8 @@ export {
   setServerDbState,
   validateProductionSecrets,
   sanitizeSensitiveState,
+  normalizeStationUserCredentials,
+  verifyServerCustomerPin,
 };
 )) {
       // Historical UI stored the raw password in this field. Rehash it before
