@@ -490,8 +490,8 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     assert.equal(warnStatus.isExpired, false);
     assert.ok(warnStatus.daysRemaining <= 7 && warnStatus.daysRemaining > 0);
 
-    // 2. Monthly subscription ends -> license automatically expires and blocks scanning
-    restoStore.setRestaurantLicenseRemainingDays('RW01', -1);
+    // 2. Paid period and the full 72-hour grace period end -> restriction blocks scanning
+    restoStore.setRestaurantLicenseRemainingDays('RW01', -4);
     const expStatus = restoStore.getRestaurantLicenseStatus('RW01');
     assert.equal(expStatus.status, 'expired');
     assert.equal(expStatus.isExpired, true);
