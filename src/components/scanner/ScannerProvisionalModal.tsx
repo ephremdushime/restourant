@@ -98,7 +98,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
     return digitsOnly.length >= 9 && digitsOnly.length <= 15;
   };
 
-  const handleRegisterNewSubmit = (e: React.FormEvent) => {
+  const handleRegisterNewSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -190,7 +190,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
         staffName.trim()
       );
 
-      const qrToken = restoStore.getCustomerCardQr(result.customer);
+      const qrToken = restoStore.isDemoModeActive() ? restoStore.getCustomerCardQr(result.customer) : await restoStore.getServerCustomerCardQr(result.customer);
       resetNewCustomerFields();
       setSuccessResult({
         customer: result.customer,
@@ -204,7 +204,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
     }
   };
 
-  const handleTopupSubmit = (e: React.FormEvent) => {
+  const handleTopupSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -237,7 +237,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
         staffName.trim()
       );
 
-      const qrToken = restoStore.getCustomerCardQr(selectedCustomer);
+      const qrToken = restoStore.isDemoModeActive() ? restoStore.getCustomerCardQr(selectedCustomer) : await restoStore.getServerCustomerCardQr(selectedCustomer);
       const refUpper = paymentReference.trim().toUpperCase();
       setPaymentReference('');
       setSuccessResult({
