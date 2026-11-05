@@ -30,7 +30,7 @@ The customer-facing RestoPass interfaces offer MTN MoMo only. Airtel Money may r
 
 The first release uses restaurant-admin-initiated MTN RequestToPay. The restaurant administrator approves each prompt on the payer's phone. Do not represent this as automatic recurring debit. Recurring mandates require separate confirmation and approval from MTN.
 
-A payment request accepted by MTN is pending, not paid. Access is granted only after server-side verification confirms the transaction, exact expected amount, RWF currency, unique reference, correct restaurant and successful final provider status.
+A payment request accepted by MTN is pending, not paid. Access is granted only after server-side verification confirms the transaction, exact expected amount, RWF currency, unique reference, correct restaurant, payer MSISDN and successful final provider status. A provider-successful payment with mismatched details is quarantined as `review_required`; it never grants access and requires manual reconciliation.
 
 The client, browser redirect, screenshot or manually supplied transaction reference must never activate or extend access.
 
