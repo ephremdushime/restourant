@@ -537,7 +537,8 @@ export async function recordUsedTokenPostgres(
   ttlSeconds = 60
 ): Promise<{ allowed: boolean }> {
   const p = getPostgresPool();
-  if (!p || !isInitialized) return { allowed: true };
+  if (!p) return { allowed: true }; // No PostgreSQL configured: local/offline mode owns replay persistence.
+  if (!isInitialized) return { allowed: false }; // Configured but not ready: fail closed.
 
   try {
     const res = await p.query(
@@ -552,7 +553,7 @@ export async function recordUsedTokenPostgres(
     return { allowed };
   } catch (err) {
     console.error('[PostgreSQL Adapter] Used token insert error:', err);
-    return { allowed: true }; // Failsafe to avoid blocking legitimate scans on transient DB err
+    return { allowed: false }; // Fail closed: never accept a replay-sensitive scan without durable guard
   }
 }
 
