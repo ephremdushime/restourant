@@ -1162,8 +1162,8 @@ app.post(
     const customers = serverDbState?.customers || [];
     const cust = customers.find(
       (c: any) =>
-        c.id === customerId ||
-        c.memberNo === memberNo ||
+        (customerId && c.id === customerId) ||
+        (memberNo && c.memberNo === memberNo) ||
         (phone && c.phone === phone)
     );
     if (!cust) return res.status(404).json({ success: false, error: 'Customer not found' });
