@@ -55,6 +55,7 @@ export interface Restaurant {
   planId: string;
   defaultPlatePriceRwf?: number;
   studentSubscriptionPriceRwf?: number;
+  saasSubscriptionPriceRwf?: number;
   bundlePricing?: PlateBundlePricing;
   welcomeMessage?: string;
   badgeStyle?: 'gold' | 'emerald' | 'blue' | 'dark';
