@@ -3351,6 +3351,8 @@ app.post('/api/restaurant-saas/payment/initiate', apiRateLimiter, requireAuth(['
     }
     await client.query("INSERT INTO restaurant_subscription_payments (id,restaurant_code,provider,provider_environment,internal_reference,payer_msisdn,amount_rwf,currency,status,idempotency_key,request_fingerprint) VALUES ($1,$2,'mtn_momo',$3,$4,$5,$6,'RWF','created',$7,$8)",
       [paymentId,req.user!.restaurantCode,config.environment,reference,payer,amount,idempotencyKey,fingerprint]);
+    await client.query("INSERT INTO restaurant_subscription_audit_logs (id,restaurant_code,actor_type,actor_id,action,payment_id,data) VALUES ($1,$2,'restaurant_admin',$3,'SAAS_PAYMENT_INITIATED',$4,$5)",
+      ['rsa_'+crypto.randomUUID(),req.user!.restaurantCode,req.user!.userId,paymentId,JSON.stringify({amountRwf:amount,currency:'RWF',provider:'mtn_momo',environment:config.environment})]);
     await client.query('COMMIT');
     const token = await getSaasMtnAccessToken(config);
     const response = await fetch(config.baseUrl+'/collection/v1_0/requesttopay',{method:'POST',headers:{
