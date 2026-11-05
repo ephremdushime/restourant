@@ -88,8 +88,24 @@ cmp "$TMP/source/database.dump" "$TMP/image-restore/database.dump"
 cmp "$TMP/source/uploads.tar.gz" "$TMP/image-restore/uploads.tar.gz"
 
 # Exercise the automated disaster recovery drill verification report
-RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
+# A restore drill without an isolated database must fail rather than claim success.
+if RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
 RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" PATH="$TMP/bin:$TMP/image-bin:$PATH" \
-  restopass-restore-drill "$TMP/valid-backup.enc"
+  restopass-restore-drill "$TMP/valid-backup.enc" >/dev/null 2>&1; then
+  echo "DR drill without an isolated target unexpectedly passed" >&2
+  exit 1
+fi
 
-echo "Backup integrity, guarded restore, tamper rejection, off-site healthcheck, DR drill report and source/container-layout restore tests passed."
+# CI may validate archive integrity/structure, but the report must clearly state
+# that this is not a database restore or production DR sign-off.
+archive_report="$(RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
+RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" PATH="$TMP/bin:$TMP/image-bin:$PATH" \
+  restopass-restore-drill --archive-only "$TMP/valid-backup.enc")"
+printf '%s\n' "$archive_report" | grep -q 'ARCHIVE VALIDATION ONLY'
+printf '%s\n' "$archive_report" | grep -q 'NOT A DATABASE RESTORE'
+if printf '%s\n' "$archive_report" | grep -q 'DISASTER RECOVERY RESTORE DRILL — SUCCESS'; then
+  echo "Archive-only validation incorrectly claimed a successful restore" >&2
+  exit 1
+fi
+
+echo "Backup integrity, guarded restore, tamper rejection, off-site healthcheck, archive-only validation and source/container-layout restore tests passed."
