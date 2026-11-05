@@ -3341,6 +3341,14 @@ app.post('/api/restaurant-saas/payment/initiate', apiRateLimiter, requireAuth(['
       if (prior.rows[0].request_fingerprint !== fingerprint) { await client.query('ROLLBACK'); return res.status(409).json({success:false,error:'Idempotency key reused with different details.'}); }
       await client.query('COMMIT'); return res.json({success:true,payment:prior.rows[0],reused:true});
     }
+    const pending = await client.query(
+      "SELECT * FROM restaurant_subscription_payments WHERE restaurant_code=$1 AND status IN ('created','provider_pending') ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
+      [req.user!.restaurantCode]
+    );
+    if (pending.rows[0]) {
+      await client.query('COMMIT');
+      return res.status(202).json({success:true,payment:pending.rows[0],reused:true,message:'An earlier MTN request is still unresolved. Check its status before starting another payment.'});
+    }
     await client.query("INSERT INTO restaurant_subscription_payments (id,restaurant_code,provider,provider_environment,internal_reference,payer_msisdn,amount_rwf,currency,status,idempotency_key,request_fingerprint) VALUES ($1,$2,'mtn_momo',$3,$4,$5,$6,'RWF','created',$7,$8)",
       [paymentId,req.user!.restaurantCode,config.environment,reference,payer,amount,idempotencyKey,fingerprint]);
     await client.query('COMMIT');
