@@ -8,6 +8,7 @@ import {
   scopeStateForUser,
   atomicSaveDb,
   validateProductionSecrets,
+  sanitizeSensitiveState,
   UserSession,
 } from '../server';
 import { restoStore } from '../src/store/restoStore';
@@ -134,6 +135,28 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     const scopedSuper = scopeStateForUser(fullMockDbState, superSession);
     assert.equal(scopedSuper.restaurants.length, 2);
     assert.equal(scopedSuper.customers.length, 3);
+  });
+
+  test('redacts PINs, password hashes, recovery codes and replay state from every client payload', () => {
+    const payload = sanitizeSensitiveState({
+      customers: [{ id: 'c1', name: 'Test', pinHash: 'hash', pinSalt: 'salt', idHash: 'identity-hash', onboardingToken: 'secret' }],
+      stationUsers: [{ id: 's1', username: 'cashier', pin: '123456', passwordHash: 'hash' }],
+      pinRecoveryRequests: [{ id: 'r1', status: 'pending', recoveryCode: '123456' }],
+      activationCodes: [{ id: 'a1', activationCode: 'ABCDEF' }],
+      usedTokens: [{ token: 'replay-secret' }],
+      safeValue: 'retained',
+    });
+    assert.equal(payload.customers[0].id, 'c1');
+    assert.equal(payload.customers[0].pinHash, undefined);
+    assert.equal(payload.customers[0].pinSalt, undefined);
+    assert.equal(payload.customers[0].idHash, undefined);
+    assert.equal(payload.customers[0].onboardingToken, undefined);
+    assert.equal(payload.stationUsers[0].pin, undefined);
+    assert.equal(payload.stationUsers[0].passwordHash, undefined);
+    assert.equal(payload.pinRecoveryRequests[0].recoveryCode, undefined);
+    assert.equal(payload.activationCodes[0].activationCode, undefined);
+    assert.equal(payload.usedTokens, undefined);
+    assert.equal(payload.safeValue, 'retained');
   });
 
   test('atomicSaveDb writes atomically and maintains backup (Finding 5)', () => {
