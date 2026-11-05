@@ -2376,7 +2376,18 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 // ----------------------------------------------------
 async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
+  const deploymentMode = (process.env.RESTOPASS_DEPLOYMENT_MODE || 'standalone').toLowerCase();
   let viteLoaded = false;
+
+  if (!['cloud', 'standalone'].includes(deploymentMode)) {
+    throw new Error('RESTOPASS_DEPLOYMENT_MODE must be either cloud or standalone.');
+  }
+  if (isProduction && deploymentMode === 'cloud' && !isPostgresConfigured()) {
+    throw new Error('Cloud production mode requires DATABASE_URL. Refusing to start with local JSON persistence.');
+  }
+  if (isProduction && deploymentMode === 'cloud' && !process.env.REDIS_URL) {
+    throw new Error('Cloud production mode requires REDIS_URL for distributed replay protection.');
+  }
 
   // Cloud Relational Database Initialization
   if (isPostgresConfigured()) {
