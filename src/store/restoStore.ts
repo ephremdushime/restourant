@@ -4677,6 +4677,25 @@ export class RestoStore {
     }
   }
 
+  /** Generate the customer's permanent card credential with the server-held signing key. */
+  public async getServerCustomerCardQr(customer: Customer): Promise<string> {
+    if (!this.authToken || typeof window === 'undefined' || !navigator.onLine) return '';
+    try {
+      const response = await fetch('/api/qr/token/card', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.authToken}`,
+        },
+        body: JSON.stringify({ restaurantCode: customer.restaurantCode, memberNo: customer.memberNo }),
+      });
+      const data = await response.json();
+      return response.ok && data?.success && typeof data.token === 'string' ? data.token : '';
+    } catch {
+      return '';
+    }
+  }
+
   // --- IN-APP & SYSTEM NOTIFICATIONS ENGINE ---
 
   /**
