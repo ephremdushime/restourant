@@ -608,7 +608,7 @@ function requireAuth(allowedRoles?: string[]) {
           const row = entitlement.rows[0];
           const paidUntilMs = row?.valid_until ? new Date(row.valid_until).getTime() : 0;
           const graceEndsAtMs = paidUntilMs + 72 * 60 * 60 * 1000;
-          if (!row || ['pending_payment','suspended','expired'].includes(row.status) ||
+          if (!row || !row.subscription_status || ['pending_payment','suspended','expired'].includes(row.status) ||
               ['pending_payment','restricted','cancelled'].includes(row.subscription_status) ||
               !Number.isFinite(paidUntilMs) || Date.now() >= graceEndsAtMs) {
             return res.status(402).json({
