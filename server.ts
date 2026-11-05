@@ -3200,7 +3200,7 @@ async function getSaasMtnAccessToken(config: NonNullable<ReturnType<typeof getSa
   return body.access_token;
 }
 function normalizeSaasPayer(value: unknown): string {
-  return typeof value === 'string' ? value.replace(/[+\\s-]/g, '') : '';
+  return typeof value === 'string' ? value.replace(/[+\s-]/g, '') : '';
 }
 async function ensureRestaurantSaasSubscription(client: any, restaurantCode: string) {
   const found = await client.query('SELECT code,data FROM restaurants WHERE code=$1 FOR UPDATE', [restaurantCode]);
@@ -3257,7 +3257,7 @@ app.post('/api/restaurant-saas/subscription/price', apiRateLimiter, requireAuth(
 app.post('/api/restaurant-saas/payment/initiate', apiRateLimiter, requireAuth(['restaurant_admin']), async (req,res) => {
   const payer = normalizeSaasPayer(req.body?.payerMsisdn);
   const idempotencyKey = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
-  if (!/^2507[89]\\d{7}$/.test(payer) || !/^[A-Za-z0-9._:-]{12,128}$/.test(idempotencyKey))
+  if (!/^2507[89]\d{7}$/.test(payer) || !/^[A-Za-z0-9._:-]{12,128}$/.test(idempotencyKey))
     return res.status(400).json({success:false,error:'Valid Rwanda MTN number and unique idempotency key required.'});
   const config = getSaasMtnConfig();
   if (!config) return res.status(503).json({success:false,error:'MTN collection disabled pending merchant credentials and approval.'});
