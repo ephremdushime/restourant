@@ -159,6 +159,7 @@ export interface LedgerEntry {
   reference?: string;
   reversalOfId?: string;
   idempotencyKey?: string;
+  scanAuthorizationId?: string;
 }
 
 export interface BalanceCheckpoint {
@@ -215,6 +216,7 @@ export interface ScanEvent {
   branchName?: string;
   isGracePlate?: boolean;
   gracePlateNumber?: number;
+  scanAuthorizationId?: string;
 }
 
 export interface Branch {
