@@ -27,6 +27,7 @@ import { RestaurantSecurityCenter } from './RestaurantSecurityCenter';
 import { RestaurantAppearanceManager } from './RestaurantAppearanceManager';
 import { SummaryMetricCards } from './SummaryMetricCards';
 import { FinancialExceptionsManager } from '../common/FinancialExceptionsManager';
+import { RestaurantSaasBillingPanel } from './RestaurantSaasBillingPanel';
 import {
   exportTransactionsToCsv,
   exportTransactionsToJson,
@@ -937,30 +938,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
   const licStatus = restoStore.getRestaurantLicenseStatus(state.currentRestaurantCode);
 
   if (licStatus.isExpired) {
-    return (
-      <div className="max-w-xl mx-auto my-12 p-8 rounded-3xl bg-slate-900 border-2 border-rose-500/80 shadow-2xl text-center space-y-5">
-        <div className="w-16 h-16 mx-auto rounded-2xl bg-rose-500/20 border border-rose-500/50 text-rose-400 flex items-center justify-center">
-          <ShieldAlert className="w-9 h-9" />
-        </div>
-        <div className="space-y-2">
-          <span className="px-3 py-1 rounded-full bg-rose-950 border border-rose-700 text-rose-300 text-xs font-mono font-bold uppercase">
-            Monthly License Expired · Renewal Required
-          </span>
-          <h1 className="text-2xl font-black text-white tracking-tight">
-            Restaurant Subscription License Expired
-          </h1>
-          <p className="text-sm text-slate-300 leading-relaxed">
-            The monthly RestoPass operating license for <strong className="text-white">{restaurant?.name} ({state.currentRestaurantCode})</strong> has ended
-            {licStatus.validUntil ? ` on ${new Date(licStatus.validUntil).toLocaleDateString()}` : ''}. Boss dashboard and scanner operations are paused until your monthly subscription is renewed and reactivated by RestoPass Super Admin.
-          </p>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-300 space-y-1">
-          <div className="font-bold text-white">How to Restore Operations Immediately:</div>
-          <div>Contact RestoPass Platform Authority (Super Admin) to renew and activate your 30-day restaurant license. All patron plate balances and financial ledgers remain 100% preserved.</div>
-        </div>
-      </div>
-    );
+    return <RestaurantSaasBillingPanel restaurantCode={state.currentRestaurantCode} restricted={licStatus.status === 'expired'} />;
   }
 
   return (
@@ -1030,6 +1008,12 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                 activeSubTab === 'pricing' ||
                 activeSubTab === 'overrides' ||
                 activeSubTab === 'settings',
+            },
+            {
+              id: 'billing',
+              label: 'Software Subscription',
+              icon: CreditCard,
+              match: activeSubTab === 'billing',
             },
             {
               id: 'notifications',
@@ -2697,6 +2681,10 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
       })()}
 
       {/* 3. RESTAURANT APPEARANCE & BRANDING VIEW */}
+      {activeSubTab === 'billing' && (
+        <RestaurantSaasBillingPanel restaurantCode={state.currentRestaurantCode} />
+      )}
+
       {activeSubTab === 'appearance' && (
         <RestaurantAppearanceManager
           restaurantCode={state.currentRestaurantCode}
