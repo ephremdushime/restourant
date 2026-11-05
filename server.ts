@@ -186,6 +186,15 @@ function ensureServerDbDefaults(state: any) {
   if (!state.expenses) state.expenses = [];
   if (!state.balanceCheckpoints) state.balanceCheckpoints = [];
   if (!state.pendingApprovals) state.pendingApprovals = [];
+  if (!state.transfers) state.transfers = [];
+  if (!state.auditLogs) state.auditLogs = [];
+  if (!state.shifts) state.shifts = [];
+  if (!state.cashierSessions) state.cashierSessions = [];
+  if (!state.packages) state.packages = [];
+  if (!state.menuItems) state.menuItems = [];
+  if (!state.plans) state.plans = [];
+  if (!state.customTranslations) state.customTranslations = {};
+  if (!state.usedTokens) state.usedTokens = [];
   if (!state.studentSubscriptionSettings) {
     state.studentSubscriptionSettings = {
       enabled: false, // strictly disabled at launch per spec
