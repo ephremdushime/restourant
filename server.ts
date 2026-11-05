@@ -3215,6 +3215,7 @@ function getSaasMtnConfig() {
   if (configuredEnvironment !== 'sandbox' && configuredEnvironment !== 'production') return null;
   const environment = configuredEnvironment;
   if (process.env.RESTOPASS_SAAS_MTN_ENABLED !== 'true' ||
+      (environment === 'sandbox' && process.env.NODE_ENV === 'production') ||
       (environment === 'production' && (process.env.NODE_ENV !== 'production' || process.env.RESTOPASS_SAAS_MTN_PRODUCTION_APPROVED !== 'true'))) return null;
   const apiUser = process.env.MTN_MOMO_COLLECTION_API_USER || '';
   const apiKey = process.env.MTN_MOMO_COLLECTION_API_KEY || '';
@@ -3367,6 +3368,7 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
     const provider:any = await response.json();
     const verified = provider?.status === 'SUCCESSFUL' && Number(provider?.amount) === Number(payment.amount_rwf)
       && provider?.currency === 'RWF' && provider?.externalId === payment.internal_reference
+      && provider?.payer?.partyIdType === 'MSISDN'
       && normalizeSaasPayer(provider?.payer?.partyId) === normalizeSaasPayer(payment.payer_msisdn)
       && typeof provider?.financialTransactionId === 'string' && provider.financialTransactionId.length > 0;
     if (!verified) {
