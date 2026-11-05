@@ -149,8 +149,8 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     const state = { stationUsers: [stationUser] };
     assert.equal(normalizeStationUserCredentials(state), true);
     assert.equal(stationUser.pin, undefined);
-    assert.match(stationUser.pinHash, /^scrypt\\$16384\\$8\\$1\\$/);
-    assert.match(stationUser.passwordHash, /^scrypt\\$16384\\$8\\$1\\$/);
+    assert.match(stationUser.pinHash, /^scrypt\$16384\$8\$1\$/);
+    assert.match(stationUser.passwordHash, /^scrypt\$16384\$8\$1\$/);
     assert.equal(verifyServerCustomerPin('654321', {
       id: stationUser.id,
       memberNo: stationUser.username,
