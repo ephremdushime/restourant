@@ -372,7 +372,7 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
           `INSERT INTO notifications (id, restaurant_code, recipient_id, data)
            VALUES ($1, $2, $3, $4)
            ON CONFLICT (id) DO UPDATE SET recipient_id = EXCLUDED.recipient_id, data = EXCLUDED.data`,
-          [item.id, item.restaurantCode, item.customerId || item.recipientId || null, JSON.stringify(item)]
+          [item.id, item.restaurantCode, item.target === 'all' ? null : item.target || null, JSON.stringify(item)]
         );
       }
     }
@@ -400,12 +400,12 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
     }
     if (Array.isArray(state.auditLogs)) {
       for (const item of state.auditLogs) {
-        if (!item?.id || !item?.restaurantCode || !item?.action) continue;
+        if (!item?.id || !item?.action) continue;
         await client.query(
           `INSERT INTO audit_logs (id, restaurant_code, user_id, action, data)
            VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (id) DO NOTHING`,
-          [item.id, item.restaurantCode, item.userId || null, item.action, JSON.stringify(item)]
+          [item.id, item.restaurantCode || 'GLOBAL', item.userId || item.actorName || null, item.action, JSON.stringify(item)]
         );
       }
     }
