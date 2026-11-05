@@ -200,6 +200,10 @@ function ensureServerDbDefaults(state: any) {
   }
   if (!state.customerSubscriptions) state.customerSubscriptions = [];
   if (!state.studentSubscriptionPayments) state.studentSubscriptionPayments = [];
+  if (!state.subscriptionPayments) state.subscriptionPayments = [];
+  if (!state.activationCodes) state.activationCodes = [];
+  if (!state.restaurantSubscriptions) state.restaurantSubscriptions = [];
+  if (!state.restaurantSubscriptionPayments) state.restaurantSubscriptionPayments = [];
   if (!state.activationRequests) state.activationRequests = [];
   if (!state.pinRecoveryRequests) state.pinRecoveryRequests = [];
 
@@ -2023,21 +2027,23 @@ app.delete('/api/admin/customers/:customerId/entitlements/:entitlementId', apiRa
  */
 function scopeStateForUser(state: any, user: UserSession): any {
   if (!state) return null;
+  const checkpointList = state.balanceCheckpoints || state.checkpoints || [];
 
-  // Super Admin receives complete state
+  // Super Admin receives complete state with the client-facing checkpoint alias.
   if (user.role === 'super_admin') {
-    return state;
+    return { ...state, checkpoints: checkpointList };
   }
 
   // Restaurant Admin: Scoped exclusively to their restaurantCode
   if (user.role === 'restaurant_admin') {
     const rCode = user.restaurantCode;
+    const tenantCustomerIds = new Set((state.customers || []).filter((c: any) => c.restaurantCode === rCode).map((c: any) => c.id));
     return {
       currentRestaurantCode: rCode,
       restaurants: (state.restaurants || []).filter((r: any) => r.code === rCode),
       customers: (state.customers || []).filter((c: any) => c.restaurantCode === rCode),
       ledgerEntries: (state.ledgerEntries || []).filter((l: any) => l.restaurantCode === rCode),
-      checkpoints: (state.checkpoints || []).filter((cp: any) => cp.restaurantCode === rCode),
+      checkpoints: checkpointList.filter((cp: any) => tenantCustomerIds.has(cp.customerId)),
       scanEvents: (state.scanEvents || []).filter((s: any) => s.restaurantCode === rCode),
       scanPoints: (state.scanPoints || []).filter((sp: any) => sp.restaurantCode === rCode),
       transfers: (state.transfers || []).filter((tr: any) => tr.restaurantCode === rCode),
@@ -2065,6 +2071,7 @@ function scopeStateForUser(state: any, user: UserSession): any {
       },
       customerSubscriptions: (state.customerSubscriptions || []).filter((cs: any) => cs.restaurantCode === rCode),
       studentSubscriptionPayments: (state.studentSubscriptionPayments || []).filter((sp: any) => sp.restaurantCode === rCode),
+      subscriptionPayments: (state.subscriptionPayments || []).filter((sp: any) => sp.restaurantCode === rCode),
       activationRequests: (state.activationRequests || []).filter((ar: any) => ar.restaurantCode === rCode),
       pinRecoveryRequests: (state.pinRecoveryRequests || []).filter((pr: any) => pr.restaurantCode === rCode),
       customTranslations: state.customTranslations || {},
@@ -2120,10 +2127,11 @@ function scopeStateForUser(state: any, user: UserSession): any {
           pinHash: undefined, // Redact sensitive hash
         })),
       ledgerEntries: dashEnt.allowed ? (state.ledgerEntries || []).filter((l: any) => l.customerId === custId) : [],
+      checkpoints: dashEnt.allowed ? checkpointList.filter((cp: any) => cp.customerId === custId) : [],
       menuItems: (state.menuItems || []).filter((m: any) => m.restaurantCode === rCode),
       packages: (state.packages || []).filter((p: any) => p.restaurantCode === rCode),
       notifications: dashEnt.allowed
-        ? (state.notifications || []).filter((n: any) => !n.targetCustomerId || n.targetCustomerId === custId)
+        ? (state.notifications || []).filter((n: any) => n.target === 'all' || n.target === custId || n.targetCustomerId === custId)
         : [],
       studentSubscriptionSettings: state.studentSubscriptionSettings || {
         enabled: false,
