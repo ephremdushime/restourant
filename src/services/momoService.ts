@@ -136,6 +136,19 @@ export class MomoService {
   public setCredentials(apiUser: string, apiKey: string): void {
     this.config.apiUser = apiUser;
     this.config.apiKey = apiKey;
+    // Tokens are bound to the credentials that issued them.
+    this.tokenCache.clear();
+  }
+
+  private getCachedToken(scope: string): string | undefined {
+    const cached = this.tokenCache.get(scope);
+    if (!cached) return undefined;
+    // Refresh slightly before provider expiry to avoid using a token at the boundary.
+    if (cached.expiresAt <= Date.now() + 30_000) {
+      this.tokenCache.delete(scope);
+      return undefined;
+    }
+    return cached.token;
   }
 
   // ============================================================================
