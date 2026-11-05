@@ -637,6 +637,9 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
     }
 
     const currentResto = (serverDbState?.restaurants || []).find((r: any) => r.code === restaurantCode);
+    if (!currentResto || currentResto.status === 'suspended' || currentResto.status === 'expired') {
+      return res.status(403).json({ success: false, error: 'Restaurant is unavailable or not authorized for administrator access.' });
+    }
     const safeBossUsername = (username || `admin_${restaurantCode}@example.local`).trim();
     const token = createSessionToken({
       userId: `admin_${restaurantCode}`,
@@ -904,6 +907,9 @@ app.post('/api/customer/auth/login', authRateLimiter, async (req, res) => {
       error: 'Account approved! Please complete your one-time activation at cafeteria reception to set your personal PIN.',
     });
   }
+  if (cust.activationStatus === 'suspended') {
+    return res.status(403).json({ success: false, error: 'Customer account is suspended. Please contact cafeteria management.' });
+  }
 
   const previousPinHash = cust.pinHash;
   const isPinValid = verifyServerCustomerPin(cleanPin, cust);
@@ -912,7 +918,7 @@ app.post('/api/customer/auth/login', authRateLimiter, async (req, res) => {
     if (cust.failedLoginAttempts >= 5) {
       cust.lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
     }
-    queueDbSave(serverDbState);
+    await queueDbSave(serverDbState);
     return res.status(401).json({ success: false, error: 'Invalid phone number or PIN' });
   }
 
