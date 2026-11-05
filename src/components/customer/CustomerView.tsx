@@ -172,10 +172,27 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
   const badgeTheme = getBadgeTheme(currentRestaurant?.badgeStyle);
 
-  const permanentCardToken =
-    customer && !isDashboardGated
+  const [permanentCardToken, setPermanentCardToken] = useState(() =>
+    customer && !isDashboardGated && restoStore.isDemoModeActive()
       ? generateCardToken(customer.restaurantCode, customer.memberNo, customer.cardVersion)
-      : '';
+      : ''
+  );
+
+  useEffect(() => {
+    let active = true;
+    const updateCardToken = async () => {
+      if (!customer || isDashboardGated) {
+        if (active) setPermanentCardToken('');
+        return;
+      }
+      const token = restoStore.isDemoModeActive()
+        ? generateCardToken(customer.restaurantCode, customer.memberNo, customer.cardVersion)
+        : await restoStore.getServerCustomerCardQr(customer);
+      if (active) setPermanentCardToken(token);
+    };
+    void updateCardToken();
+    return () => { active = false; };
+  }, [customer?.id, customer?.restaurantCode, customer?.memberNo, customer?.cardVersion, customer?.cardStatus, isDashboardGated]);
 
   const requestCustomerPhoneQr = async () => {
     if (!customer || isDashboardGated) {
