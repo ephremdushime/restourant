@@ -287,7 +287,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
             className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs rounded-xl transition-colors flex items-center gap-1.5"
           >
             <FileKey className="w-4 h-4 text-emerald-400" />
-            <span>Issue Signed License</span>
+            <span>Verified payment required</span>
           </button>
         </div>
       </div>
@@ -441,7 +441,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                             className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1 shadow-xs transition-colors cursor-pointer"
                           >
                             <RefreshCw className="w-3.5 h-3.5" />
-                            <span>{licStatus.isExpired ? 'Activate 30d License' : 'Renew +30d'}</span>
+                            <span>Verified payment required</span>
                           </button>
 
                           <button
