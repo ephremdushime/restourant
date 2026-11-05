@@ -38,6 +38,9 @@ const FORBIDDEN_PLACEHOLDERS = [
   'CHANGETHIS',
   'YOUR_SECRET',
   'EXAMPLE_SECRET',
+  'GENERATE_',
+  'CONFIGURE_',
+  'YOUR_',
 ];
 
 function validateProductionSecrets(env: NodeJS.ProcessEnv = process.env): {
@@ -69,6 +72,22 @@ function validateProductionSecrets(env: NodeJS.ProcessEnv = process.env): {
       throw new Error(
         '[FATAL SECURITY ERROR] RESTOPASS_MASTER_SECRET contains an unconfigured placeholder. Generate a strong random production secret.'
       );
+    }
+
+    const requiredAdminPasswords = [
+      ['RESTOPASS_SUPERADMIN_PASSWORD', env.RESTOPASS_SUPERADMIN_PASSWORD],
+      ['RESTOPASS_BOSS_PASSWORD', env.RESTOPASS_BOSS_PASSWORD],
+    ] as const;
+    for (const [name, value] of requiredAdminPasswords) {
+      const secret = value?.trim() || '';
+      if (secret.length < 16 || FORBIDDEN_PLACEHOLDERS.some((p) => secret.toUpperCase().includes(p))) {
+        throw new Error(`[FATAL SECURITY ERROR] ${name} must be configured with at least 16 non-placeholder characters in production.`);
+      }
+    }
+
+    const staffPin = env.RESTOPASS_STAFF_DEFAULT_PIN?.trim();
+    if (staffPin && !/^\\d{6,8}$/.test(staffPin)) {
+      throw new Error('[FATAL SECURITY ERROR] RESTOPASS_STAFF_DEFAULT_PIN must be 6-8 digits when configured.');
     }
 
     return { sessionSecret, masterSecret };
@@ -643,7 +662,7 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
     let validPin = false;
     if (matchingStaffUser?.pin) {
       validPin = timingSafeCompare(entered, matchingStaffUser.pin);
-    } else if (configuredStaffPin) {
+    } else if (configuredStaffPin && !isProd) {
       validPin = timingSafeCompare(entered, configuredStaffPin);
     } else if (!isProd) {
       validPin = timingSafeCompare(entered, '1234') || (entered.length >= 4);
