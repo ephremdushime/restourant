@@ -42,7 +42,12 @@ export const RestaurantSaasBillingPanel: React.FC<{ restaurantCode: string; rest
       if (body.paymentId) setPaymentId(body.paymentId);
       setMessage(body.message || 'Payment request sent. Approve the MTN MoMo prompt.');
       await refresh();
-    } catch (e: any) { setError(e.message || 'Payment initiation failed.'); }
+    } catch (e: any) {
+      setError(e.message || 'Payment initiation failed.');
+      // A network timeout may happen after MTN accepted the request. Refresh
+      // history so the unresolved attempt can be checked instead of duplicated.
+      await refresh().catch(() => undefined);
+    }
     finally { setBusy(false); }
   };
 
