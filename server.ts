@@ -1356,48 +1356,76 @@ app.post('/api/upload/photo', apiRateLimiter, requireAuth(), async (req, res) =>
 
 // POST /api/qr/token/phone: Authoritative generation of dynamic phone pass QR
 app.post('/api/qr/token/phone', apiRateLimiter, requireAuth(), (req, res) => {
-  const { restaurantCode, memberNo, keyVersion } = req.body;
+  const { restaurantCode, memberNo } = req.body || {};
   const user = req.user!;
-
-  if (!restaurantCode || !memberNo) {
+  if (typeof restaurantCode !== 'string' || typeof memberNo !== 'string' || !restaurantCode.trim() || !memberNo.trim()) {
     return res.status(400).json({ success: false, error: 'restaurantCode and memberNo are required' });
   }
-
-  // Authorization: Customers can only generate their own pass; staff/admin can generate for their restaurant
-  if (user.role === 'customer' && (user.username !== memberNo || user.restaurantCode !== restaurantCode)) {
-    return res.status(403).json({ success: false, error: 'Forbidden: Customers may only generate their own pass' });
+  const customer = (serverDbState?.customers || []).find(
+    (item: any) => item.restaurantCode === restaurantCode && item.memberNo === memberNo
+  );
+  if (!customer) return res.status(404).json({ success: false, error: 'Customer not found in this restaurant.' });
+  if (user.role === 'customer' && (user.userId !== customer.id || user.restaurantCode !== restaurantCode)) {
+    return res.status(403).json({ success: false, error: 'Customers may only generate their own digital pass.' });
+  }
+  if (user.role !== 'customer' && user.role !== 'super_admin' && user.restaurantCode !== restaurantCode) {
+    return res.status(403).json({ success: false, error: 'Cross-restaurant token generation is forbidden.' });
+  }
+  if (customer.activationStatus === 'suspended' || customer.provisionalStatus === 'rejected' || customer.cardStatus === 'locked') {
+    return res.status(403).json({ success: false, error: 'Customer account or card is not active.' });
   }
   if (user.role === 'customer') {
-    const qrEnt = checkServerStudentEntitlement(user.userId, 'digital_qr');
+    const qrEnt = checkServerStudentEntitlement(customer.id, 'digital_qr');
     if (!qrEnt.allowed) {
       return res.status(402).json({
         success: false,
         requiresSubscription: true,
-        error: qrEnt.reason || 'Digital dashboard QR requires an active subscription (500 RWF/mo).',
+        error: qrEnt.reason || 'Digital dashboard QR requires an active subscription.',
       });
     }
   }
-  if ((user.role === 'stand_staff' || user.role === 'restaurant_admin') && user.restaurantCode !== restaurantCode) {
-    return res.status(403).json({ success: false, error: 'Forbidden: Cross-restaurant token generation not allowed' });
-  }
 
-  const kVer = typeof keyVersion === 'number' ? keyVersion : 1;
+  const keyVersion = Number.isSafeInteger(customer.keyVersion) && customer.keyVersion > 0 ? customer.keyVersion : 1;
   const restoKey = deriveServerRestaurantKey(restaurantCode);
-  const custKey = deriveServerCustomerKey(restoKey, memberNo, kVer);
+  const custKey = deriveServerCustomerKey(restoKey, memberNo, keyVersion);
   const step = getCurrentServerTimeStep();
-  const fullMac = serverHmac(custKey, `STEP:${step}`);
-  const mac = fullMac.slice(0, 16);
-  const token = `v1.${restaurantCode.toUpperCase()}.${memberNo}.${step}.${mac}`;
-  const effectiveTime = Date.now();
-  const secondsRemaining = 30 - Math.floor((effectiveTime % 30000) / 1000);
-
-  return res.json({
-    success: true,
-    token,
-    step,
-    secondsRemaining,
-  });
+  const mac = serverHmac(custKey, \`STEP:\${step}\`).slice(0, 16);
+  const token = \`v1.\${restaurantCode.toUpperCase()}.\${memberNo}.\${step}.\${mac}\`;
+  const secondsRemaining = 30 - Math.floor((Date.now() % 30000) / 1000);
+  return res.json({ success: true, token, step, secondsRemaining });
 });
+
+// POST /api/qr/token/card: Server-authoritative physical card QR generation
+app.post(
+  '/api/qr/token/card',
+  apiRateLimiter,
+  requireAuth(['super_admin', 'restaurant_admin', 'customer']),
+  (req, res) => {
+    const { restaurantCode, memberNo } = req.body || {};
+    const user = req.user!;
+    if (typeof restaurantCode !== 'string' || typeof memberNo !== 'string' || !restaurantCode.trim() || !memberNo.trim()) {
+      return res.status(400).json({ success: false, error: 'restaurantCode and memberNo are required' });
+    }
+    const customer = (serverDbState?.customers || []).find(
+      (item: any) => item.restaurantCode === restaurantCode && item.memberNo === memberNo
+    );
+    if (!customer) return res.status(404).json({ success: false, error: 'Customer not found in this restaurant.' });
+    if (user.role === 'customer' && (user.userId !== customer.id || user.restaurantCode !== restaurantCode)) {
+      return res.status(403).json({ success: false, error: 'Customers may only request their own physical card token.' });
+    }
+    if (user.role === 'restaurant_admin' && user.restaurantCode !== restaurantCode) {
+      return res.status(403).json({ success: false, error: 'Cannot generate cards for other restaurants.' });
+    }
+    if (customer.cardStatus === 'locked' || customer.activationStatus === 'suspended' || customer.provisionalStatus === 'rejected') {
+      return res.status(403).json({ success: false, error: 'Customer card or account is not active.' });
+    }
+    const cardVersion = Number.isSafeInteger(customer.cardVersion) && customer.cardVersion > 0 ? customer.cardVersion : 1;
+    const restoKey = deriveServerRestaurantKey(restaurantCode);
+    const mac = serverHmac(restoKey, \`CARD:\${memberNo}:V\${cardVersion}\`).slice(0, 16);
+    const token = \`c1.\${restaurantCode.toUpperCase()}.\${memberNo}.\${cardVersion}.\${mac}\`;
+    return res.json({ success: true, token, restaurantCode, memberNo, cardVersion });
+  }
+);
 
 // POST /api/qr/token/card: Authoritative generation of physical card QR (Managers & Admins only)
 app.post(
