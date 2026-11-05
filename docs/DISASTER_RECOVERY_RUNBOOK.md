@@ -126,8 +126,10 @@ aws s3 cp s3://restopass-backups-private/restopass/restopass-YYYYMMDDTHHMMSSZ.ta
 Run the automated verification drill utility:
 
 ```bash
-export TARGET_DATABASE_URL="postgres://restopass:staging_pass@staging-pg:5432/restopass_drill"
-# TARGET_DATABASE_URL must identify a disposable, isolated database, never production.
+export TARGET_DATABASE_URL="postgres://restopass:staging_pass@staging-pg:5432/restopass_drill_20261105"
+# The target must be disposable, isolated, and its database name must contain "drill".
+# Set this only after verifying the target host/database is not production.
+export RESTOPASS_DR_RESTORE_TARGET_ISOLATED=true
 sh deploy/restore-drill.sh /tmp/dr-recovery/backup.enc "$TARGET_DATABASE_URL"
 ```
 
@@ -135,9 +137,9 @@ The script will automatically:
 1. Verify the HMAC-SHA256 signature sidecar.
 2. Decrypt the AES-256-CBC payload.
 3. Verify top-level archive members (`database.dump` and `uploads.tar.gz`).
-4. Validate the uploads archive can be listed and extracted in a temporary audit directory; the script reports the extracted file count, not per-file checksums.
-5. Restore `database.dump` into the explicitly supplied isolated PostgreSQL instance via `pg_restore`, then check the required RestoPass tables and read row counts.
-6. Output a measured restore duration and backup timestamp reference. The script does not calculate actual RPO, restore the live uploads volume, or prove application-level recovery.
+4. Validate the uploads archive can be listed without extracting untrusted paths or symlinks; the script reports the archive member count.
+5. Confirm the explicit isolation attestation and require the target database name to contain `drill`; restore `database.dump` via `pg_restore`, then check required RestoPass tables and read row counts.
+6. Output a measured database restore duration and backup timestamp reference. The script does not calculate actual RPO, restore the live uploads volume, or prove application-level recovery.
 
 ### Step 3A: Restore Uploads into an Isolated Private Volume
 
