@@ -229,6 +229,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   const [transferMessage, setTransferMessage] = useState<{ text: string; isError: boolean } | null>(null);
   const [transferRequestId, setTransferRequestId] = useState<string | null>(null);
   const [transferSubmitting, setTransferSubmitting] = useState(false);
+  useEffect(() => setTransferRequestId(null), [recipientQuery, platesToTransfer, customer?.id]);
 
   // Recipient Lookup Helper
   const foundRecipient = customer
@@ -1476,7 +1477,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
               disabled={!foundRecipient || !transferPin || transferSubmitting}
               className="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-sm shadow-md transition-colors cursor-pointer"
             >
-              {transferSubmitting ? 'Processing securely…' : 'Confirm &amp; Transfer Plates'}
+              {transferSubmitting ? 'Processing securely…' : 'Confirm & Transfer Plates'}
             </button>
           </div>
         </div>
