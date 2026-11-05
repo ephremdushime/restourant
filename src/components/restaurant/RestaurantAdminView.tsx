@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Customer,
   Language,
@@ -143,6 +143,23 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
   const [manageCustomer, setManageCustomer] = useState<Customer | null>(null);
   const [manageTab, setManageTab] = useState<'cards' | 'edit' | 'balance' | 'history' | 'notify'>('cards');
   const [manageCopiedToken, setManageCopiedToken] = useState(false);
+  const [manageCardToken, setManageCardToken] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    const loadManageCardToken = async () => {
+      if (!manageCustomer) {
+        if (active) setManageCardToken('');
+        return;
+      }
+      const token = restoStore.isDemoModeActive()
+        ? restoStore.getCustomerCardQr(manageCustomer)
+        : await restoStore.getServerCustomerCardQr(manageCustomer);
+      if (active) setManageCardToken(token);
+    };
+    void loadManageCardToken();
+    return () => { active = false; };
+  }, [manageCustomer?.id, manageCustomer?.restaurantCode, manageCustomer?.memberNo, manageCustomer?.cardVersion, manageCustomer?.cardStatus]);
 
   // Edit Member Profile State
   const [editName, setEditName] = useState('');
@@ -4688,9 +4705,15 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-white">Physical Card Token Payload:</span>
                       <button
-                        onClick={() => {
-                          const token = restoStore.getCustomerCardQr(manageCustomer);
-                          navigator.clipboard?.writeText(token);
+                        onClick={async () => {
+                          const token = manageCardToken || (restoStore.isDemoModeActive()
+                            ? restoStore.getCustomerCardQr(manageCustomer)
+                            : await restoStore.getServerCustomerCardQr(manageCustomer));
+                          if (!token) {
+                            setActionToast('Unable to retrieve the server-signed card token. Check your connection.');
+                            return;
+                          }
+                          await navigator.clipboard?.writeText(token);
                           setManageCopiedToken(true);
                           setTimeout(() => setManageCopiedToken(false), 2500);
                         }}
@@ -4701,7 +4724,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                       </button>
                     </div>
                     <div className="p-2.5 rounded-lg bg-black border border-slate-800 font-mono text-[11px] text-emerald-400 break-all">
-                      {restoStore.getCustomerCardQr(manageCustomer)}
+                      {manageCardToken || 'Loading server-signed card token…'}
                     </div>
                   </div>
 
