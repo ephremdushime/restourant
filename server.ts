@@ -583,6 +583,41 @@ function requireAuth(allowedRoles?: string[]) {
       }
     }
 
+    // Enforce subscription restrictions server-side for every tenant write.
+    // Read-only GETs and SaaS billing routes remain available so admins can renew.
+    const isTenantSession = session.role === 'restaurant_admin' || session.role === 'stand_staff';
+    const isSaasBillingRoute = req.path.startsWith('/api/restaurant-saas/');
+    if (isTenantSession && req.method !== 'GET' && !isSaasBillingRoute) {
+      const pool = getPostgresPool();
+      if (pool) {
+        try {
+          const entitlement = await pool.query(
+            `SELECT r.status, l.valid_until
+             FROM restaurants r
+             LEFT JOIN licenses l ON l.id = r.data->>'currentLicenseId'
+             WHERE r.code = $1 LIMIT 1`,
+            [session.restaurantCode]
+          );
+          const row = entitlement.rows[0];
+          const paidUntilMs = row?.valid_until ? new Date(row.valid_until).getTime() : 0;
+          const graceEndsAtMs = paidUntilMs + 72 * 60 * 60 * 1000;
+          if (!row || ['pending_payment','suspended','expired'].includes(row.status) ||
+              !Number.isFinite(paidUntilMs) || Date.now() >= graceEndsAtMs) {
+            return res.status(402).json({
+              success: false,
+              code: 'RESTAURANT_SUBSCRIPTION_RESTRICTED',
+              error: 'Restaurant subscription is unpaid or restricted. Business-changing operations are disabled; use the SaaS billing screen to renew.',
+            });
+          }
+        } catch (error) {
+          console.error('[Restaurant Subscription Guard] Database check failed:', error);
+          return res.status(503).json({ success: false, error: 'Subscription authority is unavailable. Business-changing operations are fail-closed.' });
+        }
+      } else if (process.env.NODE_ENV === 'production') {
+        return res.status(503).json({ success: false, error: 'Subscription authority is unavailable.' });
+      }
+    }
+
     if (allowedRoles && allowedRoles.length > 0 && !allowedRoles.includes(session.role)) {
       return res.status(403).json({
         success: false,
