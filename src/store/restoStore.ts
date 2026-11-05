@@ -2144,11 +2144,12 @@ export class RestoStore {
    * - Warns restaurant 7 days before monthly subscription ends.
    */
   public getRestaurantLicenseStatus(restaurantCode?: string): {
-    status: 'active' | 'expiring_soon' | 'expired' | 'unlicensed';
+    status: 'active' | 'expiring_soon' | 'grace' | 'expired' | 'unlicensed';
     isExpired: boolean;
     isExpiringSoon: boolean;
     daysRemaining: number;
     hoursRemaining: number;
+    graceHoursRemaining: number;
     validUntil: string | null;
     license?: License;
     warningMessage?: string;
@@ -2165,30 +2166,45 @@ export class RestoStore {
         isExpiringSoon: false,
         daysRemaining: 0,
         hoursRemaining: 0,
+        graceHoursRemaining: 0,
         validUntil: null,
-        warningMessage: 'No active license issued for this restaurant. Please activate a monthly subscription license in Super Admin.',
+        warningMessage: 'No paid RestoPass subscription is active. Complete payment to activate this restaurant.',
       };
     }
 
     const validUntilMs = new Date(license.validUntil).getTime();
+    const graceEndsAtMs = validUntilMs + 72 * 60 * 60 * 1000;
     const msRemaining = validUntilMs - guardedNow;
+    const graceMsRemaining = graceEndsAtMs - guardedNow;
     const daysRemaining = Math.max(0, Math.ceil(msRemaining / (24 * 3600 * 1000)));
     const hoursRemaining = Math.max(0, Math.ceil(msRemaining / (3600 * 1000)));
+    const graceHoursRemaining = Math.max(0, Math.ceil(graceMsRemaining / (3600 * 1000)));
 
-    if (msRemaining <= 0 || restaurant?.status === 'suspended') {
-      if (restaurant && restaurant.status === 'active' && msRemaining <= 0) {
-        restaurant.status = 'suspended';
-      }
+    if (restaurant?.status === 'suspended' || guardedNow >= graceEndsAtMs) {
       return {
         status: 'expired',
         isExpired: true,
         isExpiringSoon: false,
         daysRemaining: 0,
         hoursRemaining: 0,
+        graceHoursRemaining: 0,
         validUntil: license.validUntil,
         license,
-        warningMessage:
-          'Monthly restaurant subscription license has expired. Boss and Scanner operations are locked until the license is renewed and reactivated by Super Admin.',
+        warningMessage: 'The 72-hour renewal grace period has ended. Scanner redemption and business-changing operations are restricted. Sign in to renew.',
+      };
+    }
+
+    if (msRemaining <= 0) {
+      return {
+        status: 'grace',
+        isExpired: false,
+        isExpiringSoon: false,
+        daysRemaining: 0,
+        hoursRemaining: 0,
+        graceHoursRemaining,
+        validUntil: license.validUntil,
+        license,
+        warningMessage: `Subscription expired. A 72-hour restricted renewal grace period remains (${graceHoursRemaining} hour(s)). Renew now to avoid service interruption.`,
       };
     }
 
@@ -2199,9 +2215,10 @@ export class RestoStore {
         isExpiringSoon: true,
         daysRemaining,
         hoursRemaining,
+        graceHoursRemaining: 72,
         validUntil: license.validUntil,
         license,
-        warningMessage: `Subscription Renewal Warning: Your monthly restaurant license expires in ${daysRemaining} day${daysRemaining === 1 ? '' : 's'} (${new Date(license.validUntil).toLocaleDateString()}). Please renew with RestoPass Super Admin to avoid service interruption.`,
+        warningMessage: `Subscription renewal due in ${daysRemaining} day(s). After expiry, a 72-hour grace period applies.`,
       };
     }
 
@@ -2211,6 +2228,7 @@ export class RestoStore {
       isExpiringSoon: false,
       daysRemaining,
       hoursRemaining,
+      graceHoursRemaining: 72,
       validUntil: license.validUntil,
       license,
     };
