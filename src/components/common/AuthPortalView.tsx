@@ -376,6 +376,10 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   };
 
   const handleDemoFillAndSubmit = async (role: UserRole) => {
+    if (import.meta.env.PROD) {
+      setErrorMessage('Demo sign-in is disabled in production. Use your assigned account credentials.');
+      return;
+    }
     setActiveRole(role);
     onRoleSelect(role);
     setErrorMessage(null);
