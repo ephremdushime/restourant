@@ -9,7 +9,7 @@ on:
 jobs:
   test-and-verify:
     name: Build, Lint & Automated Test Suite
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/restopass_test
       TEST_REDIS_URL: redis://localhost:6379
@@ -39,10 +39,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: 'npm'
