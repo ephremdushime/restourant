@@ -1,7 +1,7 @@
 /**
  * RestoPass PostgreSQL Relational Persistence Adapter
  * 
- * Provides production-grade relational persistence for 50,000 DAU multi-tenant campus workloads.
+ * Provides production-grade relational persistence for single-instance pilot multi-tenant campus workloads.
  * When DATABASE_URL is configured, all authoritative state is persisted to PostgreSQL
  * with strict constraints (including UNIQUE idempotency_key on ledger_entries).
  * When DATABASE_URL is omitted, the application falls back automatically to local atomic JSON persistence
