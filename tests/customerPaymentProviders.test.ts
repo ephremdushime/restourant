@@ -44,3 +44,14 @@ test('production customer QR generation uses the authenticated server endpoint',
   assert.match(store, /fetch\('\/api\/qr\/token\/phone'/);
   assert.match(customerView, /restoStore\.getServerCustomerPhoneQr\(customer\)/);
 });
+
+test('server-issued customer QR uses the stored customer key version', () => {
+  const server = fs.readFileSync(path.resolve(process.cwd(), 'server.ts'), 'utf8');
+  const qrRoute = server.slice(
+    server.indexOf("app.post('/api/qr/token/phone'"),
+    server.indexOf("// POST /api/qr/token/card")
+  );
+  assert.match(qrRoute, /customerRecord\.keyVersion/);
+  assert.doesNotMatch(qrRoute, /typeof keyVersion === 'number' \? keyVersion/);
+  assert.match(qrRoute, /customerRecord\.id !== user\.userId/);
+});
