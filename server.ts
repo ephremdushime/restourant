@@ -3404,9 +3404,25 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
     }) && provider?.payer?.partyIdType === 'MSISDN'
       && typeof provider?.financialTransactionId === 'string' && provider.financialTransactionId.length > 0;
     if (!verified) {
-      const status = ['FAILED','REJECTED','TIMEOUT','EXPIRED'].includes(provider?.status) ? 'failed' : 'provider_pending';
-      await pool.query('UPDATE restaurant_subscription_payments SET status=$2,provider_status=$3,updated_at=NOW() WHERE id=$1 AND entitlement_applied_at IS NULL',[payment.id,status,String(provider?.status||'UNKNOWN').slice(0,64)]);
-      return res.json({success:true,status,message:'MTN status has not met every entitlement verification condition.'});
+      const providerSaysSuccessful = provider?.status === 'SUCCESSFUL';
+      const status = providerSaysSuccessful ? 'review_required'
+        : ['FAILED','REJECTED','TIMEOUT','EXPIRED'].includes(provider?.status) ? 'failed' : 'provider_pending';
+      await pool.query('UPDATE restaurant_subscription_payments SET status=$2,provider_status=$3,updated_at=NOW() WHERE id=$1 AND entitlement_applied_at IS NULL',
+        [payment.id,status,String(provider?.status||'UNKNOWN').slice(0,64)]);
+      if (status === 'review_required') {
+        await pool.query("INSERT INTO restaurant_subscription_audit_logs (id,restaurant_code,actor_type,action,payment_id,data) VALUES ($1,$2,'system','SAAS_PAYMENT_REVIEW_REQUIRED',$3,$4)",
+          ['rsa_'+crypto.randomUUID(),payment.restaurant_code,payment.id,JSON.stringify({
+            providerStatus:String(provider?.status||'UNKNOWN'),
+            amountMatched:Number(provider?.amount)===Number(payment.amount_rwf),
+            currencyMatched:provider?.currency==='RWF',
+            referenceMatched:provider?.externalId===payment.internal_reference,
+            payerMatched:normalizeSaasPayer(provider?.payer?.partyId)===normalizeSaasPayer(payment.payer_msisdn),
+            transactionIdPresent:typeof provider?.financialTransactionId==='string'&&provider.financialTransactionId.length>0,
+          })]);
+      }
+      return res.json({success:true,status,message:status==='review_required'
+        ? 'MTN reports a successful transfer, but one or more payment details do not match. Access was not activated; this payment requires manual reconciliation.'
+        : 'MTN status has not met every entitlement verification condition.'});
     }
     await client.query('BEGIN');
     const locked = await client.query('SELECT * FROM restaurant_subscription_payments WHERE id=$1 FOR UPDATE',[payment.id]);
