@@ -390,7 +390,7 @@ CREATE INDEX IF NOT EXISTS idx_restaurant_saas_payment_reconciliation
   ON restaurant_subscription_payments (status, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_restaurant_saas_one_unresolved_payment
   ON restaurant_subscription_payments (restaurant_code)
-  WHERE status IN ('created','provider_pending');
+  WHERE status IN ('created','provider_pending','review_required');
 
 -- Minimal callback/reconciliation metadata. Never persist raw webhook bodies,
 -- access tokens, API keys, or payer credentials.
