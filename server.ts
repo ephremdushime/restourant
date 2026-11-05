@@ -413,6 +413,7 @@ setInterval(() => {
 
 const authRateLimiter = createRateLimiter('auth', 20, 60 * 1000); // 20 attempts per minute
 const activationRateLimiter = createRateLimiter('activation', 5, 15 * 60 * 1000); // 5 activation attempts per 15 minutes
+const recoveryRateLimiter = createRateLimiter('recovery', 5, 15 * 60 * 1000); // 5 recovery attempts per 15 minutes
 const apiRateLimiter = createRateLimiter('api', 120, 60 * 1000); // 120 requests per minute
 const syncRateLimiter = createRateLimiter('sync', 40, 60 * 1000); // 40 syncs per minute
 
@@ -1150,29 +1151,43 @@ app.post('/api/customer/activation/complete', activationRateLimiter, async (req,
   });
 });
 
-// POST /api/customer/recovery/request: Create audited PIN recovery request
-app.post('/api/customer/recovery/request', apiRateLimiter, (req, res) => {
-  const { customerId, phone, reason, idVerificationMethod, restaurantCode } = req.body;
-  const customers = serverDbState?.customers || [];
-  const cust = customers.find((c: any) => c.id === customerId || (phone && c.phone === phone));
-  if (!cust) return res.status(404).json({ success: false, error: 'Customer not found' });
-
-  if (!serverDbState.pinRecoveryRequests) serverDbState.pinRecoveryRequests = [];
-  const requestId = `rec_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+// POST /api/customer/recovery/request: Create tenant-scoped PIN recovery request
+app.post('/api/customer/recovery/request', recoveryRateLimiter, async (req, res) => {
+  if (!serverDbState) return res.status(503).json({ success: false, error: 'Server state is not initialized.' });
+  const { customerId, phone, reason, idVerificationMethod, restaurantCode } = req.body || {};
+  if (typeof restaurantCode !== 'string' || !restaurantCode.trim()) {
+    return res.status(400).json({ success: false, error: 'Restaurant selection is required.' });
+  }
+  const identifier = typeof customerId === 'string' && customerId.trim()
+    ? customerId.trim()
+    : typeof phone === 'string' ? phone.trim() : '';
+  const cust = (serverDbState.customers || []).find((item: any) =>
+    item.restaurantCode === restaurantCode && (item.id === identifier || item.phone === identifier)
+  );
+  if (!cust) return res.status(404).json({ success: false, error: 'Customer not found in the selected restaurant.' });
+  const allowedMethods = ['student_id_check', 'national_id_check', 'photo_match', 'manager_override'];
+  if (idVerificationMethod && !allowedMethods.includes(idVerificationMethod)) {
+    return res.status(400).json({ success: false, error: 'Unsupported identity verification method.' });
+  }
+  if (!Array.isArray(serverDbState.pinRecoveryRequests)) serverDbState.pinRecoveryRequests = [];
+  const requestId = \`rec_\${crypto.randomUUID()}\`;
   const recReq = {
     id: requestId,
     customerId: cust.id,
     memberNo: cust.memberNo,
     phone: cust.phone,
-    restaurantCode: cust.restaurantCode || restaurantCode || 'RW01',
-    reason: (reason || 'Customer forgotten PIN').trim(),
+    restaurantCode: cust.restaurantCode,
+    reason: typeof reason === 'string' ? reason.trim().slice(0, 500) : 'Customer forgotten PIN',
     idVerificationMethod: idVerificationMethod || 'student_id_check',
     status: 'pending',
     createdAt: new Date().toISOString(),
   };
   serverDbState.pinRecoveryRequests.unshift(recReq);
-  queueDbSave(serverDbState);
-
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    serverDbState.pinRecoveryRequests = serverDbState.pinRecoveryRequests.filter((item: any) => item.id !== requestId);
+    return res.status(500).json({ success: false, error: 'Recovery request could not be stored.' });
+  }
   return res.json({ success: true, requestId });
 });
 
