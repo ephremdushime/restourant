@@ -2261,9 +2261,11 @@ app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), as
     return res.status(401).json({ success: false, error: 'Incorrect security PIN.' });
   }
 
+  customer.failedLoginAttempts = 0;
+  customer.lockedUntil = null;
   const entitlement = checkServerStudentEntitlement(customer.id, 'digital_plate_transfer');
   if (!entitlement.allowed) {
-    if (customer.pinHash !== previousPinHash) await queueDbSave(serverDbState);
+    await queueDbSave(serverDbState);
     return res.status(402).json({ success: false, requiresSubscription: true, error: entitlement.reason || 'An active customer subscription is required.' });
   }
 
@@ -2277,13 +2279,13 @@ app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), as
       recipient.activationStatus === 'suspended' ||
       recipient.provisionalStatus === 'pending_approval' ||
       recipient.provisionalStatus === 'rejected') {
-    if (customer.pinHash !== previousPinHash) await queueDbSave(serverDbState);
+    await queueDbSave(serverDbState);
     return res.status(400).json({ success: false, error: 'Recipient not found or not eligible in this restaurant.' });
   }
 
   const availableBalance = getServerCustomerBalance(serverDbState, customer.id);
   if (availableBalance < plates) {
-    if (customer.pinHash !== previousPinHash) await queueDbSave(serverDbState);
+    await queueDbSave(serverDbState);
     return res.status(400).json({ success: false, error: `Insufficient plates. Available balance: ${availableBalance}.` });
   }
 
@@ -2336,8 +2338,6 @@ app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), as
     },
     ...(oldNotifications || []),
   ];
-  customer.failedLoginAttempts = 0;
-  customer.lockedUntil = null;
   if (customer.pinHash !== previousPinHash) console.info('[Auth] Upgraded legacy customer PIN hash to scrypt.');
 
   const saved = await queueDbSave(serverDbState);
@@ -2348,6 +2348,7 @@ app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), as
     serverDbState.notifications = oldNotifications;
     customer.failedLoginAttempts = oldAttempts;
     customer.lockedUntil = oldLockedUntil;
+    customer.pinHash = previousPinHash;
     return res.status(500).json({ success: false, error: 'Transfer could not be committed. No transfer was confirmed.' });
   }
 
