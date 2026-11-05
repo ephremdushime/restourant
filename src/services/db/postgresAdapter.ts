@@ -405,10 +405,10 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
       for (const item of state.transfers) {
         if (!item?.id || !item?.restaurantCode || !item?.senderCustomerId || !item?.recipientCustomerId) continue;
         await client.query(
-          `INSERT INTO transfers (id, restaurant_code, sender_customer_id, recipient_customer_id, plates, data)
-           VALUES ($1, $2, $3, $4, $5, $6)
+          `INSERT INTO transfers (id, restaurant_code, sender_customer_id, recipient_customer_id, plates, data, idempotency_key)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
            ON CONFLICT (id) DO UPDATE SET plates = EXCLUDED.plates, data = EXCLUDED.data`,
-          [item.id, item.restaurantCode, item.senderCustomerId, item.recipientCustomerId, Number(item.plates || 0), JSON.stringify(item)]
+          [item.id, item.restaurantCode, item.senderCustomerId, item.recipientCustomerId, Number(item.plates || 0), JSON.stringify(item), item.idempotencyKey || null]
         );
       }
     }
@@ -505,6 +505,134 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
     await client.query('ROLLBACK');
     console.error('[PostgreSQL Adapter] Error saving state to PostgreSQL transaction:', err);
     return false;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Atomically commits a plate transfer under PostgreSQL row locks.
+ * This is the authoritative path for cloud mode; balance validation and both
+ * ledger entries, transfer, notifications and audit record share one transaction.
+ */
+export async function commitPlateTransferPostgres(input: {
+  transfer: any;
+  ledgerOut: any;
+  ledgerIn: any;
+  auditLog: any;
+  notifications: any[];
+}): Promise<
+  | { ok: true; idempotent: boolean; transfer: any; senderBalance: number; recipientBalance: number }
+  | { ok: false; code: 'NOT_READY' | 'CUSTOMER_NOT_FOUND' | 'INSUFFICIENT_BALANCE' | 'IDEMPOTENCY_CONFLICT' | 'PERSISTENCE_ERROR'; message: string }
+> {
+  const p = getPostgresPool();
+  if (!p || !isInitialized) return { ok: false, code: 'NOT_READY', message: 'PostgreSQL is not ready.' };
+
+  const { transfer, ledgerOut, ledgerIn, auditLog, notifications } = input;
+  const client = await p.connect();
+  let transactionOpen = false;
+  try {
+    await client.query('BEGIN');
+    transactionOpen = true;
+
+    // Lock both customer rows in deterministic order to serialize concurrent transfers
+    // and avoid deadlocks when two customers transfer to one another simultaneously.
+    const locked = await client.query(
+      'SELECT id FROM customers WHERE id = ANY($1::varchar[]) AND restaurant_code = $2 ORDER BY id FOR UPDATE',
+      [[transfer.senderCustomerId, transfer.recipientCustomerId], transfer.restaurantCode]
+    );
+    if (locked.rowCount !== 2) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      return { ok: false, code: 'CUSTOMER_NOT_FOUND', message: 'Sender or recipient no longer exists in this restaurant.' };
+    }
+
+    const prior = await client.query(
+      'SELECT data FROM transfers WHERE idempotency_key = $1 OR id = $2 LIMIT 1',
+      [transfer.idempotencyKey, transfer.id]
+    );
+    if (prior.rows.length) {
+      const existing = prior.rows[0].data;
+      const balances = await client.query(
+        'SELECT customer_id, COALESCE(SUM(plates_delta), 0)::int AS balance FROM ledger_entries WHERE restaurant_code = $1 AND customer_id = ANY($2::varchar[]) GROUP BY customer_id',
+        [transfer.restaurantCode, [transfer.senderCustomerId, transfer.recipientCustomerId]]
+      );
+      const byCustomer = new Map(balances.rows.map((row: any) => [row.customer_id, Number(row.balance)]));
+      await client.query('COMMIT');
+      transactionOpen = false;
+      return {
+        ok: true,
+        idempotent: true,
+        transfer: existing,
+        senderBalance: byCustomer.get(transfer.senderCustomerId) || 0,
+        recipientBalance: byCustomer.get(transfer.recipientCustomerId) || 0,
+      };
+    }
+
+    const balanceResult = await client.query(
+      'SELECT COALESCE(SUM(plates_delta), 0)::int AS balance FROM ledger_entries WHERE restaurant_code = $1 AND customer_id = $2',
+      [transfer.restaurantCode, transfer.senderCustomerId]
+    );
+    const senderBalance = Number(balanceResult.rows[0]?.balance || 0);
+    if (senderBalance < transfer.plates) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      return {
+        ok: false,
+        code: 'INSUFFICIENT_BALANCE',
+        message: `Insufficient plates. Available balance: ${senderBalance}.`,
+      };
+    }
+
+    await client.query(
+      `INSERT INTO transfers (id, restaurant_code, sender_customer_id, recipient_customer_id, plates, data, idempotency_key)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [transfer.id, transfer.restaurantCode, transfer.senderCustomerId, transfer.recipientCustomerId, transfer.plates, JSON.stringify(transfer), transfer.idempotencyKey]
+    );
+
+    for (const entry of [ledgerOut, ledgerIn]) {
+      await client.query(
+        `INSERT INTO ledger_entries (id, restaurant_code, customer_id, type, plates_delta, amount_rwf, idempotency_key, timestamp, data)
+         VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8)`,
+        [entry.id, entry.restaurantCode, entry.customerId, entry.type, entry.platesDelta, entry.idempotencyKey, new Date(entry.timestamp).toISOString(), JSON.stringify(entry)]
+      );
+    }
+
+    await client.query(
+      'INSERT INTO audit_logs (id, restaurant_code, user_id, action, data) VALUES ($1, $2, $3, $4, $5)',
+      [auditLog.id, auditLog.restaurantCode, auditLog.userId || transfer.senderCustomerId, auditLog.action, JSON.stringify(auditLog)]
+    );
+
+    for (const notification of notifications) {
+      await client.query(
+        'INSERT INTO notifications (id, restaurant_code, recipient_id, data) VALUES ($1, $2, $3, $4)',
+        [notification.id, notification.restaurantCode, notification.target === 'all' ? null : notification.target || null, JSON.stringify(notification)]
+      );
+    }
+
+    const finalBalances = await client.query(
+      'SELECT customer_id, COALESCE(SUM(plates_delta), 0)::int AS balance FROM ledger_entries WHERE restaurant_code = $1 AND customer_id = ANY($2::varchar[]) GROUP BY customer_id',
+      [transfer.restaurantCode, [transfer.senderCustomerId, transfer.recipientCustomerId]]
+    );
+    const byCustomer = new Map(finalBalances.rows.map((row: any) => [row.customer_id, Number(row.balance)]));
+    await client.query('COMMIT');
+    transactionOpen = false;
+    return {
+      ok: true,
+      idempotent: false,
+      transfer,
+      senderBalance: byCustomer.get(transfer.senderCustomerId) || 0,
+      recipientBalance: byCustomer.get(transfer.recipientCustomerId) || 0,
+    };
+  } catch (err: any) {
+    if (transactionOpen) {
+      try { await client.query('ROLLBACK'); } catch {}
+    }
+    if (err?.code === '23505') {
+      return { ok: false, code: 'IDEMPOTENCY_CONFLICT', message: 'This transfer request has already been processed. Refresh your balance before retrying.' };
+    }
+    console.error('[PostgreSQL Adapter] Atomic plate transfer failed:', err);
+    return { ok: false, code: 'PERSISTENCE_ERROR', message: 'Transfer could not be committed. No transfer was confirmed.' };
   } finally {
     client.release();
   }
