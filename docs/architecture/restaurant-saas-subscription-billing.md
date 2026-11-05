@@ -52,3 +52,42 @@ Payment verification and entitlement extension must commit atomically. Callback 
 - Sandbox tests must cover success, pending, failure, timeout, wrong amount, wrong currency, wrong restaurant, duplicate callback, delayed callback and concurrent renewal.
 - Manual super-admin extension remains an audited fallback during migration.
 - Do not merge or deploy this module until CI, database-backed integration tests, staging acceptance and production release gates pass.
+
+
+## Implemented application surfaces
+
+- New restaurant registration creates a `pending_payment` restaurant and does not issue an initial licence.
+- Super Admin configures the restaurant's SaaS price in RWF. The existing monthly base-price field is used as the initial price; later price changes are written through the dedicated SaaS pricing endpoint and audited.
+- Restaurant administrators have a dedicated Software Subscription screen. It remains accessible when the subscription is pending or restricted.
+- The server exposes:
+  - `GET /api/restaurant-saas/subscription`
+  - `POST /api/restaurant-saas/subscription/price` (Super Admin only)
+  - `POST /api/restaurant-saas/payment/initiate` (restaurant administrator)
+  - `POST /api/restaurant-saas/payment/:paymentId/verify`
+- RequestToPay is user-authorized for each 30-day cycle. It is not an automatic recurring debit mandate.
+- Tenant write APIs are fail-closed after the 72-hour grace period; GET reads and SaaS billing endpoints remain available. Scanner authorization independently enforces the same grace boundary.
+- The MTN adapter is feature-gated. HTTP 202 is stored as pending only. A successful entitlement is applied in one PostgreSQL transaction after checking provider status, exact amount, RWF currency, external reference, payer MSISDN and provider financial transaction ID.
+- Renewal starts at the later of the existing paid-through timestamp or verified payment time, then adds 30 days. The 72-hour grace period follows the new paid-through timestamp.
+
+## MTN configuration gates
+
+The collection integration expects server-side secrets only:
+
+- `RESTOPASS_SAAS_MTN_ENABLED=true`
+- `MTN_MOMO_TARGET_ENVIRONMENT=sandbox` (or `production`)
+- `MTN_MOMO_COLLECTION_API_USER`
+- `MTN_MOMO_COLLECTION_API_KEY`
+- `MTN_MOMO_COLLECTION_SUBSCRIPTION_KEY`
+- `MTN_MOMO_PRODUCTION_TARGET` for production
+- `RESTOPASS_SAAS_MTN_PRODUCTION_APPROVED=true` plus `NODE_ENV=production` for production
+
+Do not configure the production gate until MTN has approved the own-merchant collection arrangement, issued production credentials, the customer journey has passed UAT, and regulatory requirements have been clarified. Credentials must never be placed in frontend environment variables or committed to Git.
+
+## Remaining release gates
+
+- Run the full CI build, lint and automated test suite against this branch.
+- Add PostgreSQL-backed integration tests for payment idempotency, duplicate verification, transaction rollback, tenant isolation and 72-hour write restrictions.
+- Confirm the MTN RequestToPay response fields and status lookup behavior against the exact Rwanda merchant sandbox credentials and UAT workbook.
+- Complete security review of manual Super Admin licence overrides and make the override reason mandatory.
+- Add production monitoring/reconciliation for payment attempts left pending after network timeouts.
+- Validate the full registration-to-payment journey with a real restaurant administrator and MTN sandbox handset before enabling production collection.
