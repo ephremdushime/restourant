@@ -1,0 +1,65 @@
+# RestoPass constrained 4 GiB pilot profile.
+# Apply after reviewing the explicit limitations in docs/4GB_PILOT_PROFILE.md:
+# docker compose -f deploy/docker-compose.prod.yml -f deploy/docker-compose.4gb.yml config
+# This is NOT the default production sizing and has not yet passed hosted load tests.
+
+services:
+  postgres:
+    command:
+      - postgres
+      - -c
+      - shared_buffers=192MB
+      - -c
+      - effective_cache_size=512MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - max_connections=40
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 768M
+
+  redis:
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      - --maxmemory
+      - 128mb
+      # Do not evict QR replay-guard keys: reject writes instead and fail closed.
+      - --maxmemory-policy
+      - noeviction
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 192M
+
+  app:
+    environment:
+      NODE_OPTIONS: --max-old-space-size=512
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 768M
+
+  backup:
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 384M
+
+  caddy:
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
