@@ -141,8 +141,10 @@ cat > "$TMP/bin/psql" <<'EOF'
 #!/bin/sh
 set -eu
 case "$*" in
-  *to_regclass*) printf 'schema-ok\n' ;;
-  *COUNT*) printf 'restaurants=1\ncustomers=2\nledger_entries=3\nscan_events=4\npending_approvals=5\n' ;;
+  *current_database*) printf 'drill\\n' ;;
+  *pg_tables*) printf '0\\n' ;;
+  *to_regclass*) printf 'schema-ok\\n' ;;
+  *COUNT*) printf 'restaurants=1\\ncustomers=2\\nledger_entries=3\\nscan_events=4\\npending_approvals=5\\n' ;;
   *) exit 4 ;;
 esac
 EOF
