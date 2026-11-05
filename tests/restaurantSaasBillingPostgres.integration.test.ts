@@ -95,7 +95,7 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
   assert.ok(address && typeof address !== 'string');
   const baseUrl = 'http://127.0.0.1:' + address.port;
   const request = async (method: string, path: string, token: string, body?: unknown) => {
-    const response = await fetch(baseUrl + path, {
+    const response = await originalFetch(baseUrl + path, {
       method,
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
