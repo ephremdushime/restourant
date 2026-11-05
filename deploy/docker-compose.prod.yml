@@ -21,7 +21,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-restopass}
       POSTGRES_USER: ${POSTGRES_USER:-restopass_app}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ChangeThisInProdToStrongPassword32Char!}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a unique strong POSTGRES_PASSWORD in the production .env file}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -36,7 +36,7 @@ services:
       resources:
         limits:
           cpus: '2.0'
-          memory: 2048M
+          memory: 256M
 
   # ----------------------------------------------------------------------------
   # 2. Managed Redis 7 In-Memory Cache (Multi-Instance QR Replay Guard)
@@ -45,13 +45,13 @@ services:
     image: redis:7-alpine
     container_name: restopass-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-ChangeRedisProdPassword32Char!}"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Set a unique strong REDIS_PASSWORD in the production .env file}"]
     volumes:
       - redis_data:/data
     ports:
       - "127.0.0.1:6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-ChangeRedisProdPassword32Char!}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?Set REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -71,18 +71,22 @@ services:
     container_name: restopass-app
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       NODE_ENV: production
       PORT: 3000
       # Relational persistence connection
-      DATABASE_URL: postgres://${POSTGRES_USER:-restopass_app}:${POSTGRES_PASSWORD:-ChangeThisInProdToStrongPassword32Char!}@postgres:5432/${POSTGRES_DB:-restopass}
+      DATABASE_URL: postgres://${POSTGRES_USER:-restopass_app}:${POSTGRES_PASSWORD:?Set_POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-restopass}
       PGSSLMODE: disable
+      # Explicit exception: PostgreSQL is reachable only over this private Docker network.
+      ALLOW_INSECURE_DB_TLS: "true"
       # Distributed Redis cache
-      REDIS_URL: redis://:${REDIS_PASSWORD:-ChangeRedisProdPassword32Char!}@redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set_REDIS_PASSWORD}@redis:6379
       # Production Secrets (Mandatory >= 32 chars)
-      SESSION_SECRET: ${SESSION_SECRET:-CHANGE_ME_PRODUCTION_SESSION_SECRET_32_CHARS_LONG}
-      RESTOPASS_MASTER_SECRET: ${RESTOPASS_MASTER_SECRET:-CHANGE_ME_PRODUCTION_MASTER_SECRET_32_CHARS_LONG}
+      SESSION_SECRET: ${SESSION_SECRET:?Set_SESSION_SECRET_minimum_32_random_characters}
+      RESTOPASS_MASTER_SECRET: ${RESTOPASS_MASTER_SECRET:?Set_RESTOPASS_MASTER_SECRET_minimum_32_random_characters}
+      RESTOPASS_SUPERADMIN_PASSWORD: ${RESTOPASS_SUPERADMIN_PASSWORD:?Set_RESTOPASS_SUPERADMIN_PASSWORD}
+      RESTOPASS_BOSS_PASSWORD: ${RESTOPASS_BOSS_PASSWORD:?Set_RESTOPASS_BOSS_PASSWORD}
       # S3 / DigitalOcean Spaces / Cloudflare R2 Object Storage
       S3_BUCKET: ${S3_BUCKET:-}
       S3_REGION: ${S3_REGION:-us-east-1}
@@ -90,19 +94,34 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
       S3_PUBLIC_URL_PREFIX: ${S3_PUBLIC_URL_PREFIX:-}
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - app_uploads:/app/public/uploads
+      - app_data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - app_uploads:/app/public/uploads
-
 volumes:
   postgres_data:
     driver: local
   redis_data:
     driver: local
   app_uploads:
+    driver: local
+  app_data:
     driver: local
 
