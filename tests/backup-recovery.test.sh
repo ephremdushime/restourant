@@ -110,4 +110,34 @@ if printf '%s\n' "$archive_report" | grep -q 'DISASTER RECOVERY RESTORE DRILL â€
   exit 1
 fi
 
-echo "Backup integrity, guarded restore, tamper rejection, off-site healthcheck, archive-only validation and source/container-layout restore tests passed."
+# Exercise the successful DR-drill control path with mocked PostgreSQL clients.
+# This validates script orchestration only; it is not evidence of a real DB restore.
+cat > "$TMP/bin/pg_restore" <<'EOF'
+#!/bin/sh
+set -eu
+case "$*" in *--dbname=postgres://isolated-target/*) ;; *) exit 3 ;; esac
+EOF
+cat > "$TMP/bin/psql" <<'EOF'
+#!/bin/sh
+set -eu
+case "$*" in
+  *to_regclass*) printf 'schema-ok\\n' ;;
+  *COUNT*) printf 'restaurants=1\\ncustomers=2\\nledger_entries=3\\nscan_events=4\\npending_approvals=5\\n' ;;
+  *) exit 4 ;;
+esac
+EOF
+chmod 0755 "$TMP/bin/pg_restore" "$TMP/bin/psql"
+restore_report="$(DATABASE_URL=postgres://production/live RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
+RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" PATH="$TMP/bin:$TMP/image-bin:$PATH" \
+  restopass-restore-drill "$TMP/valid-backup.enc" postgres://isolated-target/drill)"
+printf '%s\\n' "$restore_report" | grep -q 'DISASTER RECOVERY RESTORE DRILL â€” SUCCESS'
+printf '%s\\n' "$restore_report" | grep -q 'restaurants=1'
+if DATABASE_URL=postgres://same/live TARGET_DATABASE_URL=postgres://same/live \
+RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
+RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" PATH="$TMP/bin:$TMP/image-bin:$PATH" \
+  restopass-restore-drill "$TMP/valid-backup.enc" >/dev/null 2>&1; then
+  echo "DR drill unexpectedly allowed restore into DATABASE_URL" >&2
+  exit 1
+fi
+
+echo "Backup integrity, guarded restore, tamper rejection, off-site healthcheck, archive-only validation, mocked DR orchestration and source/container-layout restore tests passed."
