@@ -86,8 +86,8 @@ Do not configure the production gate until MTN has approved the own-merchant col
 ## Remaining release gates
 
 - Run the full CI build, lint and automated test suite against this branch.
-- Add PostgreSQL-backed integration tests for payment idempotency, duplicate verification, transaction rollback, tenant isolation and 72-hour write restrictions.
-- Confirm the MTN RequestToPay response fields and status lookup behavior against the exact Rwanda merchant sandbox credentials and UAT workbook.
+- Run the new PostgreSQL-backed billing integration test and extend it to cover database rollback, concurrent renewals and transaction-status reconciliation races.
+- Confirm the MTN RequestToPay response fields and status lookup behavior against the exact Rwanda merchant sandbox credentials and UAT workbook; the current integration test uses a mocked provider and is not an MTN sandbox test.
 - Complete security review of manual Super Admin licence overrides and make the override reason mandatory.
 - Add automated production monitoring/reconciliation for payment attempts left pending after network timeouts; v1 exposes manual server-side status checks only.
 - Validate the full registration-to-payment journey with a real restaurant administrator and MTN sandbox handset before enabling production collection.
