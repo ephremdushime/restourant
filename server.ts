@@ -688,7 +688,9 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
       return res.status(404).json({ success: false, error: 'Customer record not found' });
     }
 
-    const validPin = verifyServerCustomerPin(pin || '', cust) || (!cust.hasCustomPin && (pin === '1234' || pin === '123456'));
+    const isProd = process.env.NODE_ENV === 'production';
+    const validPin = verifyServerCustomerPin(pin || '', cust) ||
+      (!isProd && !cust.hasCustomPin && (pin === '1234' || pin === '123456'));
     if (!validPin) {
       return res.status(401).json({ success: false, error: 'Invalid Member No or PIN' });
     }
@@ -755,7 +757,9 @@ function computeServerCustomerPinHash(pin: string, customerId: string, memberNo:
 function verifyServerCustomerPin(enteredPin: string, customer: any): boolean {
   if (!enteredPin || !customer) return false;
   const cleanEntered = enteredPin.trim();
-  const expected = (customer.pinHash || '1234').trim();
+  const expected = typeof customer.pinHash === 'string' ? customer.pinHash.trim() : '';
+  // Never authenticate an account with a missing credential by assuming a shared default PIN.
+  if (!expected) return false;
   if (timingSafeCompare(cleanEntered, expected)) return true;
   const computedHash = computeServerCustomerPinHash(cleanEntered, customer.id, customer.memberNo);
   if (timingSafeCompare(computedHash, expected)) return true;
