@@ -4347,7 +4347,7 @@ export class RestoStore {
       planId: restaurant.planId,
       maxScanPoints,
       validDays,
-      graceDays: 0,
+      graceDays: 3,
       featureFlags: existingLic?.featureFlags || {
         spotChecksEnabled: true,
         multiStationEnabled: true,
@@ -4356,16 +4356,11 @@ export class RestoStore {
       },
     });
 
-    if (existingLic) {
-      existingLic.validUntil = newLic.validUntil;
-      existingLic.paidUntil = newLic.validUntil;
-      existingLic.graceDays = 0;
-    }
     restaurant.status = 'active';
     restaurant.currentLicenseId = newLic.id;
     restaurant.highestTimeSeen = Date.now();
 
-    if (params.recordPayment !== false && validDays >= 28) {
+    if (params.recordPayment === true && validDays >= 28) {
       const now = new Date();
       this.recordSubscriptionPayment({
         restaurantCode: restaurant.code,
@@ -4384,8 +4379,8 @@ export class RestoStore {
       senderRole: 'system',
       senderName: 'RestoPass Super Admin',
       type: 'system_broadcast',
-      title: `Restaurant License Activated (${validDays} Days)`,
-      message: `License ${newLic.id} is active until ${new Date(newLic.validUntil).toLocaleDateString()}. All Boss and Scanner operations are unlocked.`,
+      title: `Restaurant License Manually Activated (${validDays} Days)`,
+      message: `A Super Admin manual license override (${newLic.id}) is active until ${new Date(newLic.validUntil).toLocaleDateString()}.`,
       priority: 'important',
     });
 
