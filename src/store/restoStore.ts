@@ -4341,13 +4341,18 @@ export class RestoStore {
     const existingLic = this.getRestaurantLicense(params.restaurantCode);
     const plan = this.state.plans.find((p) => p.id === restaurant.planId) || this.state.plans[0];
     const validDays = params.validDays ?? 30;
+    const paidUntilMs = existingLic ? new Date(existingLic.validUntil).getTime() : Number.NaN;
+    const remainingPaidDays = Number.isFinite(paidUntilMs) && paidUntilMs > Date.now()
+      ? Math.ceil((paidUntilMs - Date.now()) / (24 * 3600 * 1000))
+      : 0;
+    const effectiveValidDays = validDays + remainingPaidDays;
     const maxScanPoints = params.maxScanPoints ?? existingLic?.maxScanPoints ?? plan.terms.maxScanPointsIncluded ?? 4;
 
     const newLic = this.issueLicense({
       restaurantCode: params.restaurantCode,
       planId: restaurant.planId,
       maxScanPoints,
-      validDays,
+      validDays: effectiveValidDays,
       graceDays: 3,
       featureFlags: existingLic?.featureFlags || {
         spotChecksEnabled: true,
@@ -4361,13 +4366,13 @@ export class RestoStore {
     restaurant.currentLicenseId = newLic.id;
     restaurant.highestTimeSeen = Date.now();
 
-    if (params.recordPayment === true && validDays >= 28) {
+    if (params.recordPayment === true && effectiveValidDays >= 28) {
       const now = new Date();
       this.recordSubscriptionPayment({
         restaurantCode: restaurant.code,
         restaurantName: restaurant.name,
         amountRwf: plan.terms.basePriceRwf,
-        periodCovered: `${now.toLocaleString('en-US', { month: 'short', year: 'numeric' })} (${validDays}d Renewal)`,
+        periodCovered: `${now.toLocaleString('en-US', { month: 'short', year: 'numeric' })} (${effectiveValidDays}d Renewal)`,
         paidAt: now.toISOString(),
         paymentMethod: 'MOMO_B2B',
         reference: `RENEW-${restaurant.code}-${Date.now().toString().slice(-5)}`,
@@ -4380,7 +4385,7 @@ export class RestoStore {
       senderRole: 'system',
       senderName: 'RestoPass Super Admin',
       type: 'system_broadcast',
-      title: `Restaurant License Manually Activated (${validDays} Days)`,
+      title: `Restaurant License Manually Activated (${effectiveValidDays} Days)`,
       message: `A Super Admin manual license override (${newLic.id}) is active until ${new Date(newLic.validUntil).toLocaleDateString()}.`,
       priority: 'important',
     });
