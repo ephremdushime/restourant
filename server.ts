@@ -3799,7 +3799,7 @@ app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['cu
     success: false,
     code: 'PAYMENT_PROVIDER_NOT_CONFIGURED',
     error: 'Mobile Money checkout is not available yet. RestoPass will enable dashboard payments after provider API onboarding and security verification.',
-    supportedProviders: ['mtn_momo', 'airtel_money'],
+    supportedProviders: ['mtn_momo'],
   });
 });
 
