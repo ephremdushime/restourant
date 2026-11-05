@@ -1,6 +1,6 @@
 # ==============================================================================
 # RestoPass Multi-Tenant Campus & Cafeteria Cloud Production Stack
-# High-Scale Architecture (50,000 DAU Distributed Deployment)
+# High-Scale Architecture (single-instance pilot Distributed Deployment)
 # ==============================================================================
 # Services:
 #   1. postgres: Managed Relational Database with strict constraints & append-only ledger
