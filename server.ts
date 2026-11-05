@@ -591,7 +591,7 @@ function requireAuth(allowedRoles?: string[]) {
       (req.method === 'GET' && req.path === '/api/restaurant-saas/subscription') ||
       (req.method === 'POST' && (
         req.path === '/api/restaurant-saas/payment/initiate' ||
-        /^\\/api\\/restaurant-saas\\/payment\\/[^/]+\\/verify$/.test(req.path)
+        /^\/api\/restaurant-saas\/payment\/[^/]+\/verify$/.test(req.path)
       ));
     if (isTenantSession && req.method !== 'GET' && !isSaasBillingRoute) {
       const pool = getPostgresPool();
