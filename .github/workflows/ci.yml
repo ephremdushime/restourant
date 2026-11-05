@@ -22,7 +22,10 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci --include=optional || npm install
+        run: npm ci --include=optional
+
+      - name: Dependency vulnerability audit
+        run: npm audit --audit-level=high
 
       - name: Typecheck / Lint
         run: npm run lint
