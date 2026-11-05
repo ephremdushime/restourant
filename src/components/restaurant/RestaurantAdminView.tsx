@@ -937,17 +937,13 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
   const restoStationUsers = restoStore.getRestaurantStationUsers(state.currentRestaurantCode);
   const licStatus = restoStore.getRestaurantLicenseStatus(state.currentRestaurantCode);
 
-  if (licStatus.isExpired) {
-    return <RestaurantSaasBillingPanel restaurantCode={state.currentRestaurantCode} restricted={licStatus.status === 'expired'} />;
-  }
-
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-      {licStatus.status === 'grace' && (
+      {(licStatus.status === 'grace' || licStatus.status === 'expired') && (
         <div className="p-4 rounded-2xl bg-amber-950/90 border-2 border-amber-500/80 text-amber-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <div className="font-black text-white text-sm">Subscription renewal grace period</div>
-            <div className="text-xs text-amber-200 mt-1">Your paid period has ended. You have {licStatus.graceHoursRemaining} hour(s) remaining before scanner redemption and business-changing operations are restricted.</div>
+            <div className="text-xs text-amber-200 mt-1">{licStatus.status === 'grace' ? `Your paid period has ended. You have ${licStatus.graceHoursRemaining} hour(s) remaining before scanner redemption and business-changing operations are restricted.` : 'The 72-hour grace period has ended. Business-changing operations are restricted; read-only access remains available.'}</div>
           </div>
           <button type="button" onClick={() => onSubTabChange('billing')} className="rounded-xl bg-amber-500 px-4 py-2 text-xs font-black text-slate-950">Renew with MTN MoMo</button>
         </div>
