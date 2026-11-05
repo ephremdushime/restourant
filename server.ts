@@ -1428,38 +1428,6 @@ app.post(
 );
 
 // POST /api/qr/token/card: Authoritative generation of physical card QR (Managers & Admins only)
-app.post(
-  '/api/qr/token/card',
-  apiRateLimiter,
-  requireAuth(['super_admin', 'restaurant_admin']),
-  (req, res) => {
-    const { restaurantCode, memberNo, cardVersion } = req.body;
-    const user = req.user!;
-
-    if (!restaurantCode || !memberNo) {
-      return res.status(400).json({ success: false, error: 'restaurantCode and memberNo are required' });
-    }
-
-    if (user.role === 'restaurant_admin' && user.restaurantCode !== restaurantCode) {
-      return res.status(403).json({ success: false, error: 'Forbidden: Cannot generate cards for other restaurants' });
-    }
-
-    const cVer = typeof cardVersion === 'number' ? cardVersion : 1;
-    const restoKey = deriveServerRestaurantKey(restaurantCode);
-    const fullMac = serverHmac(restoKey, `CARD:${memberNo}:V${cVer}`);
-    const mac = fullMac.slice(0, 16);
-    const token = `c1.${restaurantCode.toUpperCase()}.${memberNo}.${cVer}.${mac}`;
-
-    return res.json({
-      success: true,
-      token,
-      restaurantCode,
-      memberNo,
-      cardVersion: cVer,
-    });
-  }
-);
-
 // POST /api/qr/verify: Server-Authoritative QR Verification with Shared Persistent Replay Guard (Finding 4)
 app.post(
   '/api/qr/verify',
