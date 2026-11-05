@@ -2181,7 +2181,7 @@ app.get('/api/state', apiRateLimiter, requireAuth(), (req, res) => {
 app.post(
   '/api/state',
   apiRateLimiter,
-  requireAuth(['super_admin', 'restaurant_admin']),
+  requireAuth(['super_admin']),
   async (req, res) => {
     const incoming = req.body;
     if (!incoming || typeof incoming !== 'object') {
@@ -2198,24 +2198,13 @@ app.post(
       return res.status(400).json({ success: false, error: 'Invalid payload: customers must be an array' });
     }
 
-    if (user.role === 'super_admin') {
-      serverDbState = incoming;
-    } else if (user.role === 'restaurant_admin') {
-      // Restaurant admin can only update entities matching their restaurantCode
-      const rCode = user.restaurantCode;
-      if (!serverDbState) {
-        serverDbState = incoming;
-      } else {
-        // Replace or merge only scoped collections
-        const incomingCusts = (incoming.customers || []).filter((c: any) => c.restaurantCode === rCode);
-        const otherCusts = (serverDbState.customers || []).filter((c: any) => c.restaurantCode !== rCode);
-        serverDbState.customers = [...otherCusts, ...incomingCusts];
-
-        const incomingLedgers = (incoming.ledgerEntries || []).filter((l: any) => l.restaurantCode === rCode);
-        const otherLedgers = (serverDbState.ledgerEntries || []).filter((l: any) => l.restaurantCode !== rCode);
-        serverDbState.ledgerEntries = [...otherLedgers, ...incomingLedgers];
-      }
+    // Full-state replacement is a break-glass platform operation. Tenant administrators
+    // must use the validated incremental sync route and cannot replace financial records.
+    if (user.role !== 'super_admin') {
+      return res.status(403).json({ success: false, error: 'Full-state replacement is restricted to platform super administrators.' });
     }
+    serverDbState = incoming;
+    ensureServerDbDefaults(serverDbState);
 
     const savedOk = await queueDbSave(serverDbState);
     if (!savedOk) {
@@ -2403,7 +2392,17 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
             existingCustomersMap.set(inc.id, {
               ...prev,
               ...inc,
-              pinHash: inc.pinHash ?? prev.pinHash,
+              // Credential, identity-proof and anti-replay fields are server-managed.
+              pinHash: prev.pinHash,
+              hasCustomPin: prev.hasCustomPin,
+              pinSetAt: prev.pinSetAt,
+              idHash: prev.idHash,
+              idNumberMasked: prev.idNumberMasked,
+              onboardingToken: prev.onboardingToken,
+              keyVersion: prev.keyVersion,
+              cardVersion: prev.cardVersion,
+              failedLoginAttempts: prev.failedLoginAttempts,
+              lockedUntil: prev.lockedUntil,
             });
           }
         } else if (user.role !== 'customer') {
@@ -2529,13 +2528,15 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
       // states are server-authoritative and must not be accepted from client fullState.
       if (user.role !== 'customer') {
         mergeScopedCollection('notifications', true);
-        mergeScopedCollection('transfers', false);
+        if (user.role === 'restaurant_admin' || user.role === 'super_admin') {
+          mergeScopedCollection('transfers', false);
+        }
         mergeScopedCollection('auditLogs', false);
-        mergeScopedCollection('pendingApprovals', true);
+        mergeScopedCollection('pendingApprovals', user.role !== 'stand_staff');
         mergeScopedCollection('payments', false);
         mergeScopedCollection('shifts', true);
         mergeScopedCollection('activationRequests', true);
-        mergeScopedCollection('pinRecoveryRequests', true);
+        mergeScopedCollection('pinRecoveryRequests', user.role !== 'stand_staff');
       }
 
       if (user.role === 'restaurant_admin' || user.role === 'super_admin') {
@@ -2554,7 +2555,16 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
             if (!incR || !incR.code) continue;
             if (allowedRestoCode && incR.code !== allowedRestoCode) continue;
             const prevR: any = rMap.get(incR.code);
-            rMap.set(incR.code, prevR ? { ...prevR, ...incR } : incR);
+            rMap.set(incR.code, prevR ? {
+              ...prevR,
+              ...incR,
+              // Contract/licensing authority remains platform-controlled.
+              status: prevR.status,
+              planId: prevR.planId,
+              currentLicenseId: prevR.currentLicenseId,
+              termsOverride: prevR.termsOverride,
+              highestTimeSeen: Math.max(Number(prevR.highestTimeSeen || 0), Number(incR.highestTimeSeen || 0)),
+            } : incR);
           }
           serverDbState.restaurants = Array.from(rMap.values());
         }
