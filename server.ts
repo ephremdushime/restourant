@@ -776,28 +776,67 @@ app.post('/api/auth/logout', (req, res) => {
 // Customer Non-SMS Authentication, Activation & Recovery Endpoints (Section 4)
 // ----------------------------------------------------
 
-function computeServerCustomerPinHash(pin: string, customerId: string, memberNo: string): string {
-  const salt = `RESTOPASS_CUST_SALT:${customerId}:${memberNo}`;
-  const saltedPayload = `RESTOPASS_SALTED_PIN_V1:${salt}:${pin.trim()}`;
-  return crypto.createHash('sha256').update(saltedPayload).digest('hex');
+function computeServerCustomerPinHash(pin: string, _customerId: string, _memberNo: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(pin.trim(), salt, 64, {
+    N: 16384,
+    r: 8,
+    p: 1,
+    maxmem: 64 * 1024 * 1024,
+  }).toString('hex');
+  return `scrypt$16384$8$1$${salt}$${derived}`;
 }
 
 function verifyServerCustomerPin(enteredPin: string, customer: any): boolean {
   if (!enteredPin || !customer) return false;
   const cleanEntered = enteredPin.trim();
   const expected = typeof customer.pinHash === 'string' ? customer.pinHash.trim() : '';
-  // Never authenticate an account with a missing credential by assuming a shared default PIN.
   if (!expected) return false;
-  if (timingSafeCompare(cleanEntered, expected)) return true;
-  const computedHash = computeServerCustomerPinHash(cleanEntered, customer.id, customer.memberNo);
-  if (timingSafeCompare(computedHash, expected)) return true;
-  const plainHash = crypto.createHash('sha256').update(cleanEntered).digest('hex');
-  if (timingSafeCompare(plainHash, expected)) return true;
+
+  if (expected.startsWith('scrypt$')) {
+    const parts = expected.split('$');
+    if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
+    const cost = Number(parts[1]);
+    const blockSize = Number(parts[2]);
+    const parallelization = Number(parts[3]);
+    const salt = parts[4];
+    const storedHash = parts[5];
+    if (cost !== 16384 || blockSize !== 8 || parallelization !== 1 ||
+        !/^[a-f0-9]{32}$/.test(salt) || !/^[a-f0-9]{128}$/.test(storedHash)) {
+      return false;
+    }
+    const actual = crypto.scryptSync(cleanEntered, salt, 64, {
+      N: cost,
+      r: blockSize,
+      p: parallelization,
+      maxmem: 64 * 1024 * 1024,
+    }).toString('hex');
+    return timingSafeCompare(actual, storedHash);
+  }
+
+  // Legacy SHA-256 PIN formats are accepted only to migrate existing accounts.
+  // Successful verification immediately replaces the weak hash with scrypt.
+  const legacySalts = [
+    `RESTOPASS_CUST_SALT:${customer.id}:${customer.memberNo}`,
+    `RESTOPASS_CUST_PIN_SALT_${customer.id}_${customer.memberNo}`,
+  ];
+  const legacyHashes = legacySalts.map((salt) =>
+    crypto.createHash('sha256')
+      .update(`RESTOPASS_SALTED_PIN_V1:${salt}:${cleanEntered}`)
+      .digest('hex')
+  );
+  legacyHashes.push(crypto.createHash('sha256').update(cleanEntered).digest('hex'));
+
+  if (legacyHashes.some((hash) => timingSafeCompare(hash, expected))) {
+    customer.pinHash = computeServerCustomerPinHash(cleanEntered, customer.id, customer.memberNo);
+    customer.hasCustomPin = true;
+    return true;
+  }
   return false;
 }
 
 // POST /api/customer/auth/login: Authenticate phone number + 6+ digit PIN (Rate-limited, lockout, generic error)
-app.post('/api/customer/auth/login', authRateLimiter, (req, res) => {
+app.post('/api/customer/auth/login', authRateLimiter, async (req, res) => {
   const { phone, pin, username } = req.body;
   const cleanPhone = (phone || username || '').trim();
   const cleanPin = (pin || '').trim();
@@ -845,6 +884,7 @@ app.post('/api/customer/auth/login', authRateLimiter, (req, res) => {
     });
   }
 
+  const previousPinHash = cust.pinHash;
   const isPinValid = verifyServerCustomerPin(cleanPin, cust);
   if (!isPinValid) {
     cust.failedLoginAttempts = (cust.failedLoginAttempts || 0) + 1;
@@ -859,7 +899,8 @@ app.post('/api/customer/auth/login', authRateLimiter, (req, res) => {
   cust.failedLoginAttempts = 0;
   cust.lockedUntil = null;
   cust.lastLoginAt = new Date().toISOString();
-  queueDbSave(serverDbState);
+  if (cust.pinHash !== previousPinHash) console.info('[Auth] Upgraded legacy customer PIN hash to scrypt.');
+  await queueDbSave(serverDbState); // Persists lockout reset and any legacy PIN-hash upgrade.
 
   const token = createSessionToken({
     userId: cust.id,
