@@ -139,6 +139,25 @@ The script will automatically:
 5. Restore `database.dump` into the explicitly supplied isolated PostgreSQL instance via `pg_restore`, then check the required RestoPass tables and read row counts.
 6. Output a measured restore duration and backup timestamp reference. The script does not calculate actual RPO, restore the live uploads volume, or prove application-level recovery.
 
+### Step 3A: Restore Uploads into an Isolated Private Volume
+
+The drill validates the upload archive but deliberately does not modify any application volume. To test upload restoration separately:
+
+```bash
+mkdir -p /tmp/dr-recovery/artifacts
+sh deploy/restore.sh /tmp/dr-recovery/backup.enc /tmp/dr-recovery/artifacts
+
+# Extract only into a new, isolated, empty uploads directory.
+mkdir -p /tmp/restopass-uploads-drill
+tar -xzf /tmp/dr-recovery/artifacts/uploads.tar.gz -C /tmp/restopass-uploads-drill
+
+# Inspect the recovered file count and representative file readability.
+find /tmp/restopass-uploads-drill -type f | wc -l
+find /tmp/restopass-uploads-drill -type f -maxdepth 3 -print | head -20
+```
+
+Do not extract over the live production uploads directory during a drill. The operator must verify representative images through the application in isolated staging before declaring recovery complete.
+
 ### Step 3: Financial & Ledger Reconciliation Audit
 Connect to the staging PostgreSQL instance and verify financial ledger continuity:
 
