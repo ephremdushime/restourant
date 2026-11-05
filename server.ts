@@ -12,6 +12,7 @@ import {
 } from './src/services/db/postgresAdapter';
 import { ensureRedisReady, getRedisClient, isRedisConfigured } from './src/services/cache/redisClient';
 import { uploadBase64Photo, downloadPatronPhoto } from './src/services/storage/objectStorage';
+import { calculateRenewalPeriod, validateSaasPaymentMatch } from './src/services/restaurantSaasBilling';
 
 const app = express();
 if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
@@ -3370,10 +3371,17 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
     },signal:AbortSignal.timeout(10000)});
     if (!response.ok) return res.status(502).json({success:false,error:'MTN status unavailable; no entitlement changed.'});
     const provider:any = await response.json();
-    const verified = provider?.status === 'SUCCESSFUL' && Number(provider?.amount) === Number(payment.amount_rwf)
-      && provider?.currency === 'RWF' && provider?.externalId === payment.internal_reference
-      && provider?.payer?.partyIdType === 'MSISDN'
-      && normalizeSaasPayer(provider?.payer?.partyId) === normalizeSaasPayer(payment.payer_msisdn)
+    const verified = validateSaasPaymentMatch({
+      providerStatus: provider?.status,
+      providerAmount: provider?.amount,
+      expectedAmountRwf: Number(payment.amount_rwf),
+      providerCurrency: provider?.currency,
+      expectedCurrency: 'RWF',
+      providerExternalId: provider?.externalId,
+      expectedExternalId: payment.internal_reference,
+      providerPayerMsisdn: provider?.payer?.partyId,
+      expectedPayerMsisdn: payment.payer_msisdn,
+    }) && provider?.payer?.partyIdType === 'MSISDN'
       && typeof provider?.financialTransactionId === 'string' && provider.financialTransactionId.length > 0;
     if (!verified) {
       const status = ['FAILED','REJECTED','TIMEOUT','EXPIRED'].includes(provider?.status) ? 'failed' : 'provider_pending';
@@ -3390,11 +3398,11 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
     if (!subResult.rows[0]) { await client.query('ROLLBACK'); return res.status(409).json({success:false,error:'Subscription record missing.'}); }
     const restaurant = restaurantResult.rows[0].data || {};
     const subscription = subResult.rows[0];
-    const paidEnd = subscription.current_period_end ? new Date(subscription.current_period_end).getTime() : NaN;
     const verifiedAt = new Date();
-    const startMs = Number.isFinite(paidEnd) && paidEnd > verifiedAt.getTime() ? paidEnd : verifiedAt.getTime();
-    const end = new Date(startMs+30*24*60*60*1000).toISOString();
-    const graceEnd = new Date(startMs+30*24*60*60*1000+72*60*60*1000).toISOString();
+    const period = calculateRenewalPeriod(subscription.current_period_end, verifiedAt.toISOString());
+    const startMs = Date.parse(period.periodStart);
+    const end = period.periodEnd;
+    const graceEnd = period.gracePeriodEnd;
     const plan = (serverDbState?.plans||[]).find((item:any)=>item.id===restaurant.planId);
     const oldLicense = (serverDbState?.licenses||[]).find((item:any)=>item.id===restaurant.currentLicenseId);
     const maxScanPoints = Number(oldLicense?.maxScanPoints||plan?.terms?.maxScanPointsIncluded||1);
@@ -3408,17 +3416,17 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
     const updatedRestaurant = {...restaurant,status:'active',currentLicenseId:licenseId,highestTimeSeen:Date.now()};
     await client.query('UPDATE restaurants SET status=$2,data=$3,updated_at=NOW() WHERE code=$1',[pay.restaurant_code,'active',JSON.stringify(updatedRestaurant)]);
     await client.query("UPDATE restaurant_subscriptions SET status='active',current_period_start=$2,current_period_end=$3,grace_period_end=$4,last_payment_id=$5,updated_at=NOW() WHERE restaurant_code=$1",
-      [pay.restaurant_code,new Date(startMs).toISOString(),end,graceEnd,pay.id]);
+      [pay.restaurant_code,period.periodStart,end,graceEnd,pay.id]);
     await client.query("UPDATE restaurant_subscription_payments SET status='successful',provider_transaction_id=$2,provider_status='SUCCESSFUL',verified_at=$3,entitlement_applied_at=$3,updated_at=NOW() WHERE id=$1",
       [pay.id,provider.financialTransactionId,verifiedAt.toISOString()]);
     await client.query("INSERT INTO restaurant_subscription_audit_logs (id,restaurant_code,actor_type,actor_id,action,payment_id,data) VALUES ($1,$2,'mtn_momo',$3,'SAAS_PAYMENT_VERIFIED',$4,$5)",
-      ['rsa_'+crypto.randomUUID(),pay.restaurant_code,provider.financialTransactionId,pay.id,JSON.stringify({amountRwf:Number(pay.amount_rwf),currency:'RWF',periodStart:new Date(startMs).toISOString(),periodEnd:end,licenseId})]);
+      ['rsa_'+crypto.randomUUID(),pay.restaurant_code,provider.financialTransactionId,pay.id,JSON.stringify({amountRwf:Number(pay.amount_rwf),currency:'RWF',periodStart:periodStart:period.periodStart,periodEnd:end,licenseId})]);
     await client.query('COMMIT');
     if (serverDbState) {
       serverDbState.restaurants=(serverDbState.restaurants||[]).map((item:any)=>item.code===pay.restaurant_code?updatedRestaurant:item);
       serverDbState.licenses=[...(serverDbState.licenses||[]),license];
     }
-    return res.json({success:true,status:'successful',subscription:{status:'active',currentPeriodStart:new Date(startMs).toISOString(),currentPeriodEnd:end,gracePeriodEnd:graceEnd}});
+    return res.json({success:true,status:'successful',subscription:{status:'active',currentPeriodStart:period.periodStart,currentPeriodEnd:end,gracePeriodEnd:graceEnd}});
   } catch(error) { try{await client.query('ROLLBACK')}catch{}; console.error('[SaaS payment verification]',error); return res.status(503).json({success:false,error:'Verification or entitlement application failed. No success is assumed; retry or reconcile.'}); }
   finally { client.release(); }
 });
