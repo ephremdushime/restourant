@@ -233,9 +233,8 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           restaurantCode: selectedRestoCode,
         });
 
-        const isValid = serverAuth.success || (password && password.length >= 6);
-
-        if (serverAuth.success || isValid) {
+        // The server is the only authentication authority. Password length is not proof.
+        if (serverAuth.success) {
           setFailedAttempts(0);
           restoStore.setRestaurantCode(selectedRestoCode);
           restoStore.setRole('restaurant_admin');
@@ -272,25 +271,8 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           stationId: selectedStationId,
         });
 
-        const stationUsers = restoStore.getRestaurantStationUsers(selectedRestoCode);
-        const stationUser =
-          stationUsers.find(
-            (u) =>
-              u.username.toLowerCase() === username.toLowerCase().trim() ||
-              (selectedStationId && u.stationId === selectedStationId)
-          ) || stationUsers[0];
-
-        const stationSalt = getStationUserSalt(
-          stationUser?.id || selectedStationId || 'station_default',
-          stationUser?.username || username || 'stand_operator'
-        );
-        const expectedPin = stationUser?.pin || '1234';
-        const expectedPassword = stationUser?.passwordHash || 'EastHub#2026';
-
-        const isPinValid = await verifyPinSecure(entered, stationSalt, expectedPin);
-        const isPwdValid = await verifyPasswordSecure(entered, stationSalt, expectedPassword);
-
-        if (serverAuth.success || isPinValid || isPwdValid) {
+        // Never authenticate a cashier from browser-local PINs or passwords.
+        if (serverAuth.success) {
           setFailedAttempts(0);
           restoStore.setRestaurantCode(selectedRestoCode);
           if (selectedStationId) restoStore.setStation(selectedStationId);
@@ -342,18 +324,9 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
             setIsVerifying(false);
             return;
           }
-          const setupRes = await restoStore.setupFirstTimeCustomerPin({
-            phoneOrMember: cleanPhoneOrMember,
-            newPin: enteredPin,
-            restaurantCode: selectedRestoCode,
-          });
-          if (setupRes.success && setupRes.customer) {
-            setFailedAttempts(0);
-            sound.playSuccessBeep();
-            onLoginSuccess('customer', `${setupRes.customer.name} (#${setupRes.customer.memberNo})`);
-          } else {
-            handleFailedAttempt(setupRes.error || 'Could not complete first-time PIN setup.');
-          }
+          setErrorMessage('Your account is approved. Please visit cafeteria reception to receive a one-time activation code before setting your PIN.');
+          sound.playDangerAlarm();
+          setIsVerifying(false);
           return;
         }
 
@@ -384,9 +357,8 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           password,
         });
 
-        const isValid = serverAuth.success || (password && password.length >= 8);
-
-        if (serverAuth.success || isValid) {
+        // Super-admin access must be verified by the server-side credential check.
+        if (serverAuth.success) {
           setFailedAttempts(0);
           restoStore.setRole('super_admin');
           restoStore.logAudit({
