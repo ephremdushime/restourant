@@ -96,6 +96,26 @@ jobs:
           RESTOPASS_BACKUP_S3_SECRET_ACCESS_KEY: ci-backup-secret-key
         run: docker compose --file deploy/docker-compose.prod.yml config --quiet
 
+      - name: Validate constrained 4 GiB pilot Compose overlay
+        env:
+          DOMAIN: restopass.example.com
+          POSTGRES_DB: restopass
+          POSTGRES_USER: restopass
+          POSTGRES_PASSWORD: ci-postgres-password
+          REDIS_PASSWORD: ci-redis-password
+          RESTOPASS_SUPERADMIN_PASSWORD: ci-super-admin-password-0123456789
+          SESSION_SECRET: ci-session-secret-0123456789abcdef0123456789
+          RESTOPASS_MASTER_SECRET: ci-master-secret-0123456789abcdef0123456789
+          S3_BUCKET: restopass-ci-private-photos
+          S3_ACCESS_KEY_ID: ci-photo-access-key
+          S3_SECRET_ACCESS_KEY: ci-photo-secret-key
+          RESTOPASS_BACKUP_ENCRYPTION_KEY: ci-backup-encryption-secret-0123456789
+          RESTOPASS_BACKUP_HMAC_KEY: ci-backup-hmac-secret-0123456789
+          RESTOPASS_BACKUP_S3_BUCKET: restopass-ci-backups
+          RESTOPASS_BACKUP_S3_ACCESS_KEY_ID: ci-backup-access-key
+          RESTOPASS_BACKUP_S3_SECRET_ACCESS_KEY: ci-backup-secret-key
+        run: docker compose --file deploy/docker-compose.prod.yml --file deploy/docker-compose.4gb.yml config --quiet
+
       - name: Build production Docker image
         run: docker build --tag restopass-ci .
 
