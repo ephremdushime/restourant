@@ -15,7 +15,7 @@ This runbook defines the operational procedures for off-site backup configuratio
 ### Threat Scenarios Mitigated
 1. **Primary Host Failure / Hardware Loss**: Total destruction of the VPS host or hypervisor outage.
 2. **Database Corruption or Operational Error**: Accidental table drop, bad migration, or storage volume corruption.
-3. **Ransomware / Host Compromise**: Attacker gains root on the application VM and attempts to destroy local data and overwrite backups. (Mitigated by S3 bucket versioning, Object Lock, and separate least-privilege credentials).
+3. **Ransomware / Host Compromise**: Attacker gains root on the application VM and attempts to destroy local data and overwrite backups. (Mitigation is effective only after S3 bucket versioning/Object Lock and separate least-privilege credentials have actually been configured and verified).
 
 ---
 
@@ -183,7 +183,7 @@ FROM customers c
 LEFT JOIN checkpoint_balances cb ON cb.customer_id = c.id
 LEFT JOIN calculated_balances calc ON calc.customer_id = c.id;
 
--- 2. Verify all 17 authoritative tables are populated
+-- 2. Inventory row counts for public application tables
 SELECT table_name, (xpath('/row/cnt/text()', xml_count))[1]::text::int AS row_count
 FROM (
   SELECT table_name,
