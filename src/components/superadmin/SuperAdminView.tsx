@@ -165,6 +165,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
     }
     restoStore.updateRestaurantPricingAndTerms(editingResto.code, {
       basePriceRwf: Number(editRestoBasePrice),
+      saasSubscriptionPriceRwf: Number(editRestoBasePrice),
       pricePerExtraScanPointRwf: Number(editRestoExtraScanFee),
       studentSubscriptionPriceRwf: Number(editRestoStudentSubPrice),
       defaultPlatePriceRwf: Number(editRestoPlatePrice),
