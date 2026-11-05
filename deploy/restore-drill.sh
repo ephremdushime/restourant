@@ -76,8 +76,13 @@ case "$target_database_name" in
   *drill*) ;;
   *) echo "[dr-drill] ERROR: target database name must contain 'drill' (for example restopass_drill_20261105)" >&2; exit 2 ;;
 esac
+existing_tables="$(psql "$target_db" -v ON_ERROR_STOP=1 -Atqc "SELECT COUNT(*) FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema')")"
+case "$existing_tables" in
+  0) ;;
+  *) echo "[dr-drill] ERROR: target database is not empty; refusing to overwrite existing tables" >&2; exit 2 ;;
+esac
 
-echo "[dr-drill] Restoring into the explicitly supplied isolated target database..."
+echo "[dr-drill] Restoring into the explicitly supplied empty isolated target database..."
 pg_restore --exit-on-error --no-owner --no-privileges --dbname="$target_db" "$extract_dir/database.dump"
 
 # Require core tables and execute actual reads; pg_restore exit status alone is
@@ -116,7 +121,7 @@ echo "==========================================================================
 echo "DISASTER RECOVERY RESTORE DRILL — SUCCESS"
 echo "Target: isolated database supplied by operator"
 echo "Archive: $backup_file"
-echo "Uploads files validated: $photo_count"
+echo "Uploads archive members listed: $photo_count"
 echo "Restored row counts:"
 printf '%s\n' "$counts"
 echo "Measured RTO: ${rto_seconds}s"
