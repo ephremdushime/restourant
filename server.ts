@@ -579,7 +579,7 @@ app.get('/api/public/restaurants', apiRateLimiter, (_req, res) => {
 // ----------------------------------------------------
 
 // POST /api/auth/login
-app.post('/api/auth/login', authRateLimiter, (req, res) => {
+app.post('/api/auth/login', authRateLimiter, async (req, res) => {
   const { role, username, password, pin, restaurantCode, stationId } = req.body;
 
   if (!role) {
@@ -712,24 +712,45 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
         c.id === username
     );
 
+    // Use the dedicated customer-authentication error to avoid account enumeration.
     if (!cust) {
-      return res.status(404).json({ success: false, error: 'Customer record not found' });
+      return res.status(401).json({ success: false, error: 'Invalid phone number or PIN' });
+    }
+    if (cust.lockedUntil && new Date(cust.lockedUntil).getTime() > Date.now()) {
+      return res.status(423).json({ success: false, error: 'Account temporarily locked. Please try again later or visit cafeteria reception.' });
+    }
+    if (cust.provisionalStatus === 'pending_approval' ||
+        cust.provisionalStatus === 'rejected' ||
+        cust.activationStatus === 'ready_for_activation' ||
+        cust.activationStatus === 'suspended') {
+      return res.status(403).json({ success: false, error: 'Customer account is not active. Please contact cafeteria management.' });
     }
 
-    const isProd = process.env.NODE_ENV === 'production';
+    const previousPinHash = cust.pinHash;
     const validPin = verifyServerCustomerPin(pin || '', cust) ||
-      (!isProd && !cust.hasCustomPin && (pin === '1234' || pin === '123456'));
+      (process.env.NODE_ENV !== 'production' && !cust.hasCustomPin && (pin === '1234' || pin === '123456'));
     if (!validPin) {
-      return res.status(401).json({ success: false, error: 'Invalid Member No or PIN' });
+      cust.failedLoginAttempts = (cust.failedLoginAttempts || 0) + 1;
+      if (cust.failedLoginAttempts >= 5) {
+        cust.lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+      }
+      await queueDbSave(serverDbState);
+      return res.status(401).json({ success: false, error: 'Invalid phone number or PIN' });
     }
 
-    const targetCust = cust;
+    cust.failedLoginAttempts = 0;
+    cust.lockedUntil = null;
+    cust.lastLoginAt = new Date().toISOString();
+    if (cust.pinHash !== previousPinHash) {
+      console.info('[Auth] Upgraded legacy customer PIN hash to scrypt.');
+    }
+    await queueDbSave(serverDbState);
 
     const token = createSessionToken({
-      userId: targetCust.id,
-      username: targetCust.memberNo,
+      userId: cust.id,
+      username: cust.memberNo,
       role: 'customer',
-      restaurantCode: targetCust.restaurantCode,
+      restaurantCode: cust.restaurantCode,
     });
 
     return res.json({
@@ -737,10 +758,10 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
       token,
       user: {
         role: 'customer',
-        username: targetCust.memberNo,
-        restaurantCode: targetCust.restaurantCode,
-        userLabel: `${targetCust.name} (#${targetCust.memberNo})`,
-        customerId: targetCust.id,
+        username: cust.memberNo,
+        restaurantCode: cust.restaurantCode,
+        userLabel: `${cust.name} (#${cust.memberNo})`,
+        customerId: cust.id,
       },
     });
   }
