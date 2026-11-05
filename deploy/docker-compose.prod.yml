@@ -18,6 +18,11 @@ services:
     image: postgres:16-alpine
     container_name: restopass-postgres
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - data
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-restopass}
       POSTGRES_USER: ${POSTGRES_USER:-restopass_app}
@@ -25,8 +30,6 @@ services:
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-restopass_app} -d ${POSTGRES_DB:-restopass}"]
       interval: 10s
@@ -45,11 +48,14 @@ services:
     image: redis:7-alpine
     container_name: restopass-redis
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - data
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Set a unique strong REDIS_PASSWORD in the production .env file}"]
     volumes:
       - redis_data:/data
-    ports:
-      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?Set REDIS_PASSWORD}", "ping"]
       interval: 10s
@@ -70,6 +76,7 @@ services:
       dockerfile: Dockerfile
     container_name: restopass-app
     restart: unless-stopped
+    init: true
     ports:
       - "127.0.0.1:3000:3000"
     environment:
@@ -104,7 +111,7 @@ services:
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/ready || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -112,6 +119,9 @@ services:
     volumes:
       - app_uploads:/app/public/uploads
       - app_data:/app/data
+    networks:
+      - data
+      - egress
     depends_on:
       postgres:
         condition: service_healthy
@@ -126,4 +136,10 @@ volumes:
     driver: local
   app_data:
     driver: local
+
+networks:
+  data:
+    internal: true
+  egress:
+    driver: bridge
 
