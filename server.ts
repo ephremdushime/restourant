@@ -21,7 +21,7 @@ if (trustProxySetting === 'true') {
   app.set('trust proxy', true);
 } else if (trustProxySetting === 'false' || trustProxySetting === '0') {
   app.set('trust proxy', false);
-} else if (trustProxySetting && /^\\d+$/.test(trustProxySetting)) {
+} else if (trustProxySetting && /^\d+$/.test(trustProxySetting)) {
   app.set('trust proxy', Number(trustProxySetting));
 } else if (trustProxySetting) {
   // Explicit trusted proxy subnet(s), e.g. loopback or a private reverse-proxy network.
