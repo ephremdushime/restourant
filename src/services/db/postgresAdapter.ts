@@ -33,10 +33,21 @@ export function getPostgresPool(): Pool | null {
       connectionTimeoutMillis: 5000,
     };
 
-    if (sslMode === 'disable' || isLocalhost) {
+    // Never disable certificate verification implicitly for remote databases.
+    // Local development may explicitly opt out; production should use provider CA trust.
+    if (sslMode === 'disable') {
+      if (process.env.NODE_ENV === 'production' && process.env.ALLOW_INSECURE_DB_TLS !== 'true') {
+        throw new Error('PGSSLMODE=disable is forbidden in production.');
+      }
       poolConfig.ssl = false;
-    } else {
+    } else if (sslMode === 'verify-full' || sslMode === 'verify-ca' || (!isLocalhost && process.env.NODE_ENV === 'production')) {
+      poolConfig.ssl = { rejectUnauthorized: true };
+    } else if (sslMode === 'require') {
+      // "require" encrypts the connection but does not validate the server identity.
+      // Prefer verify-full with the database provider's CA certificate in production.
       poolConfig.ssl = { rejectUnauthorized: false };
+    } else {
+      poolConfig.ssl = false;
     }
 
     pool = new Pool(poolConfig);
@@ -71,10 +82,11 @@ export async function initPostgres(initialStateToMigrate?: any): Promise<boolean
       }
     }
 
-    if (ddl) {
-      await p.query(ddl);
-      console.log('[PostgreSQL Adapter] Relational schema and indexes verified successfully.');
+    if (!ddl.trim()) {
+      throw new Error('PostgreSQL schema.sql was not found; refusing to start with an uninitialized database.');
     }
+    await p.query(ddl);
+    console.log('[PostgreSQL Adapter] Relational schema and indexes verified successfully.');
 
     isInitialized = true;
 
@@ -83,7 +95,8 @@ export async function initPostgres(initialStateToMigrate?: any): Promise<boolean
       const { rows } = await p.query('SELECT COUNT(*) as count FROM restaurants');
       if (Number(rows[0]?.count || 0) === 0) {
         console.log('[PostgreSQL Adapter] Database is empty. Auto-migrating flat-file state to PostgreSQL...');
-        await saveStateToPostgres(initialStateToMigrate);
+        const migrated = await saveStateToPostgres(initialStateToMigrate);
+        if (!migrated) throw new Error('Initial state migration failed; refusing to continue with an empty PostgreSQL authority.');
         console.log('[PostgreSQL Adapter] Auto-migration to PostgreSQL complete.');
       }
     }
@@ -180,6 +193,9 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         shifts: settingsMap.get('shifts') || [],
         activationRequests: settingsMap.get('activationRequests') || [],
         pinRecoveryRequests: settingsMap.get('pinRecoveryRequests') || [],
+        studentSubscriptionPayments: settingsMap.get('studentSubscriptionPayments') || [],
+        restaurantSubscriptions: settingsMap.get('restaurantSubscriptions') || [],
+        restaurantSubscriptionPayments: settingsMap.get('restaurantSubscriptionPayments') || [],
         usedTokens: [],
       };
 
@@ -282,6 +298,115 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
       }
     }
 
+    // 3a. Commercial licenses
+    if (Array.isArray(state.licenses)) {
+      for (const item of state.licenses) {
+        if (!item?.id || !item?.restaurantCode) continue;
+        await client.query(
+          `INSERT INTO licenses (id, restaurant_code, plan_id, valid_until, data)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (id) DO UPDATE SET plan_id = EXCLUDED.plan_id, valid_until = EXCLUDED.valid_until, data = EXCLUDED.data`,
+          [item.id, item.restaurantCode, item.planId || item.plan || 'default', item.validUntil || item.expiresAt || new Date(0).toISOString(), JSON.stringify(item)]
+        );
+      }
+    }
+
+    // 3b. Existing payment records (meal top-ups and other restaurant-side payments)
+    if (Array.isArray(state.payments)) {
+      for (const item of state.payments) {
+        if (!item?.id || !item?.restaurantCode || !Number.isSafeInteger(Number(item.amountRwf ?? item.amount ?? 0))) continue;
+        await client.query(
+          `INSERT INTO payments (id, restaurant_code, customer_id, amount_rwf, data)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (id) DO UPDATE SET customer_id = EXCLUDED.customer_id, amount_rwf = EXCLUDED.amount_rwf, data = EXCLUDED.data`,
+          [item.id, item.restaurantCode, item.customerId || null, Number(item.amountRwf ?? item.amount ?? 0), JSON.stringify(item)]
+        );
+      }
+    }
+
+    // 3c. Scan events
+    if (Array.isArray(state.scanEvents)) {
+      for (const item of state.scanEvents) {
+        if (!item?.id || !item?.restaurantCode || !item?.customerId) continue;
+        await client.query(
+          `INSERT INTO scan_events (id, restaurant_code, customer_id, station_id, status, data)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (id) DO UPDATE SET station_id = EXCLUDED.station_id, status = EXCLUDED.status, data = EXCLUDED.data`,
+          [item.id, item.restaurantCode, item.customerId, item.stationId || null, item.status || 'recorded', JSON.stringify(item)]
+        );
+      }
+    }
+
+    // 3d. Branches and station users
+    if (Array.isArray(state.branches)) {
+      for (const item of state.branches) {
+        if (!item?.id || !item?.restaurantCode || !item?.code) continue;
+        await client.query(
+          `INSERT INTO branches (id, restaurant_code, code, name, data)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (id) DO UPDATE SET code = EXCLUDED.code, name = EXCLUDED.name, data = EXCLUDED.data`,
+          [item.id, item.restaurantCode, item.code, item.name || 'Branch', JSON.stringify(item)]
+        );
+      }
+    }
+    if (Array.isArray(state.stationUsers)) {
+      for (const item of state.stationUsers) {
+        if (!item?.id || !item?.restaurantCode || !item?.username) continue;
+        await client.query(
+          `INSERT INTO station_users (id, restaurant_code, username, role, data)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (id) DO UPDATE SET username = EXCLUDED.username, role = EXCLUDED.role, data = EXCLUDED.data`,
+          [item.id, item.restaurantCode, item.username, item.role || 'stand_staff', JSON.stringify(item)]
+        );
+      }
+    }
+
+    // 3e. Notifications, expenses, transfers and audit records
+    if (Array.isArray(state.notifications)) {
+      for (const item of state.notifications) {
+        if (!item?.id || !item?.restaurantCode) continue;
+        await client.query(
+          `INSERT INTO notifications (id, restaurant_code, recipient_id, data)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (id) DO UPDATE SET recipient_id = EXCLUDED.recipient_id, data = EXCLUDED.data`,
+          [item.id, item.restaurantCode, item.customerId || item.recipientId || null, JSON.stringify(item)]
+        );
+      }
+    }
+    if (Array.isArray(state.expenses)) {
+      for (const item of state.expenses) {
+        if (!item?.id || !item?.restaurantCode) continue;
+        await client.query(
+          `INSERT INTO expenses (id, restaurant_code, amount_rwf, data)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (id) DO UPDATE SET amount_rwf = EXCLUDED.amount_rwf, data = EXCLUDED.data`,
+          [item.id, item.restaurantCode, Number(item.amountRwf ?? item.amount ?? 0), JSON.stringify(item)]
+        );
+      }
+    }
+    if (Array.isArray(state.transfers)) {
+      for (const item of state.transfers) {
+        if (!item?.id || !item?.restaurantCode || !item?.senderCustomerId || !item?.recipientCustomerId) continue;
+        await client.query(
+          `INSERT INTO transfers (id, restaurant_code, sender_customer_id, recipient_customer_id, plates, data)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (id) DO UPDATE SET plates = EXCLUDED.plates, data = EXCLUDED.data`,
+          [item.id, item.restaurantCode, item.senderCustomerId, item.recipientCustomerId, Number(item.plates || 0), JSON.stringify(item)]
+        );
+      }
+    }
+    if (Array.isArray(state.auditLogs)) {
+      for (const item of state.auditLogs) {
+        if (!item?.id || !item?.restaurantCode || !item?.action) continue;
+        await client.query(
+          `INSERT INTO audit_logs (id, restaurant_code, user_id, action, data)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (id) DO NOTHING`,
+          [item.id, item.restaurantCode, item.userId || null, item.action, JSON.stringify(item)]
+        );
+      }
+    }
+
     // 4. Pending Approvals (Boss Approvals Manager)
     if (Array.isArray(state.pendingApprovals)) {
       for (const a of state.pendingApprovals) {
@@ -336,6 +461,11 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
       ['shifts', state.shifts],
       ['activationRequests', state.activationRequests],
       ['pinRecoveryRequests', state.pinRecoveryRequests],
+      // Subscription payment records are kept in durable JSONB settings until
+      // their dedicated normalized billing tables are introduced.
+      ['studentSubscriptionPayments', state.studentSubscriptionPayments],
+      ['restaurantSubscriptions', state.restaurantSubscriptions],
+      ['restaurantSubscriptionPayments', state.restaurantSubscriptionPayments],
     ];
 
     for (const [key, val] of settingsToSave) {
