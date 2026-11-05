@@ -209,7 +209,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       studentSubscriptionPriceRwf: Number(newStudentSubPrice),
       singlePlatePriceRwf: Number(newSinglePlatePrice),
     });
-    showToast(`Onboarded ${newName} with ${newMaxStations} licensed stations and custom pricing!`);
+    showToast(`Created ${newName}. RestoPass access activates after verified subscription payment.`);
     setCreateModalOpen(false);
   };
 
