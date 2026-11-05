@@ -4205,6 +4205,7 @@ export class RestoStore {
     termsOverride?: Restaurant['termsOverride'];
     licensedScanPoints?: number;
     basePriceRwf?: number;
+    saasSubscriptionPriceRwf?: number;
     pricePerExtraScanPointRwf?: number;
     studentSubscriptionPriceRwf?: number;
     singlePlatePriceRwf?: number;
@@ -4235,7 +4236,7 @@ export class RestoStore {
       termsOverride,
       defaultPlatePriceRwf: data.singlePlatePriceRwf ? Number(data.singlePlatePriceRwf) : 1200,
       studentSubscriptionPriceRwf: data.studentSubscriptionPriceRwf !== undefined ? Number(data.studentSubscriptionPriceRwf) : undefined,
-      saasSubscriptionPriceRwf: data.basePriceRwf !== undefined ? Number(data.basePriceRwf) : Number(selectedPlan?.terms?.basePriceRwf || 0),
+      saasSubscriptionPriceRwf: data.saasSubscriptionPriceRwf !== undefined ? Number(data.saasSubscriptionPriceRwf) : Number(selectedPlan?.terms?.basePriceRwf || 0),
       highestTimeSeen: Date.now(),
       lastSyncAt: now,
       softwareVersion: '1.1.0-authority',
