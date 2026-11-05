@@ -8,6 +8,7 @@ import {
   closePostgres,
   checkPostgresReady,
 } from '../src/services/db/postgresAdapter';
+import { checkRedisReady, recordTokenScan, closeRedis } from '../src/services/cache/redisClient';
 
 test('PostgreSQL persistence round-trip and concurrent transfer invariants', {
   skip: !process.env.TEST_DATABASE_URL,
@@ -125,5 +126,23 @@ test('PostgreSQL persistence round-trip and concurrent transfer invariants', {
     else process.env.DATABASE_URL = previousDatabaseUrl;
     if (previousSslMode === undefined) delete process.env.PGSSLMODE;
     else process.env.PGSSLMODE = previousSslMode;
+  }
+});
+
+
+test('Redis readiness and atomic QR replay prevention', {
+  skip: !process.env.TEST_REDIS_URL,
+}, async () => {
+  const previousRedisUrl = process.env.REDIS_URL;
+  process.env.REDIS_URL = process.env.TEST_REDIS_URL!;
+  const tokenKey = `ci_replay_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  try {
+    assert.equal(await checkRedisReady(), true);
+    assert.deepEqual(await recordTokenScan(tokenKey, 60), { allowed: true });
+    assert.deepEqual(await recordTokenScan(tokenKey, 60), { allowed: false, reason: 'REPLAY_DETECTED' });
+  } finally {
+    await closeRedis();
+    if (previousRedisUrl === undefined) delete process.env.REDIS_URL;
+    else process.env.REDIS_URL = previousRedisUrl;
   }
 });
