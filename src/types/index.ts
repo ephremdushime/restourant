@@ -159,6 +159,7 @@ export interface LedgerEntry {
   reference?: string;
   reversalOfId?: string;
   idempotencyKey?: string;
+  scanAuthorizationId?: string;
 }
 
 export interface BalanceCheckpoint {
@@ -215,6 +216,7 @@ export interface ScanEvent {
   branchName?: string;
   isGracePlate?: boolean;
   gracePlateNumber?: number;
+  scanAuthorizationId?: string;
 }
 
 export interface Branch {
@@ -241,8 +243,9 @@ export interface StationUser {
   phone: string;
   role: 'stand_staff' | 'reception' | 'scanner' | 'cashier';
   status: 'active' | 'blocked';
-  passwordHash: string;
-  pin: string;
+  passwordHash?: string; // Server-stored scrypt hash; never returned to browser clients.
+  pinHash?: string; // Server-stored scrypt hash; never returned to browser clients.
+  pin?: string; // Legacy migration input only; removed by the server before persistence.
   authType?: 'pin8' | 'password' | 'both';
   createdAt: string;
   lastLoginAt?: string;

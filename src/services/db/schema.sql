@@ -159,6 +159,12 @@ CREATE TABLE IF NOT EXISTS transfers (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Idempotency for server-authoritative transfers; safe for existing installations.
+ALTER TABLE transfers ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_transfers_idempotency
+    ON transfers (idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+
 -- 15. Immutable Security & Audit Logs
 CREATE TABLE IF NOT EXISTS audit_logs (
     id VARCHAR(64) PRIMARY KEY,

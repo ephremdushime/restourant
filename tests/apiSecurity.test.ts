@@ -8,6 +8,9 @@ import {
   scopeStateForUser,
   atomicSaveDb,
   validateProductionSecrets,
+  sanitizeSensitiveState,
+  normalizeStationUserCredentials,
+  verifyServerCustomerPin,
   UserSession,
 } from '../server';
 import { restoStore } from '../src/store/restoStore';
@@ -136,6 +139,52 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     assert.equal(scopedSuper.customers.length, 3);
   });
 
+  test('migrates legacy station passwords and PINs to scrypt before persistence', () => {
+    const stationUser: any = {
+      id: 'station_1',
+      username: 'cashier_1',
+      pin: '654321',
+      passwordHash: 'legacy-password-value',
+    };
+    const state = { stationUsers: [stationUser] };
+    assert.equal(normalizeStationUserCredentials(state), true);
+    assert.equal(stationUser.pin, undefined);
+    assert.match(stationUser.pinHash, /^scrypt\\$16384\\$8\\$1\\$/);
+    assert.match(stationUser.passwordHash, /^scrypt\\$16384\\$8\\$1\\$/);
+    assert.equal(verifyServerCustomerPin('654321', {
+      id: stationUser.id,
+      memberNo: stationUser.username,
+      pinHash: stationUser.pinHash,
+    }), true);
+    assert.equal(verifyServerCustomerPin('wrong-pin', {
+      id: stationUser.id,
+      memberNo: stationUser.username,
+      pinHash: stationUser.pinHash,
+    }), false);
+  });
+
+  test('redacts PINs, password hashes, recovery codes and replay state from every client payload', () => {
+    const payload = sanitizeSensitiveState({
+      customers: [{ id: 'c1', name: 'Test', pinHash: 'hash', pinSalt: 'salt', idHash: 'identity-hash', onboardingToken: 'secret' }],
+      stationUsers: [{ id: 's1', username: 'cashier', pin: '123456', passwordHash: 'hash' }],
+      pinRecoveryRequests: [{ id: 'r1', status: 'pending', recoveryCode: '123456' }],
+      activationCodes: [{ id: 'a1', activationCode: 'ABCDEF' }],
+      usedTokens: [{ token: 'replay-secret' }],
+      safeValue: 'retained',
+    });
+    assert.equal(payload.customers[0].id, 'c1');
+    assert.equal(payload.customers[0].pinHash, undefined);
+    assert.equal(payload.customers[0].pinSalt, undefined);
+    assert.equal(payload.customers[0].idHash, undefined);
+    assert.equal(payload.customers[0].onboardingToken, undefined);
+    assert.equal(payload.stationUsers[0].pin, undefined);
+    assert.equal(payload.stationUsers[0].passwordHash, undefined);
+    assert.equal(payload.pinRecoveryRequests[0].recoveryCode, undefined);
+    assert.equal(payload.activationCodes[0].activationCode, undefined);
+    assert.equal(payload.usedTokens, undefined);
+    assert.equal(payload.safeValue, 'retained');
+  });
+
   test('atomicSaveDb writes atomically and maintains backup (Finding 5)', () => {
     const testState = {
       ...restoStore.getState(),
@@ -223,6 +272,30 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
       /placeholder/i
     );
 
+    // Administrator credentials are mandatory and cannot be left at known placeholders.
+    assert.throws(
+      () =>
+        validateProductionSecrets({
+          NODE_ENV: 'production',
+          SESSION_SECRET: 'prod_session_secret_with_at_least_32_characters_random_2026',
+          RESTOPASS_MASTER_SECRET: 'prod_master_secret_with_at_least_32_characters_random_2026!',
+        } as unknown as NodeJS.ProcessEnv),
+      /RESTOPASS_SUPERADMIN_PASSWORD/
+    );
+
+    assert.throws(
+      () =>
+        validateProductionSecrets({
+          NODE_ENV: 'production',
+          SESSION_SECRET: 'prod_session_secret_with_at_least_32_characters_random_2026',
+          RESTOPASS_MASTER_SECRET: 'prod_master_secret_with_at_least_32_characters_random_2026!',
+          RESTOPASS_SUPERADMIN_PASSWORD: 'a_long_unique_superadmin_password_2026',
+          RESTOPASS_BOSS_PASSWORD: 'a_long_unique_restaurant_boss_password_2026',
+          RESTOPASS_STAFF_DEFAULT_PIN: '1234',
+        } as unknown as NodeJS.ProcessEnv),
+      /6-8 digits/
+    );
+
     // Strong 32+ char secrets in production succeed
     const strongSession = 'prod_session_secret_with_at_least_32_characters_random_2026';
     const strongMaster = 'prod_master_secret_with_at_least_32_characters_random_2026!';
@@ -230,6 +303,8 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
       NODE_ENV: 'production',
       SESSION_SECRET: strongSession,
       RESTOPASS_MASTER_SECRET: strongMaster,
+      RESTOPASS_SUPERADMIN_PASSWORD: 'a_long_unique_superadmin_password_2026',
+      RESTOPASS_BOSS_PASSWORD: 'a_long_unique_restaurant_boss_password_2026',
     } as unknown as NodeJS.ProcessEnv);
     assert.equal(valid.sessionSecret, strongSession);
     assert.equal(valid.masterSecret, strongMaster);

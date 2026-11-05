@@ -46,6 +46,7 @@ import {
 import {
   deriveRestaurantKey,
   deriveCustomerKey,
+  TokenVerificationResult,
   hashIdNumber,
   signLicensePayload,
   generateActivationCode,
@@ -2264,7 +2265,44 @@ export class RestoStore {
 
   private activeScanLocks: Set<string> = new Set();
 
-  public processScan(payload: string): {
+  public async processScanWithServer(payload: string): Promise<ReturnType<RestoStore['processScan']>> {
+    const restaurantCode = this.state.currentRestaurantCode;
+    const stationId = this.state.currentStationId;
+    const sessionToken = this.getAuthToken();
+    if (!sessionToken) {
+      return this.processScan(payload, {
+        valid: false, type: 'phone', restaurantCode, memberNo: '', version: 1,
+        isCard: false, error: 'Your scanning session has expired. Sign in again.',
+      });
+    }
+    const customerKeyVersionMap: Record<string, { keyVersion: number; cardVersion: number; cardStatus: string }> = {};
+    this.state.customers
+      .filter((customer) => customer.restaurantCode === restaurantCode)
+      .forEach((customer) => {
+        customerKeyVersionMap[customer.memberNo] = {
+          keyVersion: customer.keyVersion,
+          cardVersion: customer.cardVersion,
+          cardStatus: customer.cardStatus,
+        };
+      });
+    try {
+      const verification = await verifyQrTokenServer(
+        payload,
+        restaurantCode,
+        stationId,
+        sessionToken,
+        customerKeyVersionMap
+      );
+      return this.processScan(payload, verification);
+    } catch {
+      return this.processScan(payload, {
+        valid: false, type: 'phone', restaurantCode, memberNo: '', version: 1,
+        isCard: false, error: 'Server verification is unavailable. Scan was not accepted.',
+      });
+    }
+  }
+
+  public processScan(payload: string, serverVerification?: TokenVerificationResult): {
     outcome: 'ACCEPTED' | 'REJECTED';
     accepted: boolean;
     deducted: number;
@@ -2331,6 +2369,7 @@ export class RestoStore {
         status: 'blocked',
         blockedReason: rejectionReason,
         tokenPayload: payload,
+        scanAuthorizationId: serverVerification?.authorizationId,
       };
       this.state.scanEvents.unshift(failEvent);
       if (customer) {
@@ -2385,7 +2424,7 @@ export class RestoStore {
         };
       });
 
-    const verifyResult = verifyQrToken(payload, restaurantCode, customerKeyVersionMap);
+    const verifyResult = serverVerification || verifyQrToken(payload, restaurantCode, customerKeyVersionMap);
     const matchedCustomer = this.state.customers.find(
       (c) => c.memberNo === verifyResult.memberNo && c.restaurantCode === restaurantCode
     );
@@ -2590,6 +2629,7 @@ export class RestoStore {
           staffId,
           reference: `SCAN-${customer.memberNo}`,
           idempotencyKey,
+          scanAuthorizationId: serverVerification?.authorizationId,
         };
         this.appendLedgerEntry(newLedgerEntry);
         this.queueOutboxItem('ledger_entry', newLedgerEntry.id, newLedgerEntry);
@@ -2756,6 +2796,7 @@ export class RestoStore {
       staffId: scanEvent.staffId,
       reason: 'Second plate added on scan screen',
       reference: `EXTRA-2ND-${scanEvent.memberNo}`,
+      scanAuthorizationId: scanEvent.scanAuthorizationId,
     };
 
     this.state.ledgerEntries.push(extraEntry);
@@ -7124,6 +7165,9 @@ export class RestoStore {
     newPin: string;
     restaurantCode?: string;
   }): Promise<{ success: boolean; customer?: Customer; error?: string }> {
+    if ((import.meta as any).env?.PROD === true) {
+      return { success: false, error: 'A staff-issued activation code is required. Please visit cafeteria reception.' };
+    }
     const cleanPin = params.newPin.trim();
     if (!/^\d{6,}$/.test(cleanPin)) {
       return { success: false, error: 'PIN must be at least 6 numeric digits.' };
@@ -7212,6 +7256,49 @@ export class RestoStore {
     newPin: string;
     restaurantCode?: string;
   }): Promise<{ success: boolean; customer?: Customer; error?: string }> {
+    const productionBuild = (import.meta as any).env?.PROD === true;
+    if (productionBuild) {
+      const cleanIdentifier = params.phoneOrMember.trim();
+      const cleanPin = params.newPin.trim();
+      const cleanCode = (params.activationCode || '').trim();
+      if (!cleanCode || cleanCode === 'BOSS_APPROVED') {
+        return { success: false, error: 'A valid staff-issued activation code is required.' };
+      }
+      if (!/^\\d{6,}$/.test(cleanPin)) {
+        return { success: false, error: 'PIN must be at least 6 numeric digits.' };
+      }
+      try {
+        const response = await fetch('/api/customer/activation/complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            phoneOrMember: cleanIdentifier,
+            activationCode: cleanCode,
+            newPin: cleanPin,
+            restaurantCode: params.restaurantCode,
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success || !result.token || !result.customer?.id) {
+          return { success: false, error: result.error || 'Activation failed. No account changes were confirmed.' };
+        }
+        this.setAuthToken(result.token);
+        this.pendingOfflineAuthParams = {
+          role: 'customer',
+          username: result.customer.memberNo,
+          pin: cleanPin,
+          restaurantCode: result.customer.restaurantCode,
+        };
+        this.setRestaurantCode(result.customer.restaurantCode);
+        this.setCustomer(result.customer.id);
+        this.setRole('customer');
+        await this.pullStateFromServer();
+        return { success: true, customer: this.getCurrentCustomer() || result.customer as Customer };
+      } catch {
+        return { success: false, error: 'Unable to reach the RestoPass activation server. Reconnect and retry.' };
+      }
+    }
+
     const cleanIdentifier = params.phoneOrMember.trim();
     const cleanPin = params.newPin.trim();
     const cleanCode = (params.activationCode || '').trim();
@@ -7468,6 +7555,7 @@ export class RestoStore {
   }): Promise<{ success: boolean; customer?: Customer; error?: string }> {
     const cleanPhone = params.phone.trim();
     const cleanPin = params.pin.trim();
+    const productionBuild = (import.meta as any).env?.PROD === true;
 
     // 1. Server authentication attempt first if online
     if (typeof window !== 'undefined' && navigator.onLine) {
@@ -7491,15 +7579,18 @@ export class RestoStore {
           this.setRole('customer');
           this.pullStateFromServer();
           return { success: true, customer: this.getCurrentCustomer() || undefined };
-        } else if (res.status === 401 || res.status === 403 || res.status === 423) {
+        }
+        if (productionBuild) {
           return { success: false, error: data.error || 'Invalid phone number or PIN' };
         }
       } catch {
-        // Fall through to local offline verification
+        if (productionBuild) return { success: false, error: 'Unable to reach the RestoPass authentication server. Reconnect and try again.' };
       }
+    } else if (productionBuild) {
+      return { success: false, error: 'RestoPass authentication requires a connection to the local or cloud server.' };
     }
 
-    // 2. Offline / local verification fallback
+    // Development/test-only local verification fallback
     const cust = this.state.customers.find(
       (c) =>
         c.phone === cleanPhone ||

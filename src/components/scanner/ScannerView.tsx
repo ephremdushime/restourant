@@ -244,12 +244,12 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     };
   }, [isCameraActive]);
 
-  const handleExecuteScan = (payload: string) => {
+  const handleExecuteScan = async (payload: string) => {
     if (!payload.trim()) return;
     sound.unlockAudio().then((ok) => {
       if (ok) setAudioUnlocked(true);
     });
-    const result = restoStore.processScan(payload);
+    const result = await restoStore.processScanWithServer(payload);
     setActiveScan({
       outcome: result.outcome,
       message: result.message,

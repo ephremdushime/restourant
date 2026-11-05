@@ -44,7 +44,7 @@ flowchart TB
         Auth["HMAC Session & Role Guard\n(/api/auth, /api/customer/auth)"]
         QR["Cryptographic QR & Replay Guard\n(/api/qr/verify, /api/qr/token)"]
         Sync["Idempotent Append-Only Sync Engine\n(/api/sync, /api/state)"]
-        Sub["Student Entitlement & MoMo Webhook\n(/api/customer/subscription)"]
+        Sub["Student Entitlement API (checkout disabled pending MTN integration)\n(/api/customer/subscription)"]
     end
 
     subgraph Storage["Atomic Persistence Layer"]
@@ -55,7 +55,7 @@ flowchart TB
     P1 & P2 & P3 & P4 <-->|Bearer rp_sess_ Token| Auth
     P1 <-->|c1 Card / v1 Phone QR| QR
     P1 & P2 & P3 & P4 <-->|Role-Scoped State| Sync
-    P2 & P4 <-->|500 RWF MoMo Pass| Sub
+    P2 & P4 <-->|Subscription entitlement API| Sub
     Auth & QR & Sync & Sub <-->|Serialized Write Mutex| DB
     P1 -.->|Offline Queue| Outbox
     Outbox -.->|Auto-Flush on Reconnect| Sync
@@ -324,7 +324,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 ---
 
-## 12. Production Cloud Deployment & Dual-Path Failover Architecture (50,000 DAU)
+## 12. Production Cloud Deployment & Dual-Path Failover Architecture (single-instance pilot)
 
 RestoPass employs a **Canonical Cloud Authority + Dual-Path Failover Architecture**:
 
@@ -343,7 +343,11 @@ RestoPass employs a **Canonical Cloud Authority + Dual-Path Failover Architectur
   - `https://app.restopass.rw/rw03` (UR Huye Dining)
   - Sub-pages: `/rw02/register` (Self-Registration) and `/rw02/boss` (Boss Approvals)
 
-### Quick Start: Multi-Container Cloud Deployment
+
+
+**Hosting scope:** The current PostgreSQL-backed cloud topology is a single application instance. Do not enable horizontal app replicas or claim a 50,000-DAU capacity until the state model is moved to transaction-scoped database operations and load-tested. For deployment, backups and recovery, follow [the Production Hosting Runbook](docs/PRODUCTION_HOSTING_RUNBOOK.md). Customer Mobile Money checkout and callback processing remain intentionally disabled pending the verified MTN Collections integration.
+
+### Quick Start: Single-Instance Cloud Pilot Deployment
 
 ```bash
 # 1. Clone repository & configure production secrets
@@ -351,11 +355,10 @@ cp .env.example .env
 nano .env
 
 # 2. Launch production stack with PostgreSQL 16, Redis 7, and RestoPass App
-cd deploy
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose --project-directory . --env-file .env -f deploy/docker-compose.prod.yml up -d --build
 
 # 3. Check container health status
-docker compose -f docker-compose.prod.yml ps
+docker compose --project-directory . --env-file .env -f deploy/docker-compose.prod.yml ps
 ```
 
 ---
@@ -378,7 +381,7 @@ npm run build
 - **[`tests/ledgerIntegrity.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/ledgerIntegrity.test.ts)**: Append-only ledger balance derivation from checkpoints and immutable top-up entries.
 - **[`tests/magicAuth.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/magicAuth.test.ts)**: WhatsApp `v2` magic-link HMAC verification, payload/signature tampering rejection, expiration, and single-use replay prevention.
 - **[`tests/productionRemediation.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/productionRemediation.test.ts)**: Elimination of station pairing bypass codes, brute-force lockout, ledger idempotency guards, serialized disk writes under concurrency, and dynamic phone QR replay blocking.
-- **[`tests/studentSubscription.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/studentSubscription.test.ts)**: Launch feature flag defaults, `500 RWF` integer safety, Mobile Money callback idempotency, 72-hour grace period boundaries, complimentary access auditing, and physical card independence.
+- **[`tests/studentSubscription.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/studentSubscription.test.ts)**: Launch feature flag defaults, `500 RWF` integer safety, subscription entitlement rules and 72-hour grace period boundaries, complimentary access auditing, and physical card independence.
 - **[`tests/topupGraceAndScannerSpec.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/topupGraceAndScannerSpec.test.ts)**: All 5 top-up/grace accounting scenarios (`103 + 60 -> 163`, `5 - 2 + 60 -> 63`, `0 + 60 - 2 -> 58`, new customer `60 - 3 -> 57`, `0 balance + 3 grace used + second pending top-up -> blocked`) and all 12 scanner station validation and audio acceptance tests.
 - **[`tests/selfRegistrationAndPrintReadyExport.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/selfRegistrationAndPrintReadyExport.test.ts)**: Self-onboarding student workflow, Boss approval activation, print-ready PVC card batch export, and initial PIN setup.
 

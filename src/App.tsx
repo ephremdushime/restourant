@@ -200,7 +200,8 @@ export default function App() {
                   pin: '1234',
                   restaurantCode: decoded.restaurantCode,
                 })
-                .then(() => {
+                .then((authResult) => {
+                  if (!authResult.success) return;
                   setSessions((prev) => {
                     const next = { ...prev, customer: true };
                     try {

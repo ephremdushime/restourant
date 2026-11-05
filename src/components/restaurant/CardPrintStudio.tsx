@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Customer, Package, Restaurant } from '../../types';
 import { restoStore } from '../../store/restoStore';
+import { requestCardTokenFromServer } from '../../services/cryptoService';
 import { QrCanvas } from '../common/QrCanvas';
 import {
   Printer,
@@ -65,6 +66,7 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [batchSuccessNotice, setBatchSuccessNotice] = useState<string | null>(null);
   const [testScanResult, setTestScanResult] = useState<{ memberNo: string; balanceAfter: number; timestamp: string } | null>(null);
+  const [serverCardTokens, setServerCardTokens] = useState<Record<string, string>>({});
 
   // Existing Customers Selection (Filtered strictly by active restaurant)
   const restoCustomers = state.customers.filter((c) => c.restaurantCode === state.currentRestaurantCode);
@@ -92,9 +94,18 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
   };
 
   // Test Real-Time Card QR Scan (atomically deducts 1 meal and verifies live ledger)
-  const handleTestCardScan = (customer: Customer) => {
-    const token = restoStore.getCustomerCardQr(customer);
-    const res = restoStore.processScan(token);
+  const handleTestCardScan = async (customer: Customer) => {
+    const token = await requestCardTokenFromServer(
+      customer.restaurantCode,
+      customer.memberNo,
+      customer.cardVersion,
+      restoStore.getAuthToken() || undefined
+    );
+    if (!token) {
+      alert('Unable to obtain a server-issued card token. Check the station connection and sign-in.');
+      return;
+    }
+    const res = await restoStore.processScanWithServer(token);
     if (res.scanEvent && (res.scanEvent.status === 'approved' || res.scanEvent.status === 'warning_confirmed')) {
       setTestScanResult({
         memberNo: customer.memberNo,
@@ -108,31 +119,27 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
   };
 
   // Export Onboarding Manifest (CSV)
-  const handleExportManifestCsv = () => {
+  const handleExportManifestCsv = async () => {
     const cardsToExport = lastGeneratedBatch || restoCustomers;
-    const headers = [
-      'Member Number',
-      'Card Serial',
-      'Card Token (QR Payload)',
-      'Onboarding Token',
-      'WhatsApp Invite Link',
-    ];
-
-    const rows = cardsToExport.map((c) => {
-      const cardToken = restoStore.getCustomerCardQr(c);
-      const inviteMsg = encodeURIComponent(
-        `Hello! Welcome to ${restaurant?.name || 'RestoPass'}. Your meal pass Member Number is #${c.memberNo}. Tap this link to set your PIN: https://restopass.rw/activate?token=${c.onboardingToken}`
+    const headers = ['Member Number', 'Card Serial', 'Card Token (QR Payload)', 'Customer Name'];
+    const rows = await Promise.all(cardsToExport.map(async (c) => {
+      const cardToken = await requestCardTokenFromServer(
+        c.restaurantCode,
+        c.memberNo,
+        c.cardVersion,
+        restoStore.getAuthToken() || undefined
       );
-      const waLink = `https://wa.me/?text=${inviteMsg}`;
-
       return [
         `"#${c.memberNo}"`,
         `"RP2026${c.memberNo}"`,
         `"${cardToken}"`,
-        `"${c.onboardingToken}"`,
-        `"${waLink}"`,
+        `"${String(c.name || '').replace(/"/g, '""')}"`,
       ];
-    });
+    }));
+    if (rows.some((row) => !row[2] || row[2] === '""')) {
+      alert('One or more card tokens could not be issued by the server. No CSV was exported.');
+      return;
+    }
 
     const csv = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -158,6 +165,31 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
     : isExistingBatchMode
     ? restoCustomers
     : (selectedExistingCustomer ? [selectedExistingCustomer] : []);
+
+  const displayCardIds = displayCards.map((card) => card.id).join('|');
+  useEffect(() => {
+    let cancelled = false;
+    const loadTokens = async () => {
+      if (!displayCards.length) {
+        setServerCardTokens({});
+        return;
+      }
+      const entries = await Promise.all(displayCards.map(async (card) => {
+        const token = await requestCardTokenFromServer(
+          card.restaurantCode,
+          card.memberNo,
+          card.cardVersion,
+          restoStore.getAuthToken() || undefined
+        );
+        return [card.id, token] as const;
+      }));
+      if (!cancelled) {
+        setServerCardTokens(Object.fromEntries(entries.filter((entry) => Boolean(entry[1]))));
+      }
+    };
+    void loadTokens();
+    return () => { cancelled = true; };
+  }, [displayCardIds]);
 
   const handleMarkPrinted = () => {
     const ids = displayCards.map((c) => c.id);
@@ -529,6 +561,7 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
                         restaurantName={restaurant?.name || 'Kigali Independent University Canteen'}
                         isOnboarding={cust.name.startsWith('Onboarding Patron')}
                         restaurant={restaurant}
+                        cardToken={serverCardTokens[cust.id] || ''}
                       />
                       {sandboxSimEnabled && (
                         <div className="mt-2 flex items-center gap-2 print:hidden">
@@ -611,6 +644,7 @@ export interface CardFrontViewProps {
   restaurantName: string;
   isOnboarding?: boolean;
   restaurant?: Restaurant | null;
+  cardToken?: string;
 }
 
 export const getCardThemePalette = (badgeStyle?: string, primaryColor?: string) => {
@@ -704,8 +738,9 @@ export const CardFrontView: React.FC<CardFrontViewProps> = ({
   restaurantName,
   isOnboarding,
   restaurant,
+  cardToken: serverCardToken,
 }) => {
-  const cardToken = restoStore.getCustomerCardQr(customer);
+  const cardToken = serverCardToken || '';
   const serialNo = `RP2026${customer.memberNo}`;
   const studentNo = customer.studentProfile?.registrationNumber?.trim() || null;
   const theme = getCardThemePalette(restaurant?.badgeStyle, restaurant?.primaryColor);

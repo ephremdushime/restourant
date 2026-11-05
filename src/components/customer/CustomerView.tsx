@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Language } from '../../types';
 import { restoStore } from '../../store/restoStore';
 import { translations } from '../../services/i18n';
-import { generateCardToken } from '../../services/cryptoService';
+import { requestCardTokenFromServer, requestPhoneTokenFromServer } from '../../services/cryptoService';
 import { QrCanvas } from '../common/QrCanvas';
 import {
   Send,
@@ -78,11 +78,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   const [transferRequiresSub, setTransferRequiresSub] = useState(false);
 
   // Dynamic 30-second token rotation (only generated when dashboard subscription is active)
-  const [tokenInfo, setTokenInfo] = useState(() =>
-    customer && !isDashboardGated
-      ? restoStore.getCustomerPhoneQr(customer)
-      : { token: '', step: 0, secondsRemaining: 0 }
-  );
+  const [tokenInfo, setTokenInfo] = useState({ token: '', step: 0, secondsRemaining: 0 });
   const [qrPassType, setQrPassType] = useState<'dynamic' | 'permanent'>('dynamic');
   const [copiedRef, setCopiedRef] = useState(false);
   const [plansExpanded, setPlansExpanded] = useState(false);
@@ -172,15 +168,36 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
   const badgeTheme = getBadgeTheme(currentRestaurant?.badgeStyle);
 
-  const permanentCardToken =
-    customer && !isDashboardGated
-      ? generateCardToken(customer.restaurantCode, customer.memberNo, customer.cardVersion)
-      : '';
+  const [permanentCardToken, setPermanentCardToken] = useState('');
 
-  const handleForceRefresh = () => {
-    if (customer && !isDashboardGated) {
-      setTokenInfo(restoStore.getCustomerPhoneQr(customer));
-    }
+  useEffect(() => {
+    let cancelled = false;
+    const loadCardToken = async () => {
+      if (!customer || isDashboardGated) {
+        setPermanentCardToken('');
+        return;
+      }
+      const token = await requestCardTokenFromServer(
+        customer.restaurantCode,
+        customer.memberNo,
+        customer.cardVersion,
+        restoStore.getAuthToken() || undefined
+      );
+      if (!cancelled) setPermanentCardToken(token);
+    };
+    void loadCardToken();
+    return () => { cancelled = true; };
+  }, [customer?.id, customer?.cardVersion, isDashboardGated]);
+
+  const handleForceRefresh = async () => {
+    if (!customer || isDashboardGated) return;
+    const token = await requestPhoneTokenFromServer(
+      customer.restaurantCode,
+      customer.memberNo,
+      customer.keyVersion,
+      restoStore.getAuthToken() || undefined
+    );
+    setTokenInfo(token);
   };
 
   useEffect(() => {
@@ -188,13 +205,20 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
       setTokenInfo({ token: '', step: 0, secondsRemaining: 0 });
       return;
     }
-    const updateToken = () => {
-      setTokenInfo(restoStore.getCustomerPhoneQr(customer));
+    let cancelled = false;
+    const updateToken = async () => {
+      const token = await requestPhoneTokenFromServer(
+        customer.restaurantCode,
+        customer.memberNo,
+        customer.keyVersion,
+        restoStore.getAuthToken() || undefined
+      );
+      if (!cancelled) setTokenInfo(token);
     };
-    updateToken();
-    const interval = setInterval(updateToken, 1000);
-    return () => clearInterval(interval);
-  }, [customer, isDashboardGated]);
+    void updateToken();
+    const interval = setInterval(() => { void updateToken(); }, 5000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [customer?.id, customer?.keyVersion, isDashboardGated]);
 
   // View Mode: 'qr_pass' | 'notifications' | 'history'
   const [activeTab, setActiveTab] = useState<'qr_pass' | 'notifications' | 'history'>('qr_pass');
@@ -227,6 +251,9 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   const [platesToTransfer, setPlatesToTransfer] = useState(2);
   const [transferPin, setTransferPin] = useState('');
   const [transferMessage, setTransferMessage] = useState<{ text: string; isError: boolean } | null>(null);
+  const [transferRequestId, setTransferRequestId] = useState<string | null>(null);
+  const [transferSubmitting, setTransferSubmitting] = useState(false);
+  useEffect(() => setTransferRequestId(null), [recipientQuery, platesToTransfer, customer?.id]);
 
   // Recipient Lookup Helper
   const foundRecipient = customer
@@ -246,33 +273,60 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
       .join(' ');
   };
 
-  const handleExecuteTransfer = () => {
+  const handleExecuteTransfer = async () => {
     if (!customer || !foundRecipient) {
       setTransferMessage({ text: 'Recipient not found in this restaurant', isError: true });
       return;
     }
+    if (!navigator.onLine) {
+      setTransferMessage({ text: 'An internet connection is required to securely authorize a plate transfer. Reconnect and retry.', isError: true });
+      return;
+    }
+    const authToken = restoStore.getAuthToken();
+    if (!authToken) {
+      setTransferMessage({ text: 'Your secure session has expired. Please sign in again.', isError: true });
+      return;
+    }
 
-    const res = restoStore.transferPlates({
-      senderCustomerId: customer.id,
-      recipientIdentifier: foundRecipient.memberNo,
-      plates: Number(platesToTransfer),
-      pin: transferPin,
-    });
+    const requestId = transferRequestId || globalThis.crypto.randomUUID();
+    setTransferRequestId(requestId);
+    setTransferSubmitting(true);
+    try {
+      const response = await fetch('/api/customer/transfer', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          recipientIdentifier: foundRecipient.memberNo,
+          plates: Number(platesToTransfer),
+          pin: transferPin,
+          idempotencyKey: requestId,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        setTransferMessage({ text: result.error || 'Transfer failed. No transfer was confirmed.', isError: true });
+        if (result.requiresSubscription) setTransferRequiresSub(true);
+        return;
+      }
 
-    if (res.success) {
+      await restoStore.pullStateFromServer();
       setTransferMessage({ text: t.customer.transferSuccess, isError: false });
       setTransferRequiresSub(false);
+      setTransferRequestId(null);
       setTimeout(() => {
         setTransferModalOpen(false);
         setTransferMessage(null);
         setTransferPin('');
         setRecipientQuery('');
       }, 1500);
-    } else {
-      setTransferMessage({ text: res.error || 'Transfer failed', isError: true });
-      if (res.requiresSubscription) {
-        setTransferRequiresSub(true);
-      }
+    } catch {
+      // Keep the same idempotency key so a retry cannot create a duplicate transfer.
+      setTransferMessage({ text: 'Network error. Retry when connected; the request is protected against duplicate processing.', isError: true });
+    } finally {
+      setTransferSubmitting(false);
     }
   };
 
@@ -1444,10 +1498,10 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             <button
               type="button"
               onClick={handleExecuteTransfer}
-              disabled={!foundRecipient || !transferPin}
+              disabled={!foundRecipient || !transferPin || transferSubmitting}
               className="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-sm shadow-md transition-colors cursor-pointer"
             >
-              Confirm &amp; Transfer Plates
+              {transferSubmitting ? 'Processing securely…' : 'Confirm & Transfer Plates'}
             </button>
           </div>
         </div>

@@ -1,6 +1,6 @@
 # ==============================================================================
 # RestoPass Multi-Tenant Campus & Cafeteria Cloud Production Stack
-# High-Scale Architecture (50,000 DAU Distributed Deployment)
+# High-Scale Architecture (single-instance pilot Distributed Deployment)
 # ==============================================================================
 # Services:
 #   1. postgres: Managed Relational Database with strict constraints & append-only ledger
@@ -18,40 +18,20 @@ services:
     image: postgres:16-alpine
     container_name: restopass-postgres
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - data
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-restopass}
       POSTGRES_USER: ${POSTGRES_USER:-restopass_app}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ChangeThisInProdToStrongPassword32Char!}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a unique strong POSTGRES_PASSWORD in the production .env file}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-restopass_app} -d ${POSTGRES_DB:-restopass}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 2048M
-
-  # ----------------------------------------------------------------------------
-  # 2. Managed Redis 7 In-Memory Cache (Multi-Instance QR Replay Guard)
-  # ----------------------------------------------------------------------------
-  redis:
-    image: redis:7-alpine
-    container_name: restopass-redis
-    restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-ChangeRedisProdPassword32Char!}"]
-    volumes:
-      - redis_data:/data
-    ports:
-      - "127.0.0.1:6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-ChangeRedisProdPassword32Char!}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -62,6 +42,32 @@ services:
           memory: 1024M
 
   # ----------------------------------------------------------------------------
+  # 2. Managed Redis 7 In-Memory Cache (Multi-Instance QR Replay Guard)
+  # ----------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: restopass-redis
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - data
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Set a unique strong REDIS_PASSWORD in the production .env file}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?Set REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  # ----------------------------------------------------------------------------
   # 3. RestoPass Cloud Application Node
   # ----------------------------------------------------------------------------
   app:
@@ -70,19 +76,26 @@ services:
       dockerfile: Dockerfile
     container_name: restopass-app
     restart: unless-stopped
+    init: true
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       NODE_ENV: production
+      RESTOPASS_DEPLOYMENT_MODE: cloud
       PORT: 3000
+      PGMAX_CONNECTIONS: 10
       # Relational persistence connection
-      DATABASE_URL: postgres://${POSTGRES_USER:-restopass_app}:${POSTGRES_PASSWORD:-ChangeThisInProdToStrongPassword32Char!}@postgres:5432/${POSTGRES_DB:-restopass}
+      DATABASE_URL: postgres://${POSTGRES_USER:-restopass_app}:${POSTGRES_PASSWORD:?Set_POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-restopass}
       PGSSLMODE: disable
+      # Explicit exception: PostgreSQL is reachable only over this private Docker network.
+      ALLOW_INSECURE_DB_TLS: "true"
       # Distributed Redis cache
-      REDIS_URL: redis://:${REDIS_PASSWORD:-ChangeRedisProdPassword32Char!}@redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set_REDIS_PASSWORD}@redis:6379
       # Production Secrets (Mandatory >= 32 chars)
-      SESSION_SECRET: ${SESSION_SECRET:-CHANGE_ME_PRODUCTION_SESSION_SECRET_32_CHARS_LONG}
-      RESTOPASS_MASTER_SECRET: ${RESTOPASS_MASTER_SECRET:-CHANGE_ME_PRODUCTION_MASTER_SECRET_32_CHARS_LONG}
+      SESSION_SECRET: ${SESSION_SECRET:?Set_SESSION_SECRET_minimum_32_random_characters}
+      RESTOPASS_MASTER_SECRET: ${RESTOPASS_MASTER_SECRET:?Set_RESTOPASS_MASTER_SECRET_minimum_32_random_characters}
+      RESTOPASS_SUPERADMIN_PASSWORD: ${RESTOPASS_SUPERADMIN_PASSWORD:?Set_RESTOPASS_SUPERADMIN_PASSWORD}
+      RESTOPASS_BOSS_PASSWORD: ${RESTOPASS_BOSS_PASSWORD:?Set_RESTOPASS_BOSS_PASSWORD}
       # S3 / DigitalOcean Spaces / Cloudflare R2 Object Storage
       S3_BUCKET: ${S3_BUCKET:-}
       S3_REGION: ${S3_REGION:-us-east-1}
@@ -90,14 +103,30 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
       S3_PUBLIC_URL_PREFIX: ${S3_PUBLIC_URL_PREFIX:-}
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/ready || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - app_uploads:/app/public/uploads
+      - app_data:/app/data
+    networks:
+      - data
+      - egress
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - app_uploads:/app/public/uploads
-
 volumes:
   postgres_data:
     driver: local
@@ -105,4 +134,12 @@ volumes:
     driver: local
   app_uploads:
     driver: local
+  app_data:
+    driver: local
+
+networks:
+  data:
+    internal: true
+  egress:
+    driver: bridge
 

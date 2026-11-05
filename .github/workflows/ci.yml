@@ -10,6 +10,32 @@ jobs:
   test-and-verify:
     name: Build, Lint & Automated Test Suite
     runs-on: ubuntu-latest
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/restopass_test
+      TEST_REDIS_URL: redis://localhost:6379
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: restopass_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d restopass_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout code
@@ -22,13 +48,26 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci --include=optional || npm install
+        run: npm ci --include=optional
+
+      - name: Dependency vulnerability audit
+        run: npm audit --audit-level=high
 
       - name: Typecheck / Lint
         run: npm run lint
 
       - name: Execute Security & Integrity Tests
         run: npm test
+
+      - name: Validate production Docker Compose configuration
+        run: |
+          export POSTGRES_PASSWORD="$(openssl rand -hex 32)"
+          export REDIS_PASSWORD="$(openssl rand -hex 32)"
+          export SESSION_SECRET="$(openssl rand -hex 32)"
+          export RESTOPASS_MASTER_SECRET="$(openssl rand -hex 32)"
+          export RESTOPASS_SUPERADMIN_PASSWORD="$(openssl rand -hex 24)"
+          export RESTOPASS_BOSS_PASSWORD="$(openssl rand -hex 24)"
+          docker compose -f deploy/docker-compose.prod.yml config --quiet
 
       - name: Build Production Bundle
         run: npm run build

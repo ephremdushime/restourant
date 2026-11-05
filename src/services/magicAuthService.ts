@@ -22,6 +22,7 @@ export interface MagicTokenPayload {
  * In-memory set of redeemed / invalidated token IDs (single-use enforcement)
  */
 const redeemedMagicTokens = new Set<string>();
+const IS_PRODUCTION_BROWSER = typeof window !== 'undefined' && (import.meta as any).env?.PROD === true;
 
 /**
  * Marks a magic link token as used/redeemed so it cannot be replayed.
@@ -97,6 +98,7 @@ export function generateCustomerMagicToken(
   customer: Customer,
   options?: { expiresInMs?: number }
 ): string {
+  if (IS_PRODUCTION_BROWSER) return '';
   const now = Date.now();
   const validityMs = options?.expiresInMs ?? 48 * 60 * 60 * 1000; // 48 hours default
 
@@ -128,13 +130,14 @@ export function generateCustomerMagicToken(
 export function validateCustomerMagicToken(
   token: string,
   options?: { markAsRedeemed?: boolean; allowExpired?: boolean }
-): {
+ ): {
   customerId: string;
   memberNo: string;
   restaurantCode: string;
   phone?: string;
   jti: string;
 } | null {
+  if (IS_PRODUCTION_BROWSER) return null;
   try {
     if (!token || typeof token !== 'string') return null;
 
