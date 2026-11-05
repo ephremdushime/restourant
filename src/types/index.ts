@@ -4,7 +4,7 @@ export type Language = 'en' | 'rw' | 'fr';
 
 export type Theme = 'dark' | 'light';
 
-export type RestaurantStatus = 'active' | 'expiring' | 'grace' | 'expired' | 'suspended';
+export type RestaurantStatus = 'pending_payment' | 'active' | 'expiring' | 'grace' | 'expired' | 'suspended';
 
 export interface PlanTerms {
   basePriceRwf: number;
