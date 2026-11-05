@@ -121,8 +121,8 @@ cat > "$TMP/bin/psql" <<'EOF'
 #!/bin/sh
 set -eu
 case "$*" in
-  *to_regclass*) printf 'schema-ok\\n' ;;
-  *COUNT*) printf 'restaurants=1\\ncustomers=2\\nledger_entries=3\\nscan_events=4\\npending_approvals=5\\n' ;;
+  *to_regclass*) printf 'schema-ok\n' ;;
+  *COUNT*) printf 'restaurants=1\ncustomers=2\nledger_entries=3\nscan_events=4\npending_approvals=5\n' ;;
   *) exit 4 ;;
 esac
 EOF
@@ -130,8 +130,8 @@ chmod 0755 "$TMP/bin/pg_restore" "$TMP/bin/psql"
 restore_report="$(DATABASE_URL=postgres://production/live RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
 RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" PATH="$TMP/bin:$TMP/image-bin:$PATH" \
   restopass-restore-drill "$TMP/valid-backup.enc" postgres://isolated-target/drill)"
-printf '%s\\n' "$restore_report" | grep -q 'DISASTER RECOVERY RESTORE DRILL — SUCCESS'
-printf '%s\\n' "$restore_report" | grep -q 'restaurants=1'
+printf '%s\n' "$restore_report" | grep -q 'DISASTER RECOVERY RESTORE DRILL — SUCCESS'
+printf '%s\n' "$restore_report" | grep -q 'restaurants=1'
 if DATABASE_URL=postgres://same/live TARGET_DATABASE_URL=postgres://same/live \
 RESTOPASS_BACKUP_ENCRYPTION_KEY="$RESTOPASS_BACKUP_ENCRYPTION_KEY" \
 RESTOPASS_BACKUP_HMAC_KEY="$RESTOPASS_BACKUP_HMAC_KEY" PATH="$TMP/bin:$TMP/image-bin:$PATH" \
