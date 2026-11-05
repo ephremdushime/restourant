@@ -22,6 +22,10 @@ if [ "$mode" = "restore" ] && [ -z "$target_db" ]; then
   echo "[dr-drill] ERROR: a disposable isolated target database is required; use --archive-only only for structural CI validation" >&2
   exit 2
 fi
+if [ "$mode" = "restore" ] && [ "${RESTOPASS_DR_RESTORE_TARGET_ISOLATED:-false}" != "true" ]; then
+  echo "[dr-drill] ERROR: set RESTOPASS_DR_RESTORE_TARGET_ISOLATED=true only after confirming the target is disposable and isolated" >&2
+  exit 2
+fi
 if [ "$mode" = "restore" ] && [ "$target_db" = "${DATABASE_URL:-}" ]; then
   echo "[dr-drill] ERROR: refusing to restore into DATABASE_URL; provide a separate disposable TARGET_DATABASE_URL" >&2
   exit 2
@@ -50,11 +54,12 @@ fi
 [ -s "$extract_dir/database.dump" ] || { echo "[dr-drill] ERROR: database dump is missing" >&2; exit 1; }
 [ -s "$extract_dir/uploads.tar.gz" ] || { echo "[dr-drill] ERROR: uploads archive is missing" >&2; exit 1; }
 
-uploads_audit_dir="$workdir/uploads_audit"
-mkdir -p "$uploads_audit_dir"
-tar -tzf "$extract_dir/uploads.tar.gz" >/dev/null || { echo "[dr-drill] ERROR: uploads archive is corrupt" >&2; exit 1; }
-tar -xzf "$extract_dir/uploads.tar.gz" -C "$uploads_audit_dir"
-photo_count="$(find "$uploads_audit_dir" -type f | wc -l | tr -d ' ')"
+# Listing the nested archive verifies its gzip/tar structure without extracting
+# potentially hostile paths or symlinks into the drill container.
+tar -tzf "$extract_dir/uploads.tar.gz" > "$workdir/uploads-members.txt" || {
+  echo "[dr-drill] ERROR: uploads archive is corrupt" >&2; exit 1;
+}
+photo_count="$(grep -c . "$workdir/uploads-members.txt" || true)"
 
 if [ "$mode" = "archive-only" ]; then
   echo "ARCHIVE VALIDATION ONLY — NOT A DATABASE RESTORE"
@@ -65,6 +70,12 @@ fi
 
 command -v pg_restore >/dev/null 2>&1 || { echo "[dr-drill] ERROR: pg_restore is required" >&2; exit 1; }
 command -v psql >/dev/null 2>&1 || { echo "[dr-drill] ERROR: psql is required for post-restore validation" >&2; exit 1; }
+
+target_database_name="$(psql "$target_db" -v ON_ERROR_STOP=1 -Atqc 'SELECT current_database()')"
+case "$target_database_name" in
+  *drill*) ;;
+  *) echo "[dr-drill] ERROR: target database name must contain 'drill' (for example restopass_drill_20261105)" >&2; exit 2 ;;
+esac
 
 echo "[dr-drill] Restoring into the explicitly supplied isolated target database..."
 pg_restore --exit-on-error --no-owner --no-privileges --dbname="$target_db" "$extract_dir/database.dump"
