@@ -214,20 +214,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
   const handleIssueLicense = (e: React.FormEvent) => {
     e.preventDefault();
-    restoStore.issueLicense({
-      restaurantCode: licRestaurantCode,
-      planId: licPlanId,
-      maxScanPoints: Number(licMaxStations),
-      validDays: Number(licValidDays),
-      graceDays: Number(licGraceDays),
-      featureFlags: {
-        spotChecksEnabled: true,
-        multiStationEnabled: true,
-        secondPlateAllowed: true,
-        customerTransfersEnabled: true,
-      },
-    });
-    showToast(`Issued signed license for ${licRestaurantCode} with ${licMaxStations} stations!`);
+    showToast('Manual licence issuance is disabled. RestoPass access can only be activated by verified SaaS subscription payment.');
     setLicenseModalOpen(false);
   };
 
@@ -296,7 +283,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
           </button>
 
           <button
-            onClick={() => setLicenseModalOpen(true)}
+            onClick={() => showToast('Manual licence issuance is disabled. Access is activated only after server-verified subscription payment.')}
             className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs rounded-xl transition-colors flex items-center gap-1.5"
           >
             <FileKey className="w-4 h-4 text-emerald-400" />
@@ -450,12 +437,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                         <div className="flex flex-wrap items-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() =>
-                              restoStore.renewRestaurantLicense({
-                                restaurantCode: resto.code,
-                                validDays: 30,
-                              })
-                            }
+                            onClick={() => showToast('Manual licence renewal is disabled. The restaurant must complete a verified MTN MoMo software-subscription payment.')}
                             className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1 shadow-xs transition-colors cursor-pointer"
                           >
                             <RefreshCw className="w-3.5 h-3.5" />
