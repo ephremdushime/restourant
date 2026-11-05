@@ -3260,8 +3260,18 @@ app.get('/api/restaurant-saas/subscription', apiRateLimiter, requireAuth(['resta
   try {
     const ensured = await ensureRestaurantSaasSubscription(client, code);
     if (!ensured) return res.status(404).json({success:false,error:'Restaurant not found.'});
+    const subscription = ensured.subscription;
+    const periodEndMs = subscription.current_period_end ? new Date(subscription.current_period_end).getTime() : NaN;
+    const nowMs = Date.now();
+    const computedStatus = !Number.isFinite(periodEndMs) ? 'pending_payment'
+      : nowMs < periodEndMs ? 'active'
+      : nowMs < periodEndMs + 72 * 60 * 60 * 1000 ? 'grace_period' : 'restricted';
+    if (subscription.status !== computedStatus) {
+      const updated = await client.query('UPDATE restaurant_subscriptions SET status=$2,updated_at=NOW() WHERE restaurant_code=$1 RETURNING *',[code,computedStatus]);
+      subscription.status = updated.rows[0]?.status || computedStatus;
+    }
     const payments = await client.query('SELECT id,internal_reference,amount_rwf,currency,status,provider_status,created_at,verified_at,entitlement_applied_at FROM restaurant_subscription_payments WHERE restaurant_code=$1 ORDER BY created_at DESC LIMIT 20',[code]);
-    return res.json({success:true,subscription:ensured.subscription,payments:payments.rows});
+    return res.json({success:true,subscription,payments:payments.rows});
   } catch (error) { console.error('[SaaS subscription read]',error); return res.status(503).json({success:false,error:'Subscription details unavailable.'}); }
   finally { client.release(); }
 });
