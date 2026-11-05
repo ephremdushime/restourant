@@ -141,17 +141,30 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
     const customStudentFee = resto.studentSubscriptionPriceRwf ?? resto.termsOverride?.studentSubscriptionPriceRwf ?? studentSubSettings.priceRwf ?? 500;
 
     setEditRestoMaxStations(lic?.maxScanPoints || resto.termsOverride?.maxScanPointsIncluded || plan.terms.maxScanPointsIncluded || 2);
-    setEditRestoBasePrice(resto.termsOverride?.basePriceRwf || plan.terms.basePriceRwf);
+    setEditRestoBasePrice(resto.saasSubscriptionPriceRwf || plan.terms.basePriceRwf);
     setEditRestoExtraScanFee(resto.termsOverride?.pricePerExtraScanPointRwf || plan.terms.pricePerExtraScanPointRwf);
     setEditRestoStudentSubPrice(customStudentFee);
     setEditRestoPlatePrice(resto.defaultPlatePriceRwf || 1200);
   };
 
-  const handleSaveRestoPricing = (e: React.FormEvent) => {
+  const handleSaveRestoPricing = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingResto) return;
+    try {
+      const token = restoStore.getAuthToken();
+      const response = await fetch('/api/restaurant-saas/subscription/price', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+        body: JSON.stringify({ restaurantCode: editingResto.code, amountRwf: Number(editRestoBasePrice) }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || 'Could not update SaaS subscription price.');
+    } catch (error: any) {
+      showToast(error?.message || 'Could not update SaaS subscription price.');
+      return;
+    }
     restoStore.updateRestaurantPricingAndTerms(editingResto.code, {
-      basePriceRwf: Number(editRestoBasePrice),
+      saasSubscriptionPriceRwf: Number(editRestoBasePrice),
       pricePerExtraScanPointRwf: Number(editRestoExtraScanFee),
       studentSubscriptionPriceRwf: Number(editRestoStudentSubPrice),
       defaultPlatePriceRwf: Number(editRestoPlatePrice),
@@ -190,31 +203,18 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       currency: 'RWF',
       planId: newPlanId,
       licensedScanPoints: Number(newMaxStations),
-      basePriceRwf: Number(newBasePrice),
+      saasSubscriptionPriceRwf: Number(newBasePrice),
       pricePerExtraScanPointRwf: Number(newExtraScanFee),
       studentSubscriptionPriceRwf: Number(newStudentSubPrice),
       singlePlatePriceRwf: Number(newSinglePlatePrice),
     });
-    showToast(`Onboarded ${newName} with ${newMaxStations} licensed stations and custom pricing!`);
+    showToast(`Created ${newName}. RestoPass access activates after verified subscription payment.`);
     setCreateModalOpen(false);
   };
 
   const handleIssueLicense = (e: React.FormEvent) => {
     e.preventDefault();
-    restoStore.issueLicense({
-      restaurantCode: licRestaurantCode,
-      planId: licPlanId,
-      maxScanPoints: Number(licMaxStations),
-      validDays: Number(licValidDays),
-      graceDays: Number(licGraceDays),
-      featureFlags: {
-        spotChecksEnabled: true,
-        multiStationEnabled: true,
-        secondPlateAllowed: true,
-        customerTransfersEnabled: true,
-      },
-    });
-    showToast(`Issued signed license for ${licRestaurantCode} with ${licMaxStations} stations!`);
+    showToast('Manual licence issuance is disabled. RestoPass access can only be activated by verified SaaS subscription payment.');
     setLicenseModalOpen(false);
   };
 
@@ -283,11 +283,11 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
           </button>
 
           <button
-            onClick={() => setLicenseModalOpen(true)}
+            onClick={() => showToast('Manual licence issuance is disabled. Access is activated only after server-verified subscription payment.')}
             className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs rounded-xl transition-colors flex items-center gap-1.5"
           >
             <FileKey className="w-4 h-4 text-emerald-400" />
-            <span>Issue Signed License</span>
+            <span>Verified payment required</span>
           </button>
         </div>
       </div>
@@ -437,16 +437,11 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                         <div className="flex flex-wrap items-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() =>
-                              restoStore.renewRestaurantLicense({
-                                restaurantCode: resto.code,
-                                validDays: 30,
-                              })
-                            }
+                            onClick={() => showToast('Manual licence renewal is disabled. The restaurant must complete a verified MTN MoMo software-subscription payment.')}
                             className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1 shadow-xs transition-colors cursor-pointer"
                           >
                             <RefreshCw className="w-3.5 h-3.5" />
-                            <span>{licStatus.isExpired ? 'Activate 30d License' : 'Renew +30d'}</span>
+                            <span>Verified payment required</span>
                           </button>
 
                           <button
@@ -461,8 +456,8 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                           {!licStatus.isExpired && (
                             <button
                               type="button"
-                              onClick={() => restoStore.setRestaurantLicenseRemainingDays(resto.code, -1)}
-                              title="Immediately expire license and lock Boss & Scanner portals until renewed"
+                              onClick={() => restoStore.setRestaurantLicenseRemainingDays(resto.code, -4)}
+                              title="Expire the paid period and 72-hour grace window to test restricted access"
                               className="px-2.5 py-1.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-800 text-rose-300 font-semibold text-[11px] transition-colors cursor-pointer"
                             >
                               Expire Now
@@ -1354,7 +1349,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
                   <div>
                     <label className="text-slate-300 block mb-1 font-semibold">
-                      Monthly Base Price (RWF) *
+                      RestoPass Monthly SaaS Subscription (RWF) *
                     </label>
                     <input
                       type="number"
@@ -1365,7 +1360,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                       onChange={(e) => setNewBasePrice(Math.max(0, parseInt(e.target.value) || 0))}
                       className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white font-mono"
                     />
-                    <span className="text-[10px] text-slate-500">Base monthly fee</span>
+                    <span className="text-[10px] text-slate-500">Charged to the restaurant for 30 days of software access</span>
                   </div>
                 </div>
 
@@ -1550,7 +1545,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
             <form onSubmit={handleSavePlanTerms} className="space-y-3 text-xs">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-300 block mb-1 font-semibold">Monthly Base Price (RWF) *</label>
+                  <label className="text-slate-300 block mb-1 font-semibold">Monthly SaaS Subscription Price (RWF) *</label>
                   <input
                     type="number"
                     min={0}

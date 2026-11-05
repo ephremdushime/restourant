@@ -1,9 +1,9 @@
 name: RestoPass CI Security & Quality Gate
 
 on:
-  # Validate direct changes to the production branch.
+  # Validate direct production changes and the active SaaS billing feature branch.
   push:
-    branches: [main]
+    branches: [main, feature/restaurant-saas-billing-mtn-only]
   # Validate feature branches through their pull requests.
   # Do not also run on feature-branch pushes: that duplicates the PR run.
   pull_request:

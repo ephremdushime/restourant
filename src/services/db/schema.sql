@@ -327,3 +327,100 @@ CREATE TABLE IF NOT EXISTS scan_supervisor_overrides (
 );
 CREATE INDEX IF NOT EXISTS idx_scan_supervisor_override_queue
   ON scan_supervisor_overrides (restaurant_code,status,created_at DESC);
+
+
+-- 21. RestoPass own-merchant SaaS subscriptions. This is deliberately separate
+-- from customer meal subscriptions and restaurant meal-payment records.
+CREATE TABLE IF NOT EXISTS restaurant_subscriptions (
+    id VARCHAR(64) PRIMARY KEY,
+    restaurant_code VARCHAR(32) NOT NULL UNIQUE REFERENCES restaurants(code) ON DELETE CASCADE,
+    status VARCHAR(24) NOT NULL DEFAULT 'pending_payment'
+      CHECK (status IN ('pending_payment','active','grace_period','restricted','cancelled')),
+    price_rwf INT NOT NULL CHECK (price_rwf > 0),
+    currency CHAR(3) NOT NULL DEFAULT 'RWF' CHECK (currency = 'RWF'),
+    current_period_start TIMESTAMPTZ,
+    current_period_end TIMESTAMPTZ,
+    grace_period_end TIMESTAMPTZ,
+    last_payment_id VARCHAR(64),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (
+      (status = 'pending_payment' AND current_period_start IS NULL AND current_period_end IS NULL)
+      OR status <> 'pending_payment'
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_restaurant_subscriptions_status
+  ON restaurant_subscriptions (status, current_period_end);
+
+-- SaaS payment attempts represent Bestie's own software-access fee only.
+-- No customer_id and no reuse of meal top-up/customer subscription tables.
+CREATE TABLE IF NOT EXISTS restaurant_subscription_payments (
+    id VARCHAR(64) PRIMARY KEY,
+    restaurant_code VARCHAR(32) NOT NULL REFERENCES restaurants(code) ON DELETE RESTRICT,
+    provider VARCHAR(24) NOT NULL CHECK (provider = 'mtn_momo'),
+    provider_environment VARCHAR(16) NOT NULL CHECK (provider_environment IN ('sandbox','production')),
+    internal_reference VARCHAR(64) NOT NULL UNIQUE,
+    provider_transaction_id VARCHAR(128),
+    payer_msisdn VARCHAR(24) NOT NULL,
+    amount_rwf INT NOT NULL CHECK (amount_rwf > 0),
+    currency CHAR(3) NOT NULL DEFAULT 'RWF' CHECK (currency = 'RWF'),
+    status VARCHAR(24) NOT NULL DEFAULT 'created'
+      CHECK (status IN ('created','provider_pending','successful','failed','cancelled','expired','review_required')),
+    idempotency_key VARCHAR(128) NOT NULL UNIQUE,
+    request_fingerprint VARCHAR(64) NOT NULL,
+    provider_status VARCHAR(64),
+    verified_at TIMESTAMPTZ,
+    entitlement_applied_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+-- Existing deployments must accept a final provider-success that fails a strict match.
+ALTER TABLE restaurant_subscription_payments
+  DROP CONSTRAINT IF EXISTS restaurant_subscription_payments_status_check;
+ALTER TABLE restaurant_subscription_payments
+  ADD CONSTRAINT restaurant_subscription_payments_status_check
+  CHECK (status IN ('created','provider_pending','successful','failed','cancelled','expired','review_required'));
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_restaurant_saas_provider_transaction
+  ON restaurant_subscription_payments (provider, provider_environment, provider_transaction_id)
+  WHERE provider_transaction_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_restaurant_saas_payment_history
+  ON restaurant_subscription_payments (restaurant_code, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_restaurant_saas_payment_reconciliation
+  ON restaurant_subscription_payments (status, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_restaurant_saas_one_unresolved_payment
+  ON restaurant_subscription_payments (restaurant_code)
+  WHERE status IN ('created','provider_pending','review_required');
+-- Versioned replacement index upgrades deployments that already created the earlier predicate.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_restaurant_saas_unresolved_payment_v2
+  ON restaurant_subscription_payments (restaurant_code)
+  WHERE status IN ('created','provider_pending','review_required');
+
+-- Minimal callback/reconciliation metadata. Never persist raw webhook bodies,
+-- access tokens, API keys, or payer credentials.
+CREATE TABLE IF NOT EXISTS restaurant_subscription_webhook_events (
+    id VARCHAR(64) PRIMARY KEY,
+    provider VARCHAR(24) NOT NULL CHECK (provider = 'mtn_momo'),
+    provider_environment VARCHAR(16) NOT NULL CHECK (provider_environment IN ('sandbox','production')),
+    provider_event_key VARCHAR(160) NOT NULL,
+    internal_reference VARCHAR(64),
+    body_sha256 VARCHAR(64) NOT NULL,
+    processing_status VARCHAR(24) NOT NULL DEFAULT 'received'
+      CHECK (processing_status IN ('received','verified','rejected','reconciled')),
+    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    processed_at TIMESTAMPTZ,
+    CONSTRAINT uq_restaurant_saas_webhook UNIQUE (provider, provider_environment, provider_event_key)
+);
+
+CREATE TABLE IF NOT EXISTS restaurant_subscription_audit_logs (
+    id VARCHAR(64) PRIMARY KEY,
+    restaurant_code VARCHAR(32) NOT NULL REFERENCES restaurants(code) ON DELETE RESTRICT,
+    actor_type VARCHAR(24) NOT NULL CHECK (actor_type IN ('system','super_admin','restaurant_admin','mtn_momo')),
+    actor_id VARCHAR(128),
+    action VARCHAR(64) NOT NULL,
+    payment_id VARCHAR(64),
+    data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_restaurant_saas_audit
+  ON restaurant_subscription_audit_logs (restaurant_code, created_at DESC);

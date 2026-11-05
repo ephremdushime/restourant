@@ -375,7 +375,7 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
 
                 <div>
                   <label className="font-semibold text-slate-200 block mb-1">
-                    Phone Number (MTN / Airtel) <span className="text-emerald-400">*</span>
+                    Phone Number <span className="text-emerald-400">*</span>
                   </label>
                   <input
                     type="tel"
@@ -512,7 +512,7 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
               </div>
 
               {/* Provider selection */}
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2">
                 <button
                   type="button"
                   onClick={() => setPaymentMethod('mtn_momo')}
@@ -524,17 +524,7 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
                 >
                   <span>MTN Mobile Money</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('airtel_money')}
-                  className={`p-3 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
-                    paymentMethod === 'airtel_money'
-                      ? 'bg-rose-500/20 border-rose-500 text-rose-300'
-                      : 'bg-slate-950 border-slate-800 text-slate-400'
-                  }`}
-                >
-                  <span>Airtel Money</span>
-                </button>
+                
               </div>
 
               {/* How to Pay Banner */}

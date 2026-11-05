@@ -2144,11 +2144,12 @@ export class RestoStore {
    * - Warns restaurant 7 days before monthly subscription ends.
    */
   public getRestaurantLicenseStatus(restaurantCode?: string): {
-    status: 'active' | 'expiring_soon' | 'expired' | 'unlicensed';
+    status: 'active' | 'expiring_soon' | 'grace' | 'expired' | 'unlicensed';
     isExpired: boolean;
     isExpiringSoon: boolean;
     daysRemaining: number;
     hoursRemaining: number;
+    graceHoursRemaining: number;
     validUntil: string | null;
     license?: License;
     warningMessage?: string;
@@ -2165,30 +2166,45 @@ export class RestoStore {
         isExpiringSoon: false,
         daysRemaining: 0,
         hoursRemaining: 0,
+        graceHoursRemaining: 0,
         validUntil: null,
-        warningMessage: 'No active license issued for this restaurant. Please activate a monthly subscription license in Super Admin.',
+        warningMessage: 'No paid RestoPass subscription is active. Complete payment to activate this restaurant.',
       };
     }
 
     const validUntilMs = new Date(license.validUntil).getTime();
+    const graceEndsAtMs = validUntilMs + 72 * 60 * 60 * 1000;
     const msRemaining = validUntilMs - guardedNow;
+    const graceMsRemaining = graceEndsAtMs - guardedNow;
     const daysRemaining = Math.max(0, Math.ceil(msRemaining / (24 * 3600 * 1000)));
     const hoursRemaining = Math.max(0, Math.ceil(msRemaining / (3600 * 1000)));
+    const graceHoursRemaining = Math.max(0, Math.ceil(graceMsRemaining / (3600 * 1000)));
 
-    if (msRemaining <= 0 || restaurant?.status === 'suspended') {
-      if (restaurant && restaurant.status === 'active' && msRemaining <= 0) {
-        restaurant.status = 'suspended';
-      }
+    if (restaurant?.status === 'suspended' || guardedNow >= graceEndsAtMs) {
       return {
         status: 'expired',
         isExpired: true,
         isExpiringSoon: false,
         daysRemaining: 0,
         hoursRemaining: 0,
+        graceHoursRemaining: 0,
         validUntil: license.validUntil,
         license,
-        warningMessage:
-          'Monthly restaurant subscription license has expired. Boss and Scanner operations are locked until the license is renewed and reactivated by Super Admin.',
+        warningMessage: 'The 72-hour renewal grace period has ended. Scanner redemption and business-changing operations are restricted. Sign in to renew.',
+      };
+    }
+
+    if (msRemaining <= 0) {
+      return {
+        status: 'grace',
+        isExpired: false,
+        isExpiringSoon: false,
+        daysRemaining: 0,
+        hoursRemaining: 0,
+        graceHoursRemaining,
+        validUntil: license.validUntil,
+        license,
+        warningMessage: `Subscription expired. A 72-hour restricted renewal grace period remains (${graceHoursRemaining} hour(s)). Renew now to avoid service interruption.`,
       };
     }
 
@@ -2199,9 +2215,10 @@ export class RestoStore {
         isExpiringSoon: true,
         daysRemaining,
         hoursRemaining,
+        graceHoursRemaining: 72,
         validUntil: license.validUntil,
         license,
-        warningMessage: `Subscription Renewal Warning: Your monthly restaurant license expires in ${daysRemaining} day${daysRemaining === 1 ? '' : 's'} (${new Date(license.validUntil).toLocaleDateString()}). Please renew with RestoPass Super Admin to avoid service interruption.`,
+        warningMessage: `Subscription renewal due in ${daysRemaining} day(s). After expiry, a 72-hour grace period applies.`,
       };
     }
 
@@ -2211,6 +2228,7 @@ export class RestoStore {
       isExpiringSoon: false,
       daysRemaining,
       hoursRemaining,
+      graceHoursRemaining: 72,
       validUntil: license.validUntil,
       license,
     };
@@ -4187,6 +4205,7 @@ export class RestoStore {
     termsOverride?: Restaurant['termsOverride'];
     licensedScanPoints?: number;
     basePriceRwf?: number;
+    saasSubscriptionPriceRwf?: number;
     pricePerExtraScanPointRwf?: number;
     studentSubscriptionPriceRwf?: number;
     singlePlatePriceRwf?: number;
@@ -4212,11 +4231,12 @@ export class RestoStore {
       email: data.email.trim(),
       address: data.address.trim(),
       currency: data.currency || 'RWF',
-      status: 'active',
+      status: 'pending_payment',
       planId: data.planId,
       termsOverride,
       defaultPlatePriceRwf: data.singlePlatePriceRwf ? Number(data.singlePlatePriceRwf) : 1200,
       studentSubscriptionPriceRwf: data.studentSubscriptionPriceRwf !== undefined ? Number(data.studentSubscriptionPriceRwf) : undefined,
+      saasSubscriptionPriceRwf: data.saasSubscriptionPriceRwf !== undefined ? Number(data.saasSubscriptionPriceRwf) : Number(selectedPlan?.terms?.basePriceRwf || 0),
       highestTimeSeen: Date.now(),
       lastSyncAt: now,
       softwareVersion: '1.1.0-authority',
@@ -4234,31 +4254,15 @@ export class RestoStore {
       isUsed: false,
     });
 
-    // Auto issue initial 30-day signed license with configured stations quota
-    const scanPointsLimit = data.licensedScanPoints || selectedPlan?.terms?.maxScanPointsIncluded || 2;
-    try {
-      this.issueLicense({
-        restaurantCode: code,
-        planId: data.planId,
-        maxScanPoints: Number(scanPointsLimit),
-        validDays: 30,
-        graceDays: selectedPlan?.terms?.graceDays || 7,
-        featureFlags: {
-          spotChecksEnabled: true,
-          multiStationEnabled: Number(scanPointsLimit) > 1,
-          secondPlateAllowed: true,
-          customerTransfersEnabled: true,
-        },
-      });
-    } catch (e) {
-      console.warn('Initial license issuance skipped in createRestaurant:', e);
-    }
+    // SaaS entitlement is deliberately not issued at registration.
+    // The restaurant remains pending_payment until a verified payment is
+    // applied by the authoritative billing service.
 
     this.logAudit({
       actorRole: 'super_admin',
       actorName: 'Ephrem (Founder)',
       action: 'RESTAURANT_ONBOARDED',
-      details: `Created restaurant ${code} - ${restaurant.name} on ${selectedPlan?.name || data.planId} with ${scanPointsLimit} licensed scan point stations. Generated activation code ${codeStr}`,
+      details: `Created restaurant ${code} - ${restaurant.name} on ${selectedPlan?.name || data.planId}; subscription pending verified payment. Generated activation code ${codeStr}`,
     });
 
     this.scheduleSaveState();
@@ -4338,14 +4342,19 @@ export class RestoStore {
     const existingLic = this.getRestaurantLicense(params.restaurantCode);
     const plan = this.state.plans.find((p) => p.id === restaurant.planId) || this.state.plans[0];
     const validDays = params.validDays ?? 30;
+    const paidUntilMs = existingLic ? new Date(existingLic.validUntil).getTime() : Number.NaN;
+    const remainingPaidDays = Number.isFinite(paidUntilMs) && paidUntilMs > Date.now()
+      ? Math.ceil((paidUntilMs - Date.now()) / (24 * 3600 * 1000))
+      : 0;
+    const effectiveValidDays = validDays + remainingPaidDays;
     const maxScanPoints = params.maxScanPoints ?? existingLic?.maxScanPoints ?? plan.terms.maxScanPointsIncluded ?? 4;
 
     const newLic = this.issueLicense({
       restaurantCode: params.restaurantCode,
       planId: restaurant.planId,
       maxScanPoints,
-      validDays,
-      graceDays: 0,
+      validDays: effectiveValidDays,
+      graceDays: 3,
       featureFlags: existingLic?.featureFlags || {
         spotChecksEnabled: true,
         multiStationEnabled: true,
@@ -4354,22 +4363,17 @@ export class RestoStore {
       },
     });
 
-    if (existingLic) {
-      existingLic.validUntil = newLic.validUntil;
-      existingLic.paidUntil = newLic.validUntil;
-      existingLic.graceDays = 0;
-    }
     restaurant.status = 'active';
     restaurant.currentLicenseId = newLic.id;
     restaurant.highestTimeSeen = Date.now();
 
-    if (params.recordPayment !== false && validDays >= 28) {
+    if (params.recordPayment === true && effectiveValidDays >= 28) {
       const now = new Date();
       this.recordSubscriptionPayment({
         restaurantCode: restaurant.code,
         restaurantName: restaurant.name,
         amountRwf: plan.terms.basePriceRwf,
-        periodCovered: `${now.toLocaleString('en-US', { month: 'short', year: 'numeric' })} (${validDays}d Renewal)`,
+        periodCovered: `${now.toLocaleString('en-US', { month: 'short', year: 'numeric' })} (${effectiveValidDays}d Renewal)`,
         paidAt: now.toISOString(),
         paymentMethod: 'MOMO_B2B',
         reference: `RENEW-${restaurant.code}-${Date.now().toString().slice(-5)}`,
@@ -4382,8 +4386,8 @@ export class RestoStore {
       senderRole: 'system',
       senderName: 'RestoPass Super Admin',
       type: 'system_broadcast',
-      title: `Restaurant License Activated (${validDays} Days)`,
-      message: `License ${newLic.id} is active until ${new Date(newLic.validUntil).toLocaleDateString()}. All Boss and Scanner operations are unlocked.`,
+      title: `Restaurant License Manually Activated (${effectiveValidDays} Days)`,
+      message: `A Super Admin manual license override (${newLic.id}) is active until ${new Date(newLic.validUntil).toLocaleDateString()}.`,
       priority: 'important',
     });
 
@@ -4429,6 +4433,7 @@ export class RestoStore {
     restaurantCode: string,
     data: {
       basePriceRwf?: number;
+      saasSubscriptionPriceRwf?: number;
       pricePerExtraScanPointRwf?: number;
       studentSubscriptionPriceRwf?: number;
       defaultPlatePriceRwf?: number;
@@ -4447,6 +4452,7 @@ export class RestoStore {
     }
 
     if (data.basePriceRwf !== undefined) r.termsOverride.basePriceRwf = Number(data.basePriceRwf);
+    if (data.saasSubscriptionPriceRwf !== undefined) r.saasSubscriptionPriceRwf = Number(data.saasSubscriptionPriceRwf);
     if (data.pricePerExtraScanPointRwf !== undefined) r.termsOverride.pricePerExtraScanPointRwf = Number(data.pricePerExtraScanPointRwf);
     if (data.studentSubscriptionPriceRwf !== undefined) {
       r.termsOverride.studentSubscriptionPriceRwf = Number(data.studentSubscriptionPriceRwf);
@@ -4478,7 +4484,7 @@ export class RestoStore {
   }
 
   /**
-   * Super Admin action to immediately expire/suspend a restaurant's license (or set custom remaining days)
+   * Super Admin test control to set a licence's remaining paid days without overriding lifecycle calculation
    */
   public setRestaurantLicenseRemainingDays(restaurantCode: string, remainingDays: number): License | undefined {
     const restaurant = this.state.restaurants.find((r) => r.code === restaurantCode);
@@ -4505,7 +4511,7 @@ export class RestoStore {
     license.validUntil = new Date(targetTime).toISOString();
     license.paidUntil = license.validUntil;
     license.graceDays = 0;
-    restaurant.status = remainingDays <= 0 ? 'suspended' : 'active';
+    restaurant.status = 'active';
     restaurant.highestTimeSeen = Date.now();
 
     if (remainingDays > 0 && remainingDays <= 7) {
