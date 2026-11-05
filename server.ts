@@ -2225,6 +2225,7 @@ app.post(
 
 // POST /api/customer/transfer: Server-authoritative PIN-verified plate transfer.
 app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
+  if (!serverDbState) return res.status(503).json({ success: false, error: 'Server state is not initialized.' });
   ensureServerDbDefaults(serverDbState);
   const user = req.user!;
   const customer = (serverDbState.customers || []).find((item: any) => item.id === user.userId);
@@ -2254,6 +2255,8 @@ app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), as
   }
 
   const previousPinHash = customer.pinHash;
+  const previousAttempts = customer.failedLoginAttempts;
+  const previousLockedUntil = customer.lockedUntil;
   if (!verifyServerCustomerPin(pin, customer)) {
     customer.failedLoginAttempts = (customer.failedLoginAttempts || 0) + 1;
     if (customer.failedLoginAttempts >= 5) customer.lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
@@ -2314,8 +2317,6 @@ app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), as
   const oldTransfers = serverDbState.transfers;
   const oldAuditLogs = serverDbState.auditLogs;
   const oldNotifications = serverDbState.notifications;
-  const oldAttempts = customer.failedLoginAttempts;
-  const oldLockedUntil = customer.lockedUntil;
   serverDbState.ledgerEntries = [...(oldLedger || []), ledgerOut, ledgerIn];
   serverDbState.transfers = [transfer, ...(oldTransfers || [])];
   serverDbState.auditLogs = [{
@@ -2346,8 +2347,8 @@ app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), as
     serverDbState.transfers = oldTransfers;
     serverDbState.auditLogs = oldAuditLogs;
     serverDbState.notifications = oldNotifications;
-    customer.failedLoginAttempts = oldAttempts;
-    customer.lockedUntil = oldLockedUntil;
+    customer.failedLoginAttempts = previousAttempts;
+    customer.lockedUntil = previousLockedUntil;
     customer.pinHash = previousPinHash;
     return res.status(500).json({ success: false, error: 'Transfer could not be committed. No transfer was confirmed.' });
   }
