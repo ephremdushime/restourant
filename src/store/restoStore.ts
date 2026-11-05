@@ -4483,7 +4483,7 @@ export class RestoStore {
   }
 
   /**
-   * Super Admin action to immediately expire/suspend a restaurant's license (or set custom remaining days)
+   * Super Admin test control to set a licence's remaining paid days without overriding lifecycle calculation
    */
   public setRestaurantLicenseRemainingDays(restaurantCode: string, remainingDays: number): License | undefined {
     const restaurant = this.state.restaurants.find((r) => r.code === restaurantCode);
@@ -4510,7 +4510,7 @@ export class RestoStore {
     license.validUntil = new Date(targetTime).toISOString();
     license.paidUntil = license.validUntil;
     license.graceDays = 0;
-    restaurant.status = remainingDays <= 0 ? 'suspended' : 'active';
+    restaurant.status = 'active';
     restaurant.highestTimeSeen = Date.now();
 
     if (remainingDays > 0 && remainingDays <= 7) {
