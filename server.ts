@@ -4347,7 +4347,8 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
 
       if (user.role === 'super_admin') {
         mergeScopedCollection('plans', true);
-        mergeScopedCollection('licenses', true);
+        // Restaurant licences are derived from verified SaaS payment transactions.
+        // Never accept client-supplied licence creation or mutation through state sync.
         if (fullState.studentSubscriptionSettings) {
           serverDbState.studentSubscriptionSettings = {
             ...serverDbState.studentSubscriptionSettings,
