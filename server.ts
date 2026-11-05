@@ -3271,7 +3271,11 @@ app.get('/api/restaurant-saas/subscription', apiRateLimiter, requireAuth(['resta
       : nowMs < periodEndMs ? 'active'
       : nowMs < periodEndMs + 72 * 60 * 60 * 1000 ? 'grace_period' : 'restricted';
     if (subscription.status !== computedStatus) {
-      const updated = await client.query('UPDATE restaurant_subscriptions SET status=$2,updated_at=NOW() WHERE restaurant_code=$1 RETURNING *',[code,computedStatus]);
+      const updated = await client.query('UPDATE restaurant_subscriptions SET status=$2,updated_at=NOW() WHERE restaurant_code=$1 AND status<>$2 RETURNING *',[code,computedStatus]);
+      if (updated.rowCount) {
+        await client.query("INSERT INTO restaurant_subscription_audit_logs (id,restaurant_code,actor_type,action,data) VALUES ($1,$2,'system','SUBSCRIPTION_STATUS_CHANGED',$3)",
+          ['rsa_'+crypto.randomUUID(),code,JSON.stringify({from:subscription.status,to:computedStatus,observedAt:new Date(nowMs).toISOString()})]);
+      }
       subscription.status = updated.rows[0]?.status || computedStatus;
     }
     const payments = await client.query('SELECT id,internal_reference,amount_rwf,currency,status,provider_status,created_at,verified_at,entitlement_applied_at FROM restaurant_subscription_payments WHERE restaurant_code=$1 ORDER BY created_at DESC LIMIT 20',[code]);
