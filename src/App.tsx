@@ -136,8 +136,8 @@ export default function App() {
       setRestoAdminSubTab('dashboard');
       if (updateHash && typeof window !== 'undefined') window.location.hash = '#/boss';
     } else if (role === 'customer') {
-      setActiveTab('my_card');
-      if (updateHash && typeof window !== 'undefined') window.location.hash = '#/customer';
+      setActiveTab('home');
+      if (updateHash && typeof window !== 'undefined') window.location.hash = '#/customer/home';
     } else if (role === 'super_admin') {
       setActiveTab('restaurants');
       setSuperAdminSubTab('restaurants');
@@ -169,14 +169,19 @@ export default function App() {
 
       if (targetSlug) {
         const targetClean = targetSlug.toLowerCase();
-        const availableRestos = restoStore.getState().restaurants;
-        const matched = availableRestos.find(
-          (r) =>
-            r.code.toLowerCase() === targetClean ||
-            r.name.toLowerCase().replace(/[^a-z0-9]/g, '').includes(targetClean.replace(/[^a-z0-9]/g, ''))
-        );
-        if (matched && matched.code !== restoStore.getState().currentRestaurantCode) {
-          restoStore.setRestaurantCode(matched.code);
+        const curState = restoStore.getState();
+        const authCustomer = curState.currentRole === 'customer' ? restoStore.getCurrentCustomer() : null;
+        // Never switch an authenticated customer session into another restaurant's tenant via URL navigation
+        if (!authCustomer) {
+          const availableRestos = curState.restaurants;
+          const matched = availableRestos.find(
+            (r) =>
+              r.code.toLowerCase() === targetClean ||
+              r.name.toLowerCase().replace(/[^a-z0-9]/g, '').includes(targetClean.replace(/[^a-z0-9]/g, ''))
+          );
+          if (matched && matched.code !== curState.currentRestaurantCode) {
+            restoStore.setRestaurantCode(matched.code);
+          }
         }
       }
 
@@ -358,6 +363,7 @@ export default function App() {
                 language={state.currentLanguage}
                 activeSubTab={activeTab}
                 onNavigateTab={(tab) => handleTabChange(tab)}
+                onSignOut={() => handleLockSession('customer')}
                 isDemoMode={isDemoMode}
               />
             )}
