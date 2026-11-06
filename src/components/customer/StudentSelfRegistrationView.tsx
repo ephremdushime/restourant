@@ -53,7 +53,7 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [regNumber, setRegNumber] = useState('');
-  const [institution, setInstitution] = useState(activeResto?.name?.includes('ULK') ? 'ULK' : 'University / College');
+  const [institution, setInstitution] = useState('University / College');
   const [programme, setProgramme] = useState('');
   const [year, setYear] = useState(1);
   const [branchId, setBranchId] = useState(branches[0]?.id || 'br_rw01_main');
