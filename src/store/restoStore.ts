@@ -6765,6 +6765,8 @@ export class RestoStore {
       } else if (now > graceMs) {
         sub.status = 'expired';
         sub.updatedAt = new Date().toISOString();
+        const expiredCustomer = this.state.customers.find((c) => c.id === customerId);
+        if (expiredCustomer?.customerAccessStatus === 'active') expiredCustomer.customerAccessStatus = 'payment_required';
       } else if (now > endMs && sub.status === 'active') {
         sub.status = 'grace_period';
         sub.updatedAt = new Date().toISOString();
