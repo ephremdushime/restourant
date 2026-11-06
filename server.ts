@@ -3295,7 +3295,7 @@ app.post(
 
 // Two-person supervisor override for a serving-window limit. Approval is one-time,
 // customer/station-bound, short-lived and consumed inside the scan transaction.
-app.post('/api/scans/supervisor-overrides', apiRateLimiter, requireAuth(['stand_staff', 'restaurant_admin']), async (req, res) => {
+app.post('/api/scans/supervisor-overrides', apiRateLimiter, requireAuth(['stand_staff','restaurant_admin']), async (req, res) => {
   if (process.env.RESTOPASS_SUPERVISOR_OVERRIDES_ENABLED !== 'true') return res.status(503).json({ success: false, code: 'SUPERVISOR_OVERRIDES_DISABLED', error: 'Supervisor overrides are disabled for this deployment.' });
   const user = req.user!;
   const customerId = typeof req.body?.customerId === 'string' ? req.body.customerId.trim() : '';

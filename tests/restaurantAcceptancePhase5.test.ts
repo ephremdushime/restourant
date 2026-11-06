@@ -127,7 +127,7 @@ describe('Phase 5: Restaurant Operational Acceptance Testing (OAT)', () => {
 
     // Verify student cannot log in to dashboard yet
     const portalStatus = restoStore.checkCustomerPortalStatus(studentPhone, restoCode);
-    assert.equal(portalStatus.status, 'pending_boss_approval');
+    assert.equal(portalStatus.status, 'needs_pin_setup');
 
     // 2. Manager verifies photo/ID and approves in Pending Approvals
     const pending = restoStore.getState().pendingApprovals.find(
