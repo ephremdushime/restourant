@@ -420,7 +420,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
   };
 
   // Handle Registration
-  const handleRegisterSubmit = (e: React.FormEvent) => {
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setRegError(null);
     setRegSuccess(null);
@@ -430,11 +430,14 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
       return;
     }
 
+    const capturedPhoto = regPhotoUrl.startsWith('data:') ? regPhotoUrl : null;
+    const fallbackPhoto = '/src/assets/images/avatar_student_male_1790979380050.jpg';
     const result = restoStore.registerCustomer({
       restaurantCode: state.currentRestaurantCode,
       name: regName,
       phone: regPhone,
-      photoUrl: regPhotoUrl,
+      // Never put base64 image data into application state or the sync outbox.
+      photoUrl: capturedPhoto ? fallbackPhoto : regPhotoUrl,
       idType: regIdType,
       idNumber: regIdNumber,
       occupation: regOccupation,
@@ -455,11 +458,22 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
     });
 
     if (result.success && result.customer) {
-      setRegSuccess(`Successfully registered #${result.customer.memberNo} (${result.customer.name})! Card generated.`);
-      // Reset form
+      let successMessage = `Successfully registered #${result.customer.memberNo} (${result.customer.name})! Card generated.`;
+      if (capturedPhoto) {
+        // First sync the new customer so the server can authorize and attach its portrait.
+        await restoStore.pushStateToServer();
+        const photoResult = await restoStore.uploadCustomerPhoto(result.customer.id, capturedPhoto);
+        if (!photoResult.success) {
+          setRegError(`Registration succeeded, but the portrait was not saved: ${photoResult.error || 'Upload unavailable'}. You can retry the photo from the customer profile.`);
+        } else {
+          successMessage += ' Portrait stored privately.';
+        }
+      }
+      setRegSuccess(successMessage);
       setRegName('');
       setRegPhone('+250 78');
       setRegIdNumber('');
+      setRegPhotoUrl(fallbackPhoto);
       setRegPaymentRef('MOMO-' + Math.floor(1000000 + Math.random() * 9000000));
     } else {
       setRegError(result.error || 'Registration failed');
