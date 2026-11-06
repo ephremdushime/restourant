@@ -305,7 +305,12 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           return;
         }
 
-        const statusCheck = restoStore.checkCustomerPortalStatus(cleanPhoneOrMember, selectedRestoCode);
+        const statusCheck = await restoStore.getCustomerRegistrationStatus(cleanPhoneOrMember, selectedRestoCode);
+        if (statusCheck.status === 'unavailable') {
+          setErrorMessage(statusCheck.error || 'Unable to verify your registration. Please reconnect and try again.');
+          setIsVerifying(false);
+          return;
+        }
         if (statusCheck.status === 'pending_reception_payment') {
           setErrorMessage('Your registration is saved. Please visit reception to pay and confirm your payment before setting your PIN.');
           sound.playDangerAlarm();
