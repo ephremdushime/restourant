@@ -171,9 +171,9 @@ export async function deletePrivatePatronPhoto(
 export async function getPrivatePatronPhoto(key: string, storageType?: 's3' | 'local'): Promise<StoredPhoto | null> {
   const parsed = validatePhotoKey(key);
   const config = getObjectStorageConfig();
-  const s3 = getS3Client();
 
-  if (storageType === 's3' || (storageType !== 'local' && config && s3)) {
+  if (storageType === 's3' || (storageType !== 'local' && config)) {
+    const s3 = getS3Client();
     if (!config || !s3) throw new Error('S3 storage is not configured to read this private photo.');
     const response = await s3.send(new GetObjectCommand({ Bucket: config.bucket, Key: key }));
     if (!response.Body) return null;
