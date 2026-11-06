@@ -10,8 +10,10 @@ import {
   insertLedgerEntryPostgres,
   getPostgresPool,
 } from './src/services/db/postgresAdapter';
-import { ensureRedisReady, getRedisClient, isRedisConfigured } from './src/services/cache/redisClient';
-import { uploadBase64Photo, downloadPatronPhoto } from './src/services/storage/objectStorage';
+import { ensureRedisReady, getRedisClient, isRedisConfigured, isTokenUsed, recordTokenScan, releaseTokenScan, closeRedis } from './src/services/cache/redisClient';
+import { uploadBase64Photo, downloadPatronPhoto, deletePatronPhoto } from './src/services/storage/objectStorage';
+import { closePostgres } from './src/services/db/postgresAdapter';
+import { momoService } from './src/services/momoService';
 import { calculateRenewalPeriod, validateSaasPaymentMatch } from './src/services/restaurantSaasBilling';
 
 const app = express();
@@ -109,7 +111,8 @@ function isValidAppState(obj: any): boolean {
   return Boolean(obj && typeof obj === 'object' && Array.isArray(obj.restaurants) && obj.restaurants.length > 0 && Array.isArray(obj.customers));
 }
 
-if (fs.existsSync(DB_FILE)) {
+// Only load local JSON state in non-production offline mode when PostgreSQL is not configured (Workstream A)
+if (!isPostgresConfigured() && process.env.NODE_ENV !== 'production' && fs.existsSync(DB_FILE)) {
   try {
     const parsed = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
     if (isValidAppState(parsed)) {
@@ -172,6 +175,8 @@ function ensureServerDbDefaults(state: any) {
   if (!state.studentSubscriptionPayments) state.studentSubscriptionPayments = [];
   if (!state.activationRequests) state.activationRequests = [];
   if (!state.pinRecoveryRequests) state.pinRecoveryRequests = [];
+  if (!state.auditLogs) state.auditLogs = [];
+  if (!state.transfers) state.transfers = [];
 
   if (Array.isArray(state.expenses)) {
     state.expenses = state.expenses.filter((e: any) => !SEED_EXPENSE_IDS.has(e.id) && e.restaurantCode !== 'RW02');
@@ -193,6 +198,9 @@ ensureServerDbDefaults(serverDbState);
  * Writes to a temporary file first, then atomically renames to target file.
  */
 function atomicSaveDb(state: any): boolean {
+  if (process.env.NODE_ENV === 'production' || isPostgresConfigured()) {
+    return false;
+  }
   try {
     const serialized = JSON.stringify(state, null, 2);
     const tempFile = path.join(
@@ -204,7 +212,8 @@ function atomicSaveDb(state: any): boolean {
     fs.writeFileSync(tempFile, serialized, 'utf-8');
 
     // 2. Create rolling backup if primary exists
-    if (fs.existsSync(DB_FILE)) {
+    // Only load local JSON state in non-production offline mode when PostgreSQL is not configured (Workstream A)
+if (!isPostgresConfigured() && process.env.NODE_ENV !== 'production' && fs.existsSync(DB_FILE)) {
       try {
         fs.copyFileSync(DB_FILE, DB_BACKUP_FILE);
       } catch {}
@@ -251,6 +260,11 @@ function queueDbSave(state: any): Promise<boolean> {
   return new Promise((resolve) => {
     dbWriteQueue = dbWriteQueue.then(async () => {
       try {
+        if (process.env.NODE_ENV === 'production' && !isPostgresConfigured()) {
+          console.error('[Server DB Save Error] Production financial writes require PostgreSQL. Refusing local JSON fallback.');
+          resolve(false);
+          return false;
+        }
         let pgOk = true;
         if (isPostgresConfigured()) {
           pgOk = await saveStateToPostgres(state);
@@ -1641,6 +1655,163 @@ app.post(
   }
 );
 
+// POST /api/customer/credentials/rotate: Audited key rotation & card revocation/reissuance (Workstream B4)
+app.post(
+  '/api/customer/credentials/rotate',
+  apiRateLimiter,
+  requireAuth(['customer', 'restaurant_admin', 'super_admin']),
+  async (req, res) => {
+    ensureServerDbDefaults(serverDbState);
+    const user = req.user!;
+    const { customerId, targetType, reason } = req.body || {};
+
+    const targetCustId = user.role === 'customer' ? user.userId : String(customerId || '');
+    if (!targetCustId) {
+      return res.status(400).json({ success: false, error: 'customerId is required' });
+    }
+
+    if (user.role === 'customer' && targetType === 'card') {
+      return res.status(403).json({
+        success: false,
+        error: 'Physical card reissuance requires a restaurant manager or administrator',
+      });
+    }
+
+    const customer = (serverDbState?.customers || []).find((c: any) => c.id === targetCustId);
+    if (!customer) {
+      return res.status(404).json({ success: false, error: 'Customer not found' });
+    }
+
+    if (user.role === 'restaurant_admin' && customer.restaurantCode !== user.restaurantCode) {
+      return res.status(403).json({ success: false, error: 'Forbidden: Cross-restaurant credential rotation is not allowed' });
+    }
+
+    const mode = targetType === 'card' ? 'card' : 'phone_key';
+    const previousKeyVersion = customer.keyVersion || 1;
+    const previousCardVersion = customer.cardVersion || 1;
+
+    let reissuedCardToken: string | undefined;
+    if (mode === 'card') {
+      customer.cardVersion = previousCardVersion + 1;
+      customer.cardStatus = 'active';
+      const restoKey = deriveServerRestaurantKey(customer.restaurantCode);
+      const mac = serverHmac(restoKey, `CARD:${customer.memberNo}:V${customer.cardVersion}`).slice(0, 16);
+      reissuedCardToken = `c1.${customer.restaurantCode.toUpperCase()}.${customer.memberNo}.${customer.cardVersion}.${mac}`;
+    } else {
+      customer.keyVersion = previousKeyVersion + 1;
+    }
+
+    const auditEntry = {
+      id: `aud_${crypto.randomUUID()}`,
+      restaurantCode: customer.restaurantCode,
+      userId: user.userId,
+      actorName: user.username,
+      action: mode === 'card' ? 'CARD_REVOKED_AND_REISSUED' : 'CUSTOMER_KEY_ROTATED',
+      timestamp: new Date().toISOString(),
+      details: {
+        customerId: customer.id,
+        memberNo: customer.memberNo,
+        previousKeyVersion,
+        newKeyVersion: customer.keyVersion,
+        previousCardVersion,
+        newCardVersion: customer.cardVersion,
+        reason: String(reason || 'Security rotation').slice(0, 240),
+      },
+    };
+    serverDbState.auditLogs.unshift(auditEntry);
+    await queueDbSave(serverDbState);
+
+    return res.json({
+      success: true,
+      customerId: customer.id,
+      memberNo: customer.memberNo,
+      keyVersion: customer.keyVersion,
+      cardVersion: customer.cardVersion,
+      cardStatus: customer.cardStatus,
+      reissuedCardToken,
+      auditId: auditEntry.id,
+    });
+  }
+);
+
+// DELETE /api/customer/photo: Audited patron photo deletion & retention enforcement (Workstream C10)
+app.delete(
+  '/api/customer/photo',
+  apiRateLimiter,
+  requireAuth(['restaurant_admin', 'super_admin']),
+  async (req, res) => {
+    ensureServerDbDefaults(serverDbState);
+    const user = req.user!;
+    const customerId = String(req.query.customerId || req.body?.customerId || '').trim();
+    const rawKey = String(req.query.key || req.body?.key || '').trim();
+
+    if (!customerId && !rawKey) {
+      return res.status(400).json({ success: false, error: 'customerId or photo key is required' });
+    }
+
+    const customers: any[] = serverDbState.customers || [];
+    const customer = customerId
+      ? customers.find((c) => c.id === customerId)
+      : customers.find((c) => typeof c.photoUrl === 'string' && c.photoUrl.includes(rawKey));
+
+    if (!customer) {
+      return res.status(404).json({ success: false, error: 'Customer record not found for photo deletion' });
+    }
+
+    if (user.role === 'restaurant_admin' && customer.restaurantCode !== user.restaurantCode) {
+      return res.status(403).json({ success: false, error: 'Forbidden: Cannot delete patron photos belonging to another restaurant' });
+    }
+
+    let normalizedKey = rawKey;
+    if (!normalizedKey && typeof customer.photoUrl === 'string') {
+      try {
+        const parsed = new URL(customer.photoUrl, 'https://restopass.invalid');
+        const qKey = parsed.searchParams.get('key');
+        if (qKey) normalizedKey = qKey;
+      } catch {}
+      if (!normalizedKey) {
+        const decodedUrl = decodeURIComponent(customer.photoUrl);
+        const idx = decodedUrl.indexOf('patron-photos/');
+        if (idx !== -1) {
+          normalizedKey = decodedUrl.slice(idx);
+        }
+      }
+    }
+
+    if (normalizedKey) {
+      try {
+        await deletePatronPhoto(normalizedKey);
+      } catch (err: any) {
+        return res.status(400).json({ success: false, error: err.message || 'Failed to delete patron photo from storage' });
+      }
+    }
+
+    customer.photoUrl = '';
+    const auditEntry = {
+      id: `aud_${crypto.randomUUID()}`,
+      restaurantCode: customer.restaurantCode,
+      userId: user.userId,
+      actorName: user.username,
+      action: 'PATRON_PHOTO_DELETED',
+      timestamp: new Date().toISOString(),
+      details: {
+        customerId: customer.id,
+        memberNo: customer.memberNo,
+        deletedKey: normalizedKey || 'cleared_reference',
+      },
+    };
+    serverDbState.auditLogs.unshift(auditEntry);
+    await queueDbSave(serverDbState);
+
+    return res.json({
+      success: true,
+      customerId: customer.id,
+      deletedKey: normalizedKey,
+      auditId: auditEntry.id,
+    });
+  }
+);
+
 // POST /api/qr/verify: Server-Authoritative QR Verification with Shared Persistent Replay Guard (Finding 4)
 app.post(
   '/api/qr/verify',
@@ -1763,8 +1934,26 @@ app.post(
         });
       }
 
-      // Verification is deliberately read-only. The consume endpoint records the token
-      // in the same PostgreSQL transaction as the meal deduction.
+      // Verification is deliberately read-only for database state, while checking Redis replay cache (Workstream D).
+      const replayTokenKey = `${custKey}:${scannedStep}`;
+      try {
+        const alreadyUsedInRedis = await isTokenUsed(replayTokenKey);
+        if (alreadyUsedInRedis) {
+          return res.json({
+            success: true,
+            valid: false,
+            error: 'Replay blocked: This dynamic QR token has already been used.',
+          });
+        }
+      } catch (err: any) {
+        console.error('[QR Verify Replay Guard Error]', err.message);
+        return res.status(503).json({
+          success: false,
+          valid: false,
+          code: 'REPLAY_GUARD_UNAVAILABLE',
+          error: 'Distributed QR replay protection is unavailable. Scanning is paused for safety.',
+        });
+      }
 
       return res.json({
         success: true,
@@ -1830,6 +2019,7 @@ app.post(
     }
 
     const client = await pool.connect();
+    let claimedRedisTokenKey: string | null = null;
     try {
       await client.query('BEGIN');
       // Serialize concurrent requests that reuse the same idempotency key before checking its result.
@@ -1893,7 +2083,27 @@ app.post(
           await client.query('ROLLBACK');
           return res.status(403).json({ success: false, error: 'Digital QR signature is invalid.' });
         }
-        // Unique database key makes replay prevention atomic across all app instances.
+        // 1. Atomic Redis replay guard check-and-set across scanner stations (Workstream D)
+        const tokenReplayKey = `${customerKey}:${tokenStep}`;
+        let redisCheck: { allowed: boolean; firstSeenAt?: number };
+        try {
+          redisCheck = await recordTokenScan(tokenReplayKey, 330);
+        } catch (redisErr: any) {
+          await client.query('ROLLBACK');
+          console.error('[Atomic Scan Redis Guard Error]', redisErr.message);
+          return res.status(503).json({
+            success: false,
+            code: 'REPLAY_GUARD_UNAVAILABLE',
+            error: 'Distributed QR replay guard is unavailable. Cannot authorize dynamic QR scan.',
+          });
+        }
+        if (!redisCheck.allowed) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ success: false, error: 'This digital QR has already been used.' });
+        }
+        claimedRedisTokenKey = tokenReplayKey;
+
+        // 2. Unique database key makes replay prevention durable in PostgreSQL.
         const replay = await client.query(
           `INSERT INTO used_tokens (token_key, used_at, station_id, member_no, expires_at)
            VALUES ($1, $2, $3, $4, NOW() + INTERVAL '15 minutes')
@@ -2080,6 +2290,9 @@ app.post(
       return res.json(response);
     } catch (error: any) {
       try { await client.query('ROLLBACK'); } catch {}
+      if (claimedRedisTokenKey) {
+        await releaseTokenScan(claimedRedisTokenKey);
+      }
       console.error('[Atomic Scan] Transaction failed:', error);
       return res.status(503).json({ success: false, error: 'Scan could not be committed. Retry using the same idempotency key.' });
     } finally {
@@ -3167,6 +3380,7 @@ app.post(
       restaurantCode, customerId, plates, amountRwf, paymentMethod, packageId: packageId || null, actorId: user.userId,
     })).digest('hex');
     const client = await pool.connect();
+    let claimedRedisTokenKey: string | null = null;
     try {
       await client.query('BEGIN');
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [idempotencyKey]);
@@ -3817,22 +4031,356 @@ app.get('/api/customer/subscription', apiRateLimiter, requireAuth(), (req, res) 
   });
 });
 
-// POST /api/customer/subscription/checkout
-// Deliberately unavailable until a provider account is registered and a verified adapter is configured.
-// Do not create pending payment rows or tell customers that a USSD push was sent without provider confirmation.
-app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['customer']), (_req, res) => {
-  return res.status(503).json({
-    success: false,
-    code: 'PAYMENT_PROVIDER_NOT_CONFIGURED',
-    error: 'Mobile Money checkout is not available yet. RestoPass will enable dashboard payments after provider API onboarding and security verification.',
-    supportedProviders: ['mtn_momo'],
+// POST /api/customer/subscription/checkout: Server-authoritative Mobile Money initiation (Workstream F)
+app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
+  if (process.env.RESTOPASS_MOBILE_MONEY_ENABLED !== 'true') {
+    return res.status(503).json({
+      success: false,
+      code: 'PAYMENT_PROVIDER_NOT_CONFIGURED',
+      error: 'Mobile Money checkout is not available yet. RestoPass will enable dashboard payments after provider API onboarding and security verification.',
+      supportedProviders: ['mtn_momo'],
+    });
+  }
+
+  ensureServerDbDefaults(serverDbState);
+  const user = req.user!;
+  const provider = 'mtn_momo';
+  const phone = String(req.body?.phone || req.body?.phoneNumber || '').replace(/\s+/g, '');
+  const idempotencyKey = String(req.body?.idempotencyKey || `momo_chk_${user.userId}_${Date.now()}`).trim();
+
+  if (!/^(?:\+?250|0)?7\d{8}$/.test(phone)) {
+    return res.status(400).json({ success: false, error: 'Valid Rwanda Mobile Money phone number is required' });
+  }
+
+  const existing = (serverDbState.studentSubscriptionPayments || []).find(
+    (p: any) => p.idempotencyKey === idempotencyKey && p.customerId === user.userId
+  );
+  if (existing) {
+    return res.json({ success: true, idempotentReplay: true, paymentAttempt: existing, payment: existing });
+  }
+
+  const internalReference = `RP-SUB-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+  const referenceUuid = crypto.randomUUID();
+  const momoRes = await momoService.requestToPay({
+    referenceId: referenceUuid,
+    amount: '500',
+    currency: 'RWF',
+    externalId: internalReference,
+    payerPhone: phone.startsWith('0') ? `250${phone.slice(1)}` : phone.replace(/^\+/, ''),
+    payerMessage: 'RestoPass Monthly Subscription (500 RWF)',
+    payeeNote: `RestoPass Sub ${user.username}`,
+  });
+
+  if (momoRes.status !== 202 && momoRes.status !== 200) {
+    return res.status(502).json({
+      success: false,
+      error: 'Payment provider did not accept the request',
+    });
+  }
+
+  const attempt = {
+    id: `sp_${crypto.randomUUID()}`,
+    customerId: user.userId,
+    memberNo: user.username,
+    restaurantCode: user.restaurantCode,
+    provider,
+    phone,
+    phoneNumber: phone,
+    amountRwf: 500,
+    currency: 'RWF',
+    internalReference,
+    providerReferenceUuid: referenceUuid,
+    momoReferenceId: referenceUuid,
+    idempotencyKey,
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+  };
+
+  serverDbState.studentSubscriptionPayments.push(attempt);
+  await queueDbSave(serverDbState);
+
+  return res.status(202).json({
+    success: true,
+    paymentAttempt: attempt,
+    payment: attempt,
+    referenceId: referenceUuid,
+    internalReference,
+    statusUrl: `/api/customer/subscription/payments/${encodeURIComponent(internalReference)}/status`,
+    message: 'Payment request submitted to provider. Subscription will activate only after verified provider confirmation.',
   });
 });
 
 // POST /api/payments/mobile-money/callback: Webhook callback from Mobile Money provider with Idempotency
-app.post('/api/payments/mobile-money/callback', apiRateLimiter, (_req, res) => {
-  return res.status(503).json({ success: false, error: 'Payment callback verification is not configured. No subscription was activated.' });
+app.post('/api/payments/mobile-money/callback', apiRateLimiter, async (req, res) => {
+  if (process.env.RESTOPASS_MOBILE_MONEY_ENABLED !== 'true') {
+    return res.status(503).json({ success: false, error: 'Payment callback verification is not configured. No subscription was activated.' });
+  }
+
+  ensureServerDbDefaults(serverDbState);
+  const webhookSecret = process.env.MOMO_WEBHOOK_SECRET || MASTER_KEY;
+  const providedSig = String(req.headers['x-callback-signature'] || '').trim();
+  const payloadBody = req.body || {};
+  const canonicalPayload = JSON.stringify({
+    internalReference: payloadBody.internalReference,
+    providerTransactionId: payloadBody.providerTransactionId,
+    amountRwf: payloadBody.amountRwf,
+    currency: payloadBody.currency || 'RWF',
+    status: payloadBody.status,
+  });
+  const expectedSig = serverHmac(webhookSecret, canonicalPayload);
+
+  if (!providedSig || !timingSafeCompare(providedSig, expectedSig)) {
+    return res.status(401).json({ success: false, error: 'Invalid or missing webhook callback signature' });
+  }
+
+  const { internalReference, providerTransactionId, amountRwf, currency = 'RWF', status } = payloadBody;
+  if (!internalReference || !providerTransactionId) {
+    return res.status(400).json({ success: false, error: 'Missing internalReference or providerTransactionId' });
+  }
+
+  if (Number(amountRwf) !== 500 || currency !== 'RWF') {
+    return res.status(400).json({ success: false, error: 'Invalid payment amount or currency (expected exactly 500 RWF)' });
+  }
+
+  const payments: any[] = serverDbState.studentSubscriptionPayments || [];
+  const attempt = payments.find((p) => p.internalReference === internalReference);
+  if (!attempt) {
+    return res.status(404).json({ success: false, error: 'Payment attempt not found for internalReference' });
+  }
+
+  if (attempt.status === 'verified') {
+    return res.json({
+      success: true,
+      idempotentDuplicate: true,
+      paymentAttempt: attempt,
+    });
+  }
+
+  const duplicateTxId = payments.find(
+    (p) => p.id !== attempt.id && p.providerTransactionId === providerTransactionId && p.status === 'verified'
+  );
+  if (duplicateTxId) {
+    return res.status(409).json({ success: false, error: 'Provider transaction ID has already been credited to another payment' });
+  }
+
+  const normalizedStatus = String(status || '').toUpperCase();
+  if (normalizedStatus === 'FAILED' || normalizedStatus === 'REJECTED' || normalizedStatus === 'EXPIRED') {
+    attempt.status = 'failed';
+    attempt.providerTransactionId = providerTransactionId;
+    attempt.updatedAt = new Date().toISOString();
+    serverDbState.auditLogs.unshift({
+      id: `aud_${crypto.randomUUID()}`,
+      restaurantCode: attempt.restaurantCode,
+      userId: attempt.customerId,
+      action: 'MOBILE_MONEY_PAYMENT_FAILED',
+      timestamp: new Date().toISOString(),
+      details: { internalReference, providerTransactionId, status: normalizedStatus },
+    });
+    await queueDbSave(serverDbState);
+    return res.json({ success: true, status: 'failed', paymentAttempt: attempt });
+  }
+
+  if (normalizedStatus !== 'SUCCESSFUL') {
+    return res.status(400).json({ success: false, error: `Unsupported terminal callback status: ${status}` });
+  }
+
+  attempt.status = 'verified';
+  attempt.providerTransactionId = providerTransactionId;
+  attempt.verifiedAt = new Date().toISOString();
+
+  const nowMs = Date.now();
+  const periodEndMs = nowMs + 30 * 24 * 3600 * 1000;
+  const graceEndMs = periodEndMs + 3 * 24 * 3600 * 1000;
+
+  let sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === attempt.customerId);
+  if (!sub) {
+    sub = {
+      id: `sub_${attempt.customerId}_${nowMs}`,
+      customerId: attempt.customerId,
+      memberNo: attempt.memberNo,
+      restaurantCode: attempt.restaurantCode,
+      plan: 'monthly',
+      priceRwf: 500,
+      currency: 'RWF',
+      status: 'active',
+      currentPeriodStart: new Date(nowMs).toISOString(),
+      currentPeriodEnd: new Date(periodEndMs).toISOString(),
+      gracePeriodEndsAt: new Date(graceEndMs).toISOString(),
+      lastPaymentId: attempt.id,
+      updatedAt: new Date(nowMs).toISOString(),
+    };
+    serverDbState.customerSubscriptions.push(sub);
+  } else {
+    sub.status = 'active';
+    sub.currentPeriodStart = new Date(nowMs).toISOString();
+    sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
+    sub.gracePeriodEndsAt = new Date(graceEndMs).toISOString();
+    sub.lastPaymentId = attempt.id;
+    sub.updatedAt = new Date(nowMs).toISOString();
+  }
+
+  serverDbState.auditLogs.unshift({
+    id: `aud_${crypto.randomUUID()}`,
+    restaurantCode: attempt.restaurantCode,
+    userId: attempt.customerId,
+    action: 'MOBILE_MONEY_SUBSCRIPTION_VERIFIED',
+    timestamp: new Date(nowMs).toISOString(),
+    details: {
+      paymentId: attempt.id,
+      internalReference,
+      providerTransactionId,
+      amountRwf: 500,
+      subscriptionId: sub.id,
+    },
+  });
+
+  await queueDbSave(serverDbState);
+  return res.json({
+    success: true,
+    idempotentDuplicate: false,
+    paymentAttempt: attempt,
+    subscription: sub,
+  });
 });
+
+// GET /api/customer/subscription/payments/:internalReference/status: Server-side MTN MoMo payment status verification
+app.get('/api/customer/subscription/payments/:internalReference/status', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
+  if (process.env.RESTOPASS_MOBILE_MONEY_ENABLED !== 'true') {
+    return res.status(503).json({ success: false, error: 'Mobile Money status verification is disabled until provider onboarding is enabled.' });
+  }
+  ensureServerDbDefaults(serverDbState);
+  const internalReference = String(req.params.internalReference || '');
+  const user = req.user!;
+  const payment: any = (serverDbState.studentSubscriptionPayments || []).find(
+    (p: any) => p.internalReference === internalReference && p.customerId === user.userId
+  );
+
+  if (!payment) {
+    return res.status(404).json({ success: false, error: 'Payment record not found.' });
+  }
+  const refUuid = payment.momoReferenceId || payment.providerReferenceUuid;
+  if (!refUuid) {
+    return res.status(400).json({ success: false, error: 'This payment does not have an MTN MoMo transaction reference.' });
+  }
+  if (payment.status === 'verified') {
+    const subscription = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === payment.customerId);
+    return res.json({ success: true, status: 'SUCCESSFUL', payment, subscription });
+  }
+  if (payment.status === 'failed') {
+    return res.json({ success: true, status: 'FAILED', payment });
+  }
+
+  try {
+    const statusRes = await momoService.getRequestToPayStatus(refUuid);
+    const providerStatus = String(statusRes.data?.status || 'PENDING').toUpperCase();
+    if (providerStatus === 'SUCCESSFUL') {
+      const receivedAmount = Number(statusRes.data?.amount ?? 0);
+      if (receivedAmount !== 500) {
+        payment.status = 'failed';
+        payment.failureReason = `MTN transaction amount mismatch (received ${receivedAmount}).`;
+        payment.failedAt = new Date().toISOString();
+        await queueDbSave(serverDbState);
+        return res.status(400).json({
+          success: false,
+          status: 'FAILED',
+          error: 'Provider-confirmed payment amount does not match 500 RWF.',
+        });
+      }
+
+      const nowMs = Date.now();
+      const periodEndMs = nowMs + 30 * 24 * 3600 * 1000;
+      const graceEndMs = periodEndMs + 3 * 24 * 3600 * 1000;
+      payment.status = 'verified';
+      payment.verifiedAt = new Date(nowMs).toISOString();
+      payment.providerTransactionId = statusRes.data?.financialTransactionId || refUuid;
+
+      let sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === payment.customerId);
+      if (!sub) {
+        sub = {
+          id: `sub_${payment.customerId}_${nowMs}`,
+          customerId: payment.customerId,
+          memberNo: payment.memberNo,
+          restaurantCode: payment.restaurantCode,
+          plan: 'monthly',
+          priceRwf: 500,
+          currency: 'RWF',
+          status: 'active',
+          currentPeriodStart: new Date(nowMs).toISOString(),
+          currentPeriodEnd: new Date(periodEndMs).toISOString(),
+          gracePeriodEndsAt: new Date(graceEndMs).toISOString(),
+          lastPaymentId: payment.id,
+          updatedAt: new Date(nowMs).toISOString(),
+        };
+        serverDbState.customerSubscriptions.push(sub);
+      } else {
+        sub.status = 'active';
+        sub.currentPeriodStart = new Date(nowMs).toISOString();
+        sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
+        sub.gracePeriodEndsAt = new Date(graceEndMs).toISOString();
+        sub.lastPaymentId = payment.id;
+        sub.updatedAt = new Date(nowMs).toISOString();
+      }
+      await queueDbSave(serverDbState);
+      return res.json({ success: true, status: 'SUCCESSFUL', payment, subscription: sub });
+    }
+
+    if (providerStatus === 'FAILED') {
+      payment.status = 'failed';
+      payment.failedAt = new Date().toISOString();
+      await queueDbSave(serverDbState);
+      return res.json({ success: true, status: 'FAILED', payment });
+    }
+
+    return res.json({ success: true, status: providerStatus, payment });
+  } catch (err: any) {
+    return res.status(502).json({
+      success: false,
+      error: 'Unable to retrieve payment status from MTN Mobile Money.',
+      details: err.message,
+    });
+  }
+});
+
+// GET /api/admin/payments/mobile-money/reconcile: Reconciles provider payment attempts against subscriptions & ledger (Workstream F10)
+app.get(
+  '/api/admin/payments/mobile-money/reconcile',
+  apiRateLimiter,
+  requireAuth(['super_admin', 'restaurant_admin']),
+  (req, res) => {
+    ensureServerDbDefaults(serverDbState);
+    const user = req.user!;
+    const rCode = user.role === 'super_admin' ? null : user.restaurantCode;
+
+    const attempts = (serverDbState.studentSubscriptionPayments || []).filter(
+      (p: any) => !rCode || p.restaurantCode === rCode
+    );
+    const subs = (serverDbState.customerSubscriptions || []).filter(
+      (s: any) => !rCode || s.restaurantCode === rCode
+    );
+
+    const verifiedAttempts = attempts.filter((a: any) => a.status === 'verified');
+    const pendingAttempts = attempts.filter((a: any) => a.status === 'pending' || a.status === 'provider_pending');
+    const failedAttempts = attempts.filter((a: any) => a.status === 'failed' || a.status === 'rejected');
+
+    const orphanedVerified = verifiedAttempts.filter(
+      (a: any) => !subs.some((s: any) => s.customerId === a.customerId && (s.status === 'active' || s.status === 'grace_period'))
+    );
+
+    return res.json({
+      success: true,
+      reconciledAt: new Date().toISOString(),
+      summary: {
+        totalAttempts: attempts.length,
+        verifiedCount: verifiedAttempts.length,
+        pendingCount: pendingAttempts.length,
+        failedCount: failedAttempts.length,
+        orphanedVerifiedCount: orphanedVerified.length,
+        consistent: orphanedVerified.length === 0,
+      },
+      orphanedVerified,
+    });
+  }
+);
 
 // POST /api/customer/subscription/cancel: Cancels future subscription renewal
 app.post('/api/customer/subscription/cancel', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
@@ -4505,10 +5053,32 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const httpServer = app.listen(PORT, '0.0.0.0', () => {
     console.log(`[RestoPass Authority] Hardened Full-Stack Server listening on port ${PORT}`);
     console.log(`[RestoPass Authority] Access the application in browser at: http://localhost:${PORT}`);
   });
+
+  const gracefulShutdown = async (signal: string) => {
+    console.log(`[RestoPass Authority] ${signal} received. Closing HTTP server and database/cache pools...`);
+    httpServer.close(async () => {
+      await shutdownServer();
+      process.exit(0);
+    });
+  };
+  process.once('SIGTERM', () => void gracefulShutdown('SIGTERM'));
+  process.once('SIGINT', () => void gracefulShutdown('SIGINT'));
+}
+
+async function shutdownServer(): Promise<void> {
+  try {
+    await dbWriteQueue;
+  } catch {}
+  try {
+    await closePostgres();
+  } catch {}
+  try {
+    await closeRedis();
+  } catch {}
 }
 
 // Start only when directly executed (allows test imports without port binding)
@@ -4541,4 +5111,5 @@ export {
   validateProductionSecrets,
   revokeSessionToken,
   isPlaceholderSecret,
+  shutdownServer,
 };

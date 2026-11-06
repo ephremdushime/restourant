@@ -68,6 +68,9 @@ export function validateSaasPaymentMatch(input: {
   const amount = Number(input.providerAmount);
   return input.providerStatus === 'SUCCESSFUL'
     && Number.isSafeInteger(amount)
+    && amount > 0
+    && Number.isSafeInteger(input.expectedAmountRwf)
+    && input.expectedAmountRwf > 0
     && amount === input.expectedAmountRwf
     && input.providerCurrency === input.expectedCurrency
     && input.providerExternalId === input.expectedExternalId

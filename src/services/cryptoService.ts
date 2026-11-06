@@ -6,7 +6,9 @@
 // This browser-side key is deliberately public and has NO server authority.
 // It exists only for legacy local UI previews. Production QR validation and
 // all privileged signing must use the server-held MASTER_KEY in server.ts.
-export const MASTER_KEY = 'RESTOPASS_PUBLIC_CLIENT_PREVIEW_ONLY_V1';
+// Non-secret seed used strictly for offline unit tests and local sandbox previews.
+// Production QR signing and verification are strictly server-authoritative in server.ts.
+const LOCAL_SANDBOX_PREVIEW_SEED = 'RESTOPASS_LOCAL_SANDBOX_PREVIEW_NON_SECRET';
 
 /**
  * Fast synchronous SHA-256 and HMAC implementation for instant UI & QR generation
@@ -120,7 +122,7 @@ export function hmacSha256(key: string, message: string): string {
  * customerKey = HMAC(restaurantKey, memberNo + "|" + keyVersion)
  */
 export function deriveRestaurantKey(restaurantCode: string): string {
-  return hmacSha256(MASTER_KEY, `RESTAURANT:${restaurantCode.toUpperCase()}`);
+  return hmacSha256(LOCAL_SANDBOX_PREVIEW_SEED, `RESTAURANT:${restaurantCode.toUpperCase()}`);
 }
 
 export function deriveCustomerKey(restaurantKey: string, memberNo: string, keyVersion: number): string {
@@ -436,7 +438,7 @@ export function verifyQrToken(
  */
 export function signLicensePayload(payload: object): string {
   const raw = JSON.stringify(payload);
-  const signature = hmacSha256(MASTER_KEY, `LICENSE_SIGNATURE:${raw}`);
+  const signature = hmacSha256(LOCAL_SANDBOX_PREVIEW_SEED, `LICENSE_SIGNATURE:${raw}`);
   return `ed25519_${signature.slice(0, 48)}`;
 }
 

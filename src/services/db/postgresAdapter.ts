@@ -175,6 +175,7 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         shifts: settingsMap.get('shifts') || [],
         activationRequests: settingsMap.get('activationRequests') || [],
         pinRecoveryRequests: settingsMap.get('pinRecoveryRequests') || [],
+        studentSubscriptionPayments: settingsMap.get('studentSubscriptionPayments') || [],
         usedTokens: [],
       };
 
@@ -337,6 +338,136 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
       }
     }
 
+    // 6a. Licenses
+    if (Array.isArray(state.licenses)) {
+      for (const lic of state.licenses) {
+        if (!lic?.id || !lic?.restaurantCode) continue;
+        await client.query(
+          `INSERT INTO licenses (id, restaurant_code, plan_id, valid_until, data)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (id) DO UPDATE
+           SET restaurant_code = EXCLUDED.restaurant_code,
+               plan_id = EXCLUDED.plan_id,
+               valid_until = EXCLUDED.valid_until,
+               data = EXCLUDED.data`,
+          [
+            lic.id,
+            lic.restaurantCode,
+            lic.planId || 'enterprise',
+            lic.validUntil || new Date(Date.now() + 30 * 86400000).toISOString(),
+            JSON.stringify(lic),
+          ]
+        );
+      }
+    }
+
+    // 6b. Payments
+    if (Array.isArray(state.payments)) {
+      for (const pmt of state.payments) {
+        if (!pmt?.id || !pmt?.restaurantCode) continue;
+        await client.query(
+          `INSERT INTO payments (id, restaurant_code, customer_id, amount_rwf, data)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (id) DO UPDATE
+           SET amount_rwf = EXCLUDED.amount_rwf, data = EXCLUDED.data`,
+          [pmt.id, pmt.restaurantCode, pmt.customerId || null, Number(pmt.amountRwf || 0), JSON.stringify(pmt)]
+        );
+      }
+    }
+
+    // 6c. Scan Events
+    if (Array.isArray(state.scanEvents)) {
+      for (const se of state.scanEvents) {
+        if (!se?.id || !se?.restaurantCode || !se?.customerId) continue;
+        await client.query(
+          `INSERT INTO scan_events (id, restaurant_code, customer_id, station_id, status, data)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (id) DO UPDATE
+           SET status = EXCLUDED.status, data = EXCLUDED.data`,
+          [se.id, se.restaurantCode, se.customerId, se.stationId || null, se.status || 'accepted', JSON.stringify(se)]
+        );
+      }
+    }
+
+    // 6d. Branches
+    if (Array.isArray(state.branches)) {
+      for (const br of state.branches) {
+        if (!br?.id || !br?.restaurantCode) continue;
+        await client.query(
+          `INSERT INTO branches (id, restaurant_code, code, name, data)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (id) DO UPDATE
+           SET restaurant_code = EXCLUDED.restaurant_code,
+               code = EXCLUDED.code,
+               name = EXCLUDED.name,
+               data = EXCLUDED.data`,
+          [br.id, br.restaurantCode, br.code || br.id, br.name || 'Branch', JSON.stringify(br)]
+        );
+      }
+    }
+
+    // 6e. Notifications
+    if (Array.isArray(state.notifications)) {
+      for (const nf of state.notifications) {
+        if (!nf?.id || !nf?.restaurantCode) continue;
+        await client.query(
+          `INSERT INTO notifications (id, restaurant_code, recipient_id, data)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (id) DO UPDATE
+           SET data = EXCLUDED.data`,
+          [nf.id, nf.restaurantCode, nf.recipientId || nf.customerId || null, JSON.stringify(nf)]
+        );
+      }
+    }
+
+    // 6f. Expenses
+    if (Array.isArray(state.expenses)) {
+      for (const exp of state.expenses) {
+        if (!exp?.id || !exp?.restaurantCode) continue;
+        await client.query(
+          `INSERT INTO expenses (id, restaurant_code, amount_rwf, data)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (id) DO UPDATE
+           SET amount_rwf = EXCLUDED.amount_rwf, data = EXCLUDED.data`,
+          [exp.id, exp.restaurantCode, Number(exp.amountRwf || exp.amount || 0), JSON.stringify(exp)]
+        );
+      }
+    }
+
+    // 6g. Transfers
+    if (Array.isArray(state.transfers)) {
+      for (const tr of state.transfers) {
+        if (!tr?.id || !tr?.restaurantCode || !tr?.senderCustomerId || !tr?.recipientCustomerId) continue;
+        await client.query(
+          `INSERT INTO transfers (id, restaurant_code, sender_customer_id, recipient_customer_id, plates, idempotency_key, data)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            tr.id,
+            tr.restaurantCode,
+            tr.senderCustomerId,
+            tr.recipientCustomerId,
+            Math.max(1, Number(tr.plates || 1)),
+            tr.idempotencyKey || tr.id,
+            JSON.stringify(tr),
+          ]
+        );
+      }
+    }
+
+    // 6h. Audit Logs (Append-only)
+    if (Array.isArray(state.auditLogs)) {
+      for (const al of state.auditLogs) {
+        if (!al?.id || !al?.restaurantCode) continue;
+        await client.query(
+          `INSERT INTO audit_logs (id, restaurant_code, user_id, action, data)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (id) DO NOTHING`,
+          [al.id, al.restaurantCode, al.userId || al.actorId || null, al.action || 'audit_event', JSON.stringify(al)]
+        );
+      }
+    }
+
     // 7. System Settings & Collections
     const settingsToSave: Array<[string, any]> = [
       ['studentSubscriptionSettings', state.studentSubscriptionSettings],
@@ -349,6 +480,7 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
       ['shifts', state.shifts],
       ['activationRequests', state.activationRequests],
       ['pinRecoveryRequests', state.pinRecoveryRequests],
+      ['studentSubscriptionPayments', state.studentSubscriptionPayments],
     ];
 
     for (const [key, val] of settingsToSave) {

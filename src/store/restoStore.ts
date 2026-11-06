@@ -3903,7 +3903,14 @@ export class RestoStore {
     const customer = this.state.customers.find((c) => c.id === customerId);
     if (!customer) return false;
 
-    customer.pinHash = newPin;
+    const cleanPin = newPin.trim();
+    if (!/^\d{4,}$/.test(cleanPin)) return false;
+
+    const salt = getCustomerPinSalt(customer.id, customer.memberNo);
+    const saltedPayload = `RESTOPASS_SALTED_PIN_V1:${salt}:${cleanPin}`;
+    customer.pinHash = sha256(saltedPayload);
+    customer.hasCustomPin = cleanPin !== '1234' && cleanPin !== '123456';
+    customer.pinSetAt = new Date().toISOString();
     this.queueOutboxItem('customer', customer.id, customer);
     this.logAudit({
       restaurantCode: customer.restaurantCode,
@@ -5437,7 +5444,11 @@ export class RestoStore {
     const user = this.state.stationUsers.find((u) => u.id === userId);
     if (!user) return false;
 
-    user.passwordHash = newPassword;
+    const cleanPassword = newPassword.trim();
+    if (!cleanPassword) return false;
+
+    const passwordSalt = getStationUserSalt(user.id, user.username);
+    user.passwordHash = sha256(`RESTOPASS_SALTED_PASSWORD_V1:${passwordSalt}:${cleanPassword}`);
     if (newPin) user.pin = newPin;
 
     this.logAudit({

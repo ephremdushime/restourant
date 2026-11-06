@@ -6,7 +6,7 @@
  * guaranteeing offline reception laptop compatibility.
  */
 
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -223,6 +223,36 @@ export async function uploadBase64Photo(
 /**
  * Helper to reset client instance (useful in tests)
  */
+/**
+ * Deletes a patron photo from object storage (or local directory in development)
+ * per data retention and patron deletion policies.
+ */
+export async function deletePatronPhoto(key: string): Promise<boolean> {
+  if (!/^patron-photos\/[A-Za-z0-9._-]{1,180}$/.test(key) || key.includes('..')) {
+    throw new Error('Invalid patron photo key');
+  }
+
+  const config = getObjectStorageConfig();
+  if (config) {
+    const s3 = getS3Client();
+    if (!s3) throw new Error('Private object storage is unavailable');
+    await s3.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }));
+    return true;
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('Private object storage is required in production');
+  }
+  const filename = key.slice('patron-photos/'.length);
+  const localPath = path.resolve(process.cwd(), 'public/uploads/patron-photos', filename);
+  const allowedRoot = path.resolve(process.cwd(), 'public/uploads/patron-photos') + path.sep;
+  if (!localPath.startsWith(allowedRoot)) throw new Error('Invalid patron photo path');
+  if (fs.existsSync(localPath)) {
+    fs.unlinkSync(localPath);
+  }
+  return true;
+}
+
 export function resetS3Client(): void {
   s3ClientInstance = null;
 }

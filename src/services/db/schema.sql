@@ -233,6 +233,15 @@ CREATE INDEX IF NOT EXISTS idx_scan_events_resto_time ON scan_events (restaurant
 CREATE INDEX IF NOT EXISTS idx_scan_events_customer ON scan_events (customer_id);
 CREATE INDEX IF NOT EXISTS idx_pending_approvals_resto ON pending_approvals (restaurant_code, status);
 CREATE INDEX IF NOT EXISTS idx_used_tokens_expires ON used_tokens (expires_at);
+CREATE INDEX IF NOT EXISTS idx_licenses_resto ON licenses (restaurant_code);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_customer_cutoff ON balance_checkpoints (customer_id, cutoff_date DESC);
+CREATE INDEX IF NOT EXISTS idx_payments_resto_customer ON payments (restaurant_code, customer_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_resto_customer ON customer_subscriptions (restaurant_code, customer_id);
+CREATE INDEX IF NOT EXISTS idx_branches_resto ON branches (restaurant_code);
+CREATE INDEX IF NOT EXISTS idx_expenses_resto ON expenses (restaurant_code, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_resto_recipient ON notifications (restaurant_code, recipient_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_resto_time ON audit_logs (restaurant_code, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_transfers_resto_time ON transfers (restaurant_code, created_at DESC);
 
 -- 19. Two-person financial exception workflow. Requests are immutable snapshots;
 -- approvals are committed with compensating ledger entries in one transaction.

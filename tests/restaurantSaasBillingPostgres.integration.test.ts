@@ -60,7 +60,7 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     role: 'restaurant_admin', restaurantCode: otherRestaurantCode,
   });
   const superAdminToken = serverModule.createSessionToken({
-    userId: 'saas_test_super_admin', username: 'saas.test.superadmin', role: 'super_admin',
+    userId: 'saas_test_super_admin', username: 'saas.test.superadmin', role: 'super_admin', restaurantCode: 'GLOBAL',
   });
 
   const originalFetch = globalThis.fetch;

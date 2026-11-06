@@ -63,7 +63,7 @@ All items below are **pending until evidence is attached**.
 - [ ] Load-test expected peak scanner concurrency and approval/top-up bursts; record p50/p95/p99 latency, error rate and DB/Redis resource use.
 - [ ] Verify session expiry/revocation, rate limits, CORS, CSRF posture where applicable, upload validation, private photo access and audit-log access controls.
 
-## 4. Deployment procedure
+## 4. Pilot Restaurant Onboarding Sequence (Deployment Procedure) — Phase 1, Phase 2, Phase 3, Phase 4, Phase 5, Phase 6, MTN MoMo 15-Point Certification, Phase 7
 
 1. Deploy to a staging hostname first, using production-equivalent PostgreSQL/Redis topology and separate credentials.
 2. Run the readiness endpoint and hosted acceptance checklist. A process liveness response alone is not readiness.
@@ -73,7 +73,7 @@ All items below are **pending until evidence is attached**.
 6. Start with one restaurant, a small invited cohort and a supervised service window. Reconcile every cash receipt, top-up, ledger change and scan at close.
 7. Keep a named operator available to disable scanning and switch to a paper process if API/dependency health or ledger reconciliation fails.
 
-## 5. Rollback and incident response
+## 5. Emergency Rollback Playbook (Rollback and incident response)
 
 - Stop new financial writes and meal scans using the documented maintenance procedure; do not delete or manually edit ledger rows.
 - Preserve application, proxy, PostgreSQL and Redis logs plus the relevant audit trail.
@@ -82,7 +82,7 @@ All items below are **pending until evidence is attached**.
 - If data repair is required, use a reviewed compensating transaction with an audit record. Restore into an isolated environment first.
 - Resume service only after readiness, reconciliation and a controlled test scan succeed.
 
-## 6. Sign-off record
+## 6. Formal Sign-Off Matrix (Sign-off record)
 
 No approvals are implied by this template. Complete only after the named individuals have reviewed the evidence.
 

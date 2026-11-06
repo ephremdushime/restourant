@@ -112,16 +112,16 @@ export class MomoService {
 
   constructor(config: MomoConfig = {}) {
     this.config = {
-      baseUrl: config.baseUrl || process.env.MOMO_BASE_URL || 'https://sandbox.momodeveloper.mtn.com',
-      targetEnvironment: config.targetEnvironment || (process.env.MOMO_TARGET_ENV as any) || 'sandbox',
-      collectionSubscriptionKey: config.collectionSubscriptionKey || process.env.MOMO_COLLECTION_SUBSCRIPTION_KEY || process.env.MOMO_SUBSCRIPTION_KEY || 'sandbox_mock_coll_sub_key',
-      disbursementSubscriptionKey: config.disbursementSubscriptionKey || process.env.MOMO_DISBURSEMENT_SUBSCRIPTION_KEY || process.env.MOMO_SUBSCRIPTION_KEY || 'sandbox_mock_disb_sub_key',
-      remittanceSubscriptionKey: config.remittanceSubscriptionKey || process.env.MOMO_REMITTANCE_SUBSCRIPTION_KEY || process.env.MOMO_SUBSCRIPTION_KEY || 'sandbox_mock_remit_sub_key',
-      apiUser: config.apiUser || process.env.MOMO_API_USER || '',
-      apiKey: config.apiKey || process.env.MOMO_API_KEY || '',
+      baseUrl: config.baseUrl || process.env.MOMO_BASE_URL || process.env.MTN_MOMO_BASE_URL || 'https://sandbox.momodeveloper.mtn.com',
+      targetEnvironment: config.targetEnvironment || (process.env.MOMO_TARGET_ENV as any) || (process.env.MTN_MOMO_TARGET_ENV as any) || 'sandbox',
+      collectionSubscriptionKey: config.collectionSubscriptionKey || process.env.MOMO_COLLECTION_SUBSCRIPTION_KEY || process.env.MOMO_SUBSCRIPTION_KEY || process.env.MTN_MOMO_PRIMARY_KEY || 'sandbox_mock_coll_sub_key',
+      disbursementSubscriptionKey: config.disbursementSubscriptionKey || process.env.MOMO_DISBURSEMENT_SUBSCRIPTION_KEY || process.env.MOMO_SUBSCRIPTION_KEY || process.env.MTN_MOMO_DISBURSEMENT_KEY || 'sandbox_mock_disb_sub_key',
+      remittanceSubscriptionKey: config.remittanceSubscriptionKey || process.env.MOMO_REMITTANCE_SUBSCRIPTION_KEY || process.env.MOMO_SUBSCRIPTION_KEY || process.env.MTN_MOMO_REMITTANCE_KEY || 'sandbox_mock_remit_sub_key',
+      apiUser: config.apiUser || process.env.MOMO_API_USER || process.env.MTN_MOMO_API_USER || '',
+      apiKey: config.apiKey || process.env.MOMO_API_KEY || process.env.MTN_MOMO_API_KEY || '',
       callbackHost: config.callbackHost || process.env.MOMO_CALLBACK_HOST || 'staging.restopass.rw',
-      defaultCurrency: config.defaultCurrency || process.env.MOMO_CURRENCY || 'EUR',
-      useMock: config.useMock ?? (process.env.MOMO_USE_MOCK !== 'false' && (!process.env.MOMO_SUBSCRIPTION_KEY || process.env.NODE_ENV === 'test')),
+      defaultCurrency: config.defaultCurrency || process.env.MOMO_CURRENCY || process.env.MTN_MOMO_CURRENCY || 'EUR',
+      useMock: config.useMock ?? (process.env.MOMO_USE_MOCK !== 'false' && (!(process.env.MOMO_SUBSCRIPTION_KEY || process.env.MTN_MOMO_PRIMARY_KEY) || process.env.NODE_ENV === 'test')),
     };
   }
 
@@ -289,7 +289,7 @@ export class MomoService {
       return { status: 202, referenceId: params.referenceId, response: { message: 'Accepted' } };
     }
 
-    let token = this.tokenCache.get('collection')?.token;
+    let token = this.getCachedToken('collection');
     if (!token) {
       const t = await this.getCollectionToken();
       token = t.tokenResponse.access_token;
@@ -352,7 +352,7 @@ export class MomoService {
       return { status: 200, data: found };
     }
 
-    let token = this.tokenCache.get('collection')?.token;
+    let token = this.getCachedToken('collection');
     if (!token) {
       const t = await this.getCollectionToken();
       token = t.tokenResponse.access_token;
@@ -385,7 +385,7 @@ export class MomoService {
       return { status: 200, result: isActive, response: { result: isActive } };
     }
 
-    let token = this.tokenCache.get('collection')?.token;
+    let token = this.getCachedToken('collection');
     if (!token) {
       const t = await this.getCollectionToken();
       token = t.tokenResponse.access_token;
@@ -429,7 +429,7 @@ export class MomoService {
       };
     }
 
-    let token = this.tokenCache.get('collection')?.token;
+    let token = this.getCachedToken('collection');
     if (!token) {
       const t = await this.getCollectionToken();
       token = t.tokenResponse.access_token;
@@ -508,7 +508,7 @@ export class MomoService {
       return { status: 202, referenceId: params.referenceId, response: { message: 'Accepted' } };
     }
 
-    let token = this.tokenCache.get('disbursement')?.token;
+    let token = this.getCachedToken('disbursement');
     if (!token) {
       const t = await this.getDisbursementToken();
       token = t.tokenResponse.access_token;
@@ -563,7 +563,7 @@ export class MomoService {
       };
     }
 
-    let token = this.tokenCache.get('disbursement')?.token;
+    let token = this.getCachedToken('disbursement');
     if (!token) {
       const t = await this.getDisbursementToken();
       token = t.tokenResponse.access_token;
@@ -602,7 +602,7 @@ export class MomoService {
       return { status: 202, referenceId: params.referenceId, response: { message: 'Accepted' } };
     }
 
-    let token = this.tokenCache.get('disbursement')?.token;
+    let token = this.getCachedToken('disbursement');
     if (!token) {
       const t = await this.getDisbursementToken();
       token = t.tokenResponse.access_token;
@@ -652,7 +652,7 @@ export class MomoService {
       return { status: 200, data: found };
     }
 
-    let token = this.tokenCache.get('disbursement')?.token;
+    let token = this.getCachedToken('disbursement');
     if (!token) {
       const t = await this.getDisbursementToken();
       token = t.tokenResponse.access_token;
@@ -686,7 +686,7 @@ export class MomoService {
       return { status: 200, data: found };
     }
 
-    let token = this.tokenCache.get('disbursement')?.token;
+    let token = this.getCachedToken('disbursement');
     if (!token) {
       const t = await this.getDisbursementToken();
       token = t.tokenResponse.access_token;
@@ -757,7 +757,7 @@ export class MomoService {
       return { status: 202, referenceId: params.referenceId, response: { message: 'Accepted' } };
     }
 
-    let token = this.tokenCache.get('remittance')?.token;
+    let token = this.getCachedToken('remittance');
     if (!token) {
       const t = await this.getRemittanceToken();
       token = t.tokenResponse.access_token;

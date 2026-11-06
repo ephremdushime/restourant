@@ -151,6 +151,37 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     assert.match(reuseAttempt.error || '', /already used|expired|invalid/i);
   });
 
+  test('admin PIN reset persists a salted hash and still authenticates', () => {
+    const reg = restoStore.registerProvisionalCustomer({
+      name: 'Mutesa Samuel',
+      phone: '+250 788 321 654',
+      restaurantCode: 'RW01',
+      platesRequested: 12,
+      idType: 'student_id',
+      idNumber: '20261122',
+      isStudent: true,
+      studentProfile: {
+        institution: 'University of Rwanda',
+        registrationNumber: '20261122',
+        programme: 'Economics',
+        year: 3,
+      },
+    } as any);
+    assert.ok(reg.customer);
+    const customer = reg.customer;
+    customer.activationStatus = 'active';
+    customer.provisionalStatus = 'approved';
+
+    const resetOk = restoStore.resetCustomerPin(customer.id, '876543', 'Cashier Admin');
+    assert.equal(resetOk, true);
+
+    const savedCustomer = restoStore.getState().customers.find((c) => c.id === customer.id);
+    assert.ok(savedCustomer);
+    assert.notEqual(savedCustomer.pinHash, '876543');
+    assert.equal(restoStore.verifyCustomerPin(customer.id, '876543'), true);
+    assert.equal(savedCustomer.hasCustomPin, true);
+  });
+
   test('Step 4: Customer logs in with Phone + 6+ digit PIN (No SMS OTP) with rate-limiting and anti-enumeration', async () => {
     // Setup active customer
     const reg = restoStore.registerProvisionalCustomer({
@@ -491,7 +522,7 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     assert.ok(warnStatus.daysRemaining <= 7 && warnStatus.daysRemaining > 0);
 
     // 2. Monthly subscription ends -> license automatically expires and blocks scanning
-    restoStore.setRestaurantLicenseRemainingDays('RW01', -1);
+    restoStore.setRestaurantLicenseRemainingDays('RW01', -4);
     const expStatus = restoStore.getRestaurantLicenseStatus('RW01');
     assert.equal(expStatus.status, 'expired');
     assert.equal(expStatus.isExpired, true);

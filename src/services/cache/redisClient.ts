@@ -130,6 +130,19 @@ export function resetMemoryCache(): void {
 }
 
 /**
+ * Releases a previously claimed token if the downstream database transaction rolls back
+ */
+export async function releaseTokenScan(tokenKey: string): Promise<void> {
+  const client = getRedisClient();
+  if (client && client.status === 'ready') {
+    try {
+      await client.del(`qr_pass:${tokenKey}`);
+    } catch {}
+  }
+  memoryReplayCache.delete(tokenKey);
+}
+
+/**
  * Closes the Redis client connection gracefully
  */
 export async function closeRedis(): Promise<void> {
@@ -143,8 +156,6 @@ export async function closeRedis(): Promise<void> {
   }
   memoryReplayCache.clear();
 }
-
-
 
 /**
  * Waits for the shared Redis service to become ready before production accepts scans.
