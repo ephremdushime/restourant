@@ -226,6 +226,43 @@ describe('Part 1: Top-Up, Approval-Linked Ledger, and Grace-Meal Accounting Scen
     assert.equal(newCustomer.provisionalStatus, 'approved');
   });
 
+  test('Scenario 4b: Approval-specific grace count wins over a stale customer mirror and reconciles exactly once', () => {
+    const reg = restoStore.registerProvisionalCustomer({
+      restaurantCode: 'RW01',
+      name: 'New Student Patron 4b',
+      phone: `+250 788 ${Math.floor(100000 + Math.random() * 899999)}`,
+      idType: 'student_id',
+      idNumber: `STU-SCEN4B-${Date.now()}`,
+      isStudent: true,
+      platesRequested: 60,
+      amountRwf: 66000,
+      paymentMethod: 'mtn_momo',
+      paymentReference: `MOMO-SCEN4B-${Date.now()}`,
+      registeredByStaffId: 'staff_1',
+      registeredByStaffName: 'Cashier',
+      stationId: 'sp_1',
+      stationName: 'Stand 1',
+    });
+    const customer = reg.customer;
+    // One grace plate belongs to this approval. The customer mirror is intentionally stale.
+    reg.approval.gracePlatesConsumed = 1;
+    customer.gracePlatesConsumed = 4;
+
+    const approved = restoStore.approvePendingRequest(reg.approval.id, 'Restaurant Boss');
+    assert.equal(approved.success, true);
+    assert.equal(restoStore.getCustomerBalance(customer.id), 59);
+    assert.equal(restoStore.getState().ledgerEntries.filter((entry) =>
+      entry.idempotencyKey === `idemp_appr_grace_${reg.approval.id}`
+    ).length, 1);
+
+    const repeated = restoStore.approvePendingRequest(reg.approval.id, 'Restaurant Boss');
+    assert.equal(repeated.success, false);
+    assert.equal(restoStore.getCustomerBalance(customer.id), 59);
+    assert.equal(restoStore.getState().ledgerEntries.filter((entry) =>
+      entry.idempotencyKey === `idemp_appr_grace_${reg.approval.id}`
+    ).length, 1);
+  });
+
   test('Scenario 5: Existing customer has 0 balance and already used 3 grace meals -> No more grace meals authorized even if a second pending top-up is submitted', () => {
     const customer = setupCustomerWithBalance(0, 'Scenario5_0');
     const helperCustomer = setupCustomerWithBalance(20, 'Helper5');
