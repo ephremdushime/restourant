@@ -217,6 +217,7 @@ function ensureServerDbDefaults(state: any) {
   if (!state.restaurantSubscriptionPayments) state.restaurantSubscriptionPayments = [];
   if (!state.activationRequests) state.activationRequests = [];
   if (!state.pinRecoveryRequests) state.pinRecoveryRequests = [];
+  if (!Array.isArray(state.deletionTombstones)) state.deletionTombstones = [];
 
   if (Array.isArray(state.expenses)) {
     state.expenses = state.expenses.filter((e: any) => !SEED_EXPENSE_IDS.has(e.id) && e.restaurantCode !== 'RW02');
@@ -2186,7 +2187,7 @@ function scopeStateForUser(state: any, user: UserSession): any {
 
   // Super Admin receives complete state with the client-facing checkpoint alias.
   if (user.role === 'super_admin') {
-    return { ...state, checkpoints: checkpointList };
+    return { ...state, checkpoints: checkpointList, deletionTombstones: state.deletionTombstones || [] };
   }
 
   // Restaurant Admin: Scoped exclusively to their restaurantCode
@@ -2195,6 +2196,7 @@ function scopeStateForUser(state: any, user: UserSession): any {
     const tenantCustomerIds = new Set((state.customers || []).filter((c: any) => c.restaurantCode === rCode).map((c: any) => c.id));
     return {
       currentRestaurantCode: rCode,
+      deletionTombstones: (state.deletionTombstones || []).filter((item: any) => item.restaurantCode === rCode),
       restaurants: (state.restaurants || []).filter((r: any) => r.code === rCode),
       customers: (state.customers || []).filter((c: any) => c.restaurantCode === rCode),
       ledgerEntries: (state.ledgerEntries || []).filter((l: any) => l.restaurantCode === rCode),
@@ -2238,6 +2240,7 @@ function scopeStateForUser(state: any, user: UserSession): any {
     const rCode = user.restaurantCode;
     return {
       currentRestaurantCode: rCode,
+      deletionTombstones: (state.deletionTombstones || []).filter((item: any) => item.restaurantCode === rCode),
       restaurants: (state.restaurants || []).filter((r: any) => r.code === rCode),
       customers: (state.customers || []).filter((c: any) => c.restaurantCode === rCode),
       ledgerEntries: (state.ledgerEntries || []).filter((l: any) => l.restaurantCode === rCode),
@@ -2351,6 +2354,10 @@ app.post(
     }
     serverDbState = incoming;
     ensureServerDbDefaults(serverDbState);
+
+    // Apply soft-deletion requests only after normal sync validation/merging.
+    // Tombstones remain durable and are reapplied on every future sync/load.
+    applySyncDeletionTombstones(serverDbState, fullState.deletionTombstones, user);
 
     const savedOk = await queueDbSave(serverDbState);
     if (!savedOk) {
@@ -2570,6 +2577,89 @@ app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), as
     recipientBalance: getServerCustomerBalance(serverDbState, recipient.id),
   });
 });
+
+/**
+ * Apply authenticated soft-deletion requests. Financial and audit collections
+ * are deliberately excluded: ledger, payment, transfer and audit history remain
+ * immutable. Tombstones are retained so stale offline snapshots cannot resurrect
+ * an account or operational record.
+ */
+function applySyncDeletionTombstones(state: any, incoming: any, user: UserSession): number {
+  if (!state || !Array.isArray(incoming) || incoming.length === 0) return 0;
+  if (user.role !== 'restaurant_admin' && user.role !== 'super_admin') return 0;
+
+  const allowedCollections: Record<string, string> = {
+    customers: 'customers',
+    stationUsers: 'stationUsers',
+    branches: 'branches',
+    packages: 'packages',
+    menuItems: 'menuItems',
+    scanPoints: 'scanPoints',
+    cashierSessions: 'cashierSessions',
+  };
+  if (!Array.isArray(state.deletionTombstones)) state.deletionTombstones = [];
+  if (!Array.isArray(state.auditLogs)) state.auditLogs = [];
+
+  const allowedRestoCode = user.role === 'super_admin' ? null : user.restaurantCode;
+  const existingKeys = new Set(
+    state.deletionTombstones.map((item: any) =>
+      `${item.collection}:${item.restaurantCode}:${item.recordId}`
+    )
+  );
+  let applied = 0;
+
+  for (const request of incoming.slice(0, 200)) {
+    if (!request || typeof request !== 'object') continue;
+    const collection = request.collection;
+    const recordId = typeof request.recordId === 'string' ? request.recordId.trim() : '';
+    const restaurantCode = typeof request.restaurantCode === 'string' ? request.restaurantCode.trim() : '';
+    if (!allowedCollections[collection] || !recordId || recordId.length > 128 || !restaurantCode || restaurantCode.length > 32) continue;
+    if (allowedRestoCode && restaurantCode !== allowedRestoCode) continue;
+
+    const key = `${collection}:${restaurantCode}:${recordId}`;
+    if (existingKeys.has(key)) {
+      // Reapply an existing tombstone to protect against stale offline replays.
+      state[allowedCollections[collection]] = (state[allowedCollections[collection]] || []).filter(
+        (item: any) => !(item.id === recordId && item.restaurantCode === restaurantCode)
+      );
+      continue;
+    }
+
+    const current = (state[allowedCollections[collection]] || []).find(
+      (item: any) => item.id === recordId && item.restaurantCode === restaurantCode
+    );
+    // Never let a tenant admin delete a record that belongs to another tenant.
+    if (allowedRestoCode && current && current.restaurantCode !== allowedRestoCode) continue;
+    if (SEED_EXPENSE_IDS.has(recordId) || SEED_NOTIFICATION_IDS.has(recordId) ||
+        SEED_BRANCH_IDS.has(recordId) || SEED_USER_IDS.has(recordId)) continue;
+
+    const deletedAt = new Date().toISOString();
+    state.deletionTombstones.push({
+      id: `tombstone_${crypto.createHash('sha256').update(key).digest('hex').slice(0, 32)}`,
+      collection,
+      recordId,
+      restaurantCode,
+      deletedAt,
+      deletedBy: user.username || user.userId,
+    });
+    state[allowedCollections[collection]] = (state[allowedCollections[collection]] || []).filter(
+      (item: any) => !(item.id === recordId && item.restaurantCode === restaurantCode)
+    );
+    state.auditLogs.push({
+      id: `audit_tombstone_${crypto.createHash('sha256').update(key).digest('hex').slice(0, 32)}`,
+      restaurantCode,
+      userId: user.userId,
+      actorName: user.username || user.userId,
+      actorRole: user.role,
+      action: `${collection.toUpperCase()}_SOFT_DELETED`,
+      details: `Soft-deleted ${collection} record ${recordId}; financial and audit history retained.`,
+      timestamp: deletedAt,
+    });
+    existingKeys.add(key);
+    applied++;
+  }
+  return applied;
+}
 
 // POST /api/sync: Authenticated, validated incremental synchronization with Idempotency (Findings 5 & 6)
 app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
@@ -2971,4 +3061,5 @@ export {
   verifyServerCustomerPin,
   verifyStationUserCredentials,
   isActiveStationSession,
+  applySyncDeletionTombstones,
 };
