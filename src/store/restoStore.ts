@@ -2577,7 +2577,11 @@ export class RestoStore {
       // Digital dashboard QR (verifyResult.isCard === false) requires an active subscription when monetization is enabled.
       if (!verifyResult.isCard) {
         const qrEntitlement = this.checkStudentEntitlement(customer.id, 'digital_qr');
-        if (!qrEntitlement.allowed) {
+        const provisionalGraceQrAllowed =
+          customer.registrationStatus === 'pending_boss_approval' &&
+          customer.receptionPaymentStatus === 'confirmed' &&
+          (customer.gracePlatesRemaining || 0) > 0;
+        if (!qrEntitlement.allowed && !provisionalGraceQrAllowed) {
           return buildRejection(
             'ACCOUNT_INACTIVE',
             'Digital QR pass requires an active dashboard subscription (500 RWF/mo). Please scan your physical card or activate your subscription.',
