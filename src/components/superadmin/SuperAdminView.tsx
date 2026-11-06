@@ -738,7 +738,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-300 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
                 >
                   <Gift className="w-4 h-4" />
-                  <span>Activate 1-Month Free Access</span>
+                  <span>Customer Access Activation</span>
                 </button>
               </div>
             </div>
@@ -834,7 +834,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
             </div>
 
             <div className="p-4 rounded-xl bg-slate-900 border border-slate-800">
-              <div className="text-[10px] text-slate-400 uppercase font-mono">Student MoMo Revenue</div>
+              <div className="text-[10px] text-slate-400 uppercase font-mono">Access Fee Revenue</div>
               <div className="text-xl font-bold text-emerald-400 font-mono mt-1">
                 {(state.studentSubscriptionPayments || [])
                   .filter((p) => p.status === 'verified')
@@ -945,10 +945,10 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
             <div className="flex items-center justify-between">
               <div>
                 <h4 className="text-sm font-bold text-white uppercase tracking-wider">
-                  Mobile Money Verification &amp; Webhook Audit Log
+                  Customer Access Fee Payment Audit Log
                 </h4>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Idempotent payment records verified against MTN MoMo and Airtel Money callbacks.
+                  Verified cash, MTN Mobile Money and bank-transfer renewals. Each paid renewal is recorded separately from meal credits.
                 </p>
               </div>
               <span className="text-xs font-mono text-slate-400">
