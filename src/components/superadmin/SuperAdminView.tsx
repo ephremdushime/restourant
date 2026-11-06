@@ -53,6 +53,9 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   const [compReason, setCompReason] = useState('');
   const [compDays, setCompDays] = useState(30);
   const [compError, setCompError] = useState('');
+  const [accessActivationMode, setAccessActivationMode] = useState<'complimentary' | 'paid'>('complimentary');
+  const [paidAccessMethod, setPaidAccessMethod] = useState<'cash' | 'mtn_momo' | 'bank_transfer'>('cash');
+  const [paidAccessReference, setPaidAccessReference] = useState('');
 
   // Global Student Fee State
   const [globalStudentFeeInput, setGlobalStudentFeeInput] = useState<number>(studentSubSettings.priceRwf || 500);
@@ -1023,76 +1026,129 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
             </div>
 
             <p className="text-slate-300 text-[11px] leading-relaxed">
-              Activates a 30-day complimentary digital dashboard period for an approved new customer. The period starts when Super Admin confirms activation and is fully audited.
-              Does not create fabricated payment records.
+              Activate the first complimentary month for a boss-approved customer, or verify a real payment reference and activate a paid renewal. Paid renewals are recorded separately from meal balances.
             </p>
 
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
                 setCompError('');
                 if (!compCustomerId) {
-                  setCompError('Please select a student customer');
+                  setCompError('Please select a customer.');
                   return;
                 }
-                if (!compReason.trim()) {
-                  setCompError('A mandatory reason is required by platform policy');
-                  return;
-                }
-                const res = restoStore.grantComplimentarySubscription({
-                  customerId: compCustomerId,
-                  reason: compReason.trim(),
-                  durationDays: Number(compDays) || 30,
-                  grantedBy: 'Ephrem (Super Admin)',
-                });
-                if (res.success) {
-                  setComplimentaryModalOpen(false);
-                  setCompCustomerId('');
-                  setCompReason('');
-                  setCompDays(30);
+                if (accessActivationMode === 'complimentary') {
+                  if (!compReason.trim()) {
+                    setCompError('A mandatory reason is required by platform policy.');
+                    return;
+                  }
+                  const result = restoStore.grantComplimentarySubscription({
+                    customerId: compCustomerId,
+                    reason: compReason.trim(),
+                    durationDays: Number(compDays) || 30,
+                    grantedBy: 'Ephrem (Super Admin)',
+                  });
+                  if (!result.success) {
+                    setCompError(result.error || 'Failed to grant complimentary access.');
+                    return;
+                  }
                 } else {
-                  setCompError(res.error || 'Failed to grant complimentary entitlement');
+                  if (paidAccessMethod !== 'cash' && !paidAccessReference.trim()) {
+                    setCompError('Enter the verified transaction reference.');
+                    return;
+                  }
+                  const result = await restoStore.activatePaidStudentSubscription({
+                    customerId: compCustomerId,
+                    paymentMethod: paidAccessMethod,
+                    paymentReference: paidAccessReference.trim(),
+                    verificationNote: compReason.trim(),
+                  });
+                  if (!result.success) {
+                    setCompError(result.error || 'Paid renewal could not be activated.');
+                    return;
+                  }
                 }
+                setComplimentaryModalOpen(false);
+                setCompCustomerId('');
+                setCompReason('');
+                setCompDays(30);
+                setPaidAccessReference('');
+                setAccessActivationMode('complimentary');
+                showToast(accessActivationMode === 'complimentary'
+                  ? 'One-month complimentary access activated.'
+                  : 'Paid 30-day dashboard renewal verified and activated.');
               }}
               className="space-y-3"
             >
               <div>
-                <label className="font-semibold text-slate-300 block mb-1">Select Student Customer</label>
+                <label className="font-semibold text-slate-300 block mb-1">Activation Type</label>
+                <select
+                  value={accessActivationMode}
+                  onChange={(e) => setAccessActivationMode(e.target.value as 'complimentary' | 'paid')}
+                  className="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-white"
+                >
+                  <option value="complimentary">Complimentary first month (new approved customer)</option>
+                  <option value="paid">Paid monthly renewal (payment verified by Super Admin)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-300 block mb-1">Select Customer</label>
                 <select
                   value={compCustomerId}
                   onChange={(e) => setCompCustomerId(e.target.value)}
                   required
                   className="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-white focus:border-amber-500 outline-hidden"
                 >
-                  <option value="">-- Choose student customer --</option>
+                  <option value="">-- Choose customer --</option>
                   {state.customers.map((c) => (
                     <option key={c.id} value={c.id}>
-                      #{c.memberNo} - {c.name} ({c.restaurantCode})
+                      #{c.memberNo} - {c.name} ({c.restaurantCode}) · {c.registrationStatus || 'legacy'}
                     </option>
                   ))}
                 </select>
               </div>
 
-              <div>
-                <label className="font-semibold text-slate-300 block mb-1">Complimentary Period (Days)</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={365}
-                  value={compDays}
-                  onChange={(e) => setCompDays(parseInt(e.target.value) || 30)}
-                  className="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono focus:border-amber-500 outline-hidden"
-                />
-              </div>
+              {accessActivationMode === 'complimentary' ? (
+                <div>
+                  <label className="font-semibold text-slate-300 block mb-1">Complimentary Period</label>
+                  <div className="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-emerald-300 font-mono font-bold">30 days · starts on activation</div>
+                  <p className="text-[10px] text-slate-500 mt-1">New registrations receive exactly 30 days. The free period cannot be extended by changing this form.</p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="font-semibold text-slate-300 block mb-1">Verified Payment Method</label>
+                    <select
+                      value={paidAccessMethod}
+                      onChange={(e) => setPaidAccessMethod(e.target.value as 'cash' | 'mtn_momo' | 'bank_transfer')}
+                      className="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-white"
+                    >
+                      <option value="cash">Cash at reception</option>
+                      <option value="mtn_momo">MTN Mobile Money</option>
+                      <option value="bank_transfer">Bank transfer</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="font-semibold text-slate-300 block mb-1">Payment Reference {paidAccessMethod !== 'cash' && <span className="text-rose-400">*</span>}</label>
+                    <input
+                      value={paidAccessReference}
+                      onChange={(e) => setPaidAccessReference(e.target.value)}
+                      placeholder={paidAccessMethod === 'cash' ? 'Optional cash receipt number' : 'Verified transaction reference'}
+                      className="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono"
+                    />
+                  </div>
+                </>
+              )}
 
               <div>
-                <label className="font-semibold text-slate-300 block mb-1">Mandatory Reason / Justification</label>
+                <label className="font-semibold text-slate-300 block mb-1">{accessActivationMode === 'paid' ? 'Verification Note' : 'Mandatory Reason / Justification'}</label>
                 <textarea
                   rows={2}
-                  placeholder="e.g. Student Guild President sponsorship, hardship scholarship waiver..."
+                  placeholder={accessActivationMode === 'paid' ? 'Optional note about who verified the payment' : 'e.g. Student Guild sponsorship, hardship waiver...'}
                   value={compReason}
                   onChange={(e) => setCompReason(e.target.value)}
-                  required
+                  required={accessActivationMode === 'complimentary'}
                   className="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-white focus:border-amber-500 outline-hidden"
                 />
               </div>
@@ -1107,7 +1163,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 type="submit"
                 className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold transition-colors shadow-md cursor-pointer"
               >
-                Grant Entitlement
+                {accessActivationMode === 'paid' ? 'Verify Payment & Activate 30 Days' : 'Activate Free Month'}
               </button>
             </form>
           </div>
