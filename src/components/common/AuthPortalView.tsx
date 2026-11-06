@@ -159,11 +159,28 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   const [showRecoveryModal, setShowRecoveryModal] = useState(false);
   const [pinConfirm, setPinConfirm] = useState('');
 
-  // Check if the entered customer phone/memberNo is Boss-approved and needs first-time PIN setup
-  const customerPortalStatus =
-    activeRole === 'customer' && phoneOrMember.trim()
-      ? restoStore.checkCustomerPortalStatus(phoneOrMember.trim(), selectedRestoCode)
-      : null;
+  // Query only the registration status for the entered phone; never download customer records publicly.
+  const [customerPortalStatus, setCustomerPortalStatus] = useState<{
+    status: 'needs_pin_setup' | 'ready_for_login' | 'pending_reception_payment' | 'pending_boss_approval' | 'rejected' | 'not_found' | 'unavailable';
+    memberNo?: string;
+    error?: string;
+  } | null>(null);
+  useEffect(() => {
+    const identifier = phoneOrMember.trim();
+    if (activeRole !== 'customer' || identifier.replace(/\\D/g, '').length < 9) {
+      setCustomerPortalStatus(null);
+      return;
+    }
+    let current = true;
+    const timeout = window.setTimeout(async () => {
+      const status = await restoStore.getCustomerRegistrationStatus(identifier, selectedRestoCode);
+      if (current) setCustomerPortalStatus(status);
+    }, 400);
+    return () => {
+      current = false;
+      window.clearTimeout(timeout);
+    };
+  }, [activeRole, phoneOrMember, selectedRestoCode]);
 
   // Activation inputs
   const [actPhone, setActPhone] = useState('');
@@ -298,6 +315,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
         }
       } else if (activeRole === 'customer') {
         const cleanPhoneOrMember = phoneOrMember.trim();
+        const enteredPin = pin.trim();
         if (!cleanPhoneOrMember) {
           setErrorMessage(t.auth.enterPhone);
           sound.playDangerAlarm();
@@ -318,21 +336,46 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           return;
         }
         if (statusCheck.status === 'needs_pin_setup') {
-          setActPhone(cleanPhoneOrMember);
-          setActCode('');
-          setActError(null);
-          setShowActivationModal(true);
+          if (!/^\\d{6,}$/.test(enteredPin)) {
+            setErrorMessage('Reception confirmed your payment. Create a personal PIN with at least 6 digits.');
+            sound.playDangerAlarm();
+            setIsVerifying(false);
+            return;
+          }
+          if (enteredPin !== pinConfirm.trim()) {
+            setErrorMessage('PINs do not match. Please confirm your new PIN.');
+            sound.playDangerAlarm();
+            setIsVerifying(false);
+            return;
+          }
+          const activation = await restoStore.completeCustomerActivation({
+            phoneOrMember: cleanPhoneOrMember,
+            newPin: enteredPin,
+            restaurantCode: selectedRestoCode,
+          });
+          if (activation.success && activation.customer) {
+            setFailedAttempts(0);
+            sound.playSuccessBeep();
+            onLoginSuccess('customer', `${activation.customer.name} (#${activation.customer.memberNo})`);
+          } else {
+            setErrorMessage(activation.error || 'PIN setup failed. No activation was confirmed.');
+            sound.playDangerAlarm();
+          }
           setIsVerifying(false);
           return;
         }
         if (statusCheck.status === 'pending_boss_approval') {
-          setErrorMessage('Reception has confirmed your payment. Your registration is awaiting final boss approval. You can use up to 4 grace meals.');
+          setErrorMessage('Your registration is awaiting final Restaurant Boss approval. Reception has already confirmed payment; you may use up to 4 grace meals.');
           sound.playDangerAlarm();
           setIsVerifying(false);
           return;
         }
-
-        const enteredPin = pin.trim();
+        if (statusCheck.status === 'rejected') {
+          setErrorMessage('This registration was not approved. Please contact cafeteria management.');
+          sound.playDangerAlarm();
+          setIsVerifying(false);
+          return;
+        }
         if (!enteredPin) {
           setErrorMessage(t.auth.enterPin);
           sound.playDangerAlarm();
@@ -745,10 +788,10 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
                     <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
                     <div>
                       <div className="text-sm font-black text-white">
-                        Registration Approved for {customerPortalStatus.customer.name} (#{customerPortalStatus.customer.memberNo})!
+                        Reception Payment Confirmed · Member #{customerPortalStatus.memberNo || '—'}
                       </div>
                       <p className="text-xs text-emerald-200 font-medium mt-0.5">
-                        Create your personal 6+ digit security PIN below to unlock and access your customer dashboard.
+                        Create your personal 6+ digit security PIN below to access your limited onboarding dashboard while the boss reviews your registration.
                       </p>
                     </div>
                   </div>
@@ -784,13 +827,13 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
                     </div>
                   </div>
                 </div>
-              ) : customerPortalStatus?.status === 'pending_boss_approval' && customerPortalStatus.customer ? (
+              ) : customerPortalStatus?.status === 'pending_boss_approval' ? (
                 <div className="p-3.5 rounded-2xl bg-amber-950/60 border-2 border-amber-500/60 text-amber-200 text-xs space-y-1">
                   <div className="font-black text-sm text-amber-300">
-                    Registration Awaiting Boss Approval (#{customerPortalStatus.customer.memberNo})
+                    Registration Awaiting Boss Approval (#{customerPortalStatus.memberNo || '—'})
                   </div>
                   <p className="font-medium leading-relaxed">
-                    Your registration is in the Restaurant Boss approval queue. While waiting, you can already eat up to <strong>3 grace meals</strong> at the cafeteria stand. After reception confirms payment, set your PIN here. You may use up to 4 grace meals while the boss reviews your registration.
+                    Reception has confirmed your payment. Your registration is now awaiting final boss approval. You may use up to <strong>4 grace meals</strong> while waiting.
                   </p>
                 </div>
               ) : (
