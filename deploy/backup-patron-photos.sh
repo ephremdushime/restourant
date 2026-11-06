@@ -21,7 +21,8 @@ BACKUP_ENCRYPTION_KEY="$(photo_backup_key "$ROOT_DIR")"
 export RESTOPASS_BACKUP_ENCRYPTION_KEY="$BACKUP_ENCRYPTION_KEY"
 mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR"
-timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+timestamp="${RESTOPASS_BACKUP_TIMESTAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
+if ! [[ "$timestamp" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then echo "Invalid RESTOPASS_BACKUP_TIMESTAMP." >&2; exit 1; fi
 backup_file="$BACKUP_DIR/restopass_photos_$timestamp.tar.gz.enc"
 temporary_file="$backup_file.partial"
 compose=(docker compose --project-directory "$ROOT_DIR" --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
