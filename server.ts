@@ -2356,7 +2356,7 @@ const SENSITIVE_CLIENT_FIELDS = new Set([
   'recoverycode', 'verificationcode', 'temporarycode', 'onetimecode', 'otp',
   'pairingkey', 'pairingsecret', 'secret', 'apisecret', 'apikey',
   'accesskey', 'secretaccesskey', 'accesstoken', 'refreshtoken',
-  'magicauthtoken', 'tokenhash', 'qrsecret', 'privatekey',
+  'magicauthtoken', 'tokenhash', 'qrsecret', 'privatekey', 'photostoragekey',
 ]);
 
 /**
@@ -2915,6 +2915,10 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
               cardVersion: prev.cardVersion,
               failedLoginAttempts: prev.failedLoginAttempts,
               lockedUntil: prev.lockedUntil,
+              // Private photo object identifiers are server-managed; clients may
+              // never redirect a customer record to another tenant's object.
+              photoStorageKey: prev.photoStorageKey,
+              photoStorageType: prev.photoStorageType,
             });
           }
         } else if (user.role !== 'customer') {
