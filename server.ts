@@ -61,6 +61,9 @@ function validateProductionSecrets(env: NodeJS.ProcessEnv = process.env): {
   const masterSecret = (env.RESTOPASS_MASTER_SECRET || env.RESTOPASS_MASTER_KEY || '')?.trim();
 
   if (isProd) {
+    if (env.S3_PUBLIC_URL_PREFIX?.trim() || /public-read|public-read-write|authenticated-read/i.test(env.S3_OBJECT_ACL || '')) {
+      throw new Error('[FATAL SECURITY ERROR] Public patron-photo URL prefixes and public object ACLs are forbidden. Use a private bucket and authenticated photo delivery.');
+    }
     if (!sessionSecret || sessionSecret.length < 32 || sessionSecret === DEV_SESSION_SECRET) {
       throw new Error(
         '[FATAL SECURITY ERROR] SESSION_SECRET (>= 32 characters) must be configured in production environment. Server startup aborted.'
