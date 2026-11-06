@@ -362,7 +362,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
               size={210}
               className="max-w-full"
             />
-            <span className="text-xs font-bold text-slate-900">Temporary meal pass · #${customer.memberNo}</span>
+            <span className="text-xs font-bold text-slate-900">Temporary meal pass · #{customer.memberNo}</span>
           </div>
           <p className="text-sm leading-relaxed text-slate-200">
             Your reception payment has been confirmed. You may use up to four grace meals while the Restaurant Boss reviews your registration. Your full dashboard and physical card will be enabled after approval.
