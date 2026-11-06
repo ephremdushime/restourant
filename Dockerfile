@@ -39,7 +39,7 @@ COPY server.ts ./
 COPY src/services ./src/services
 
 # Ensure upload directory exists
-RUN mkdir -p public/uploads/patron-photos data && chown -R node:node /app
+RUN mkdir -p data/private/patron-photos && chown -R node:node /app && chmod 700 data/private data/private/patron-photos
 
 USER node
 
