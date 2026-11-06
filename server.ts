@@ -2467,6 +2467,30 @@ function checkServerStudentEntitlement(
     };
   }
 
+  if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'complimentary' && lifecycleSub?.status === 'complimentary') {
+    return {
+      allowed: true,
+      feature,
+      status: 'complimentary',
+      inGracePeriod: false,
+      enforcementEnabled: true,
+      expiresAt: lifecycleSub.currentPeriodEnd,
+      reason: 'Super Admin activated the one-month complimentary dashboard period.',
+    };
+  }
+  if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'active' &&
+      (lifecycleSub?.status === 'active' || lifecycleSub?.status === 'grace_period')) {
+    return {
+      allowed: true,
+      feature,
+      status: lifecycleSub.status,
+      inGracePeriod: lifecycleSub.status === 'grace_period',
+      enforcementEnabled: true,
+      expiresAt: lifecycleSub.currentPeriodEnd,
+      gracePeriodEnd: lifecycleSub.gracePeriodEnd,
+    };
+  }
+
   if (!settings?.enabled) {
     return {
       allowed: true,
