@@ -3392,9 +3392,7 @@ export class RestoStore {
       timestamp: now,
     };
 
-    if (!this.state.payments.some((existing) => existing.approvalId === approval.id)) {
-      this.state.payments.unshift(payment);
-    }
+    this.state.payments.unshift(payment);
 
     this.queueOutboxItem('ledger_entry', ledgerEntry.id, ledgerEntry);
     this.logAudit({
