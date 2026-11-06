@@ -787,6 +787,36 @@ app.get('/api/public/restaurants', apiRateLimiter, (_req, res) => {
 
 // Public customer registration. Payment is deliberately excluded from this request;
 // the customer must visit reception for payment confirmation before partial activation.
+// Rate-limited, minimal status lookup so a customer can set a PIN on a new device
+// without downloading the tenant's customer database or exposing personal details.
+app.post('/api/customer/registration/status', apiRateLimiter, (req, res) => {
+  const phone = typeof req.body?.phone === 'string' ? req.body.phone.trim() : '';
+  const restaurantCode = typeof req.body?.restaurantCode === 'string' ? req.body.restaurantCode.trim().toUpperCase() : '';
+  if (phone.length < 7 || phone.length > 32 || !restaurantCode) {
+    return res.status(400).json({ success: false, error: 'Enter your registered phone number and dining facility.' });
+  }
+  const normalizePhone = (value: string) => value.replace(/[^0-9]/g, '').replace(/^250/, '0');
+  const phoneKey = normalizePhone(phone);
+  const customer = (serverDbState?.customers || []).find((c: any) =>
+    c.restaurantCode === restaurantCode && normalizePhone(String(c.phone || '')) === phoneKey
+  );
+  if (!customer) return res.status(404).json({ success: false, error: 'No registration was found for those details.' });
+
+  let status = 'ready_for_login';
+  if (customer.registrationStatus === 'rejected' || customer.provisionalStatus === 'rejected' || customer.activationStatus === 'suspended') {
+    status = 'rejected';
+  } else if (customer.registrationStatus === 'pending_reception_payment' || customer.receptionPaymentStatus === 'unpaid') {
+    status = 'pending_reception_payment';
+  } else if (customer.registrationStatus === 'pending_boss_approval' && !customer.hasCustomPin) {
+    status = 'needs_pin_setup';
+  } else if (customer.provisionalStatus === 'pending_approval' && customer.registrationStatus !== 'pending_boss_approval') {
+    status = 'pending_boss_approval';
+  } else if (!customer.hasCustomPin || customer.activationStatus === 'ready_for_activation') {
+    status = 'needs_pin_setup';
+  }
+  return res.json({ success: true, status, memberNo: customer.memberNo });
+});
+
 // Reception-only payment confirmation for an existing self-registration.
 // The server creates the boss approval record and grants exactly four provisional grace plates.
 app.post('/api/reception/customer/payment-confirm', apiRateLimiter, requireAuth(['stand_staff', 'restaurant_admin', 'super_admin']), async (req, res) => {
