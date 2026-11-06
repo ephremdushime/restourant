@@ -2656,6 +2656,13 @@ app.post('/api/superadmin/customer/subscription/activate-paid', apiRateLimiter, 
   const nowMs = Date.now();
   const now = new Date(nowMs).toISOString();
   const existingSub = (serverDbState.customerSubscriptions || []).find((sub: any) => sub.customerId === customerId);
+  if (customer.customerAccessStatus === 'active' && existingSub) {
+    const currentGraceEnd = new Date(existingSub.gracePeriodEnd || existingSub.currentPeriodEnd || 0).getTime();
+    if (existingSub.status === 'expired' || (currentGraceEnd > 0 && currentGraceEnd <= nowMs)) {
+      customer.customerAccessStatus = 'payment_required';
+      existingSub.status = 'expired';
+    }
+  }
   if (customer.customerAccessStatus === 'complimentary' &&
       new Date(customer.freeAccessExpiresAt || existingSub?.currentPeriodEnd || 0).getTime() > nowMs) {
     return res.status(409).json({ success: false, error: 'The complimentary access period is still active.' });
