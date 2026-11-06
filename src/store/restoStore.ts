@@ -1548,16 +1548,24 @@ export class RestoStore {
       }
     }
     try {
-      const response = await fetch('/api/upload/photo', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.authToken}`,
-        },
-        body: JSON.stringify({ customerId, photoBase64 }),
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok || !result.success || typeof result.photoUrl !== 'string') {
+      let response: Response | null = null;
+      let result: any = {};
+      // A background sync may already be running when registration finishes.
+      // Retry only a not-yet-replicated customer lookup; never retry auth or validation failures.
+      for (let attempt = 0; attempt < 4; attempt++) {
+        response = await fetch('/api/upload/photo', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.authToken}`,
+          },
+          body: JSON.stringify({ customerId, photoBase64 }),
+        });
+        result = await response.json().catch(() => ({}));
+        if (response.status !== 404 || attempt === 3) break;
+        await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+      }
+      if (!response?.ok || !result.success || typeof result.photoUrl !== 'string') {
         return { success: false, error: result.error || 'The server could not securely store this customer photo.' };
       }
 
