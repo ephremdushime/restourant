@@ -2397,14 +2397,14 @@ function checkServerStudentEntitlement(
   const lifecycleCustomer = (serverDbState?.customers || []).find((c: any) => c.id === customerId);
   const lifecycleSub = (serverDbState?.customerSubscriptions || []).find((sub: any) => sub.customerId === customerId);
   const lifecycleNow = Date.now();
-  if (lifecycleCustomer?.customerAccessStatus === 'complimentary') {
+  if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'complimentary') {
     const freeEnd = new Date(lifecycleCustomer.freeAccessExpiresAt || lifecycleSub?.currentPeriodEnd || 0).getTime();
     if (!freeEnd || lifecycleNow > freeEnd) {
       lifecycleCustomer.customerAccessStatus = 'payment_required';
       if (lifecycleSub) lifecycleSub.status = 'expired';
     }
   }
-  if (lifecycleCustomer?.customerAccessStatus === 'active' && (lifecycleSub?.status === 'active' || lifecycleSub?.status === 'grace_period')) {
+  if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'active' && (lifecycleSub?.status === 'active' || lifecycleSub?.status === 'grace_period')) {
     const paidEnd = new Date(lifecycleSub.currentPeriodEnd || 0).getTime();
     const graceEnd = new Date(lifecycleSub.gracePeriodEnd || paidEnd + (settings?.graceDays || 3) * 86400000).getTime();
     if (graceEnd && lifecycleNow > graceEnd) {
@@ -2414,9 +2414,11 @@ function checkServerStudentEntitlement(
       lifecycleSub.status = 'grace_period';
     }
   }
-  if (lifecycleCustomer?.customerAccessStatus === 'pending_super_admin_activation' ||
-      lifecycleCustomer?.customerAccessStatus === 'payment_required' ||
-      lifecycleCustomer?.customerAccessStatus === 'expired') {
+  if (lifecycleCustomer?.registrationStatus && (
+      lifecycleCustomer.customerAccessStatus === 'pending_super_admin_activation' ||
+      lifecycleCustomer.customerAccessStatus === 'payment_required' ||
+      lifecycleCustomer.customerAccessStatus === 'expired'
+    )) {
     return {
       allowed: false,
       feature,
