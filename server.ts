@@ -697,6 +697,17 @@ function canAccessCustomerPhoto(user: UserSession | null | undefined, customer: 
     user.restaurantCode === customer.restaurantCode;
 }
 
+function safeCustomerPhotoUrl(customer: any): string {
+  if (customer && typeof customer.id === 'string' && typeof customer.restaurantCode === 'string' &&
+      typeof customer.photoStorageKey === 'string' &&
+      customer.photoStorageKey.startsWith(`patron-photos/${customer.restaurantCode.toUpperCase()}/`)) {
+    return `/api/customers/${encodeURIComponent(customer.id)}/photo`;
+  }
+  const candidate = typeof customer?.photoUrl === 'string' ? customer.photoUrl : '';
+  if (/^\/(?:src\/assets\/images|assets)\/[A-Za-z0-9_.-]+$/.test(candidate)) return candidate;
+  return '/src/assets/images/avatar_student_male_1790979380050.jpg';
+}
+
 function getSessionTokenTtlSeconds(token: string): number {
   try {
     if (!token.startsWith('rp_sess_')) return 0;
@@ -1729,7 +1740,7 @@ app.post(
         memberNo,
         customerId: customer.id,
         customerName: customer.name,
-        customerPhoto: customer.photoUrl,
+        customerPhoto: safeCustomerPhotoUrl(customer),
         isCard: true,
       });
     }
@@ -2377,6 +2388,15 @@ function sanitizeSensitiveState(value: any): any {
   for (const [key, item] of Object.entries(value)) {
     if (SENSITIVE_CLIENT_FIELDS.has(key.toLowerCase())) continue;
     if (key === 'usedTokens' || key === 'revokedTokens') continue;
+    if (key.toLowerCase() === 'photourl' || key.toLowerCase() === 'customerphoto') {
+      const candidate = typeof item === 'string' ? item : '';
+      const isPrivateRoute = /^\/api\/customers\/[A-Za-z0-9_-]{1,128}\/photo$/.test(candidate);
+      const isBundledAsset = /^\/(?:src\/assets\/images|assets)\/[A-Za-z0-9_.-]+$/.test(candidate);
+      sanitized[key] = isPrivateRoute || isBundledAsset
+        ? candidate
+        : '/src/assets/images/avatar_student_male_1790979380050.jpg';
+      continue;
+    }
     sanitized[key] = sanitizeSensitiveState(item);
   }
   return sanitized;
