@@ -103,6 +103,56 @@ jobs:
           export RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS='{"RW01":{"username":"manager@rw01.test","password":"ci_unique_admin_password_rw01_2026"}}'
           docker compose -f deploy/docker-compose.prod.yml config --quiet
 
+      - name: Runtime-test production Compose stack with PostgreSQL and Redis
+        run: |
+          export POSTGRES_DB=restopass_ci
+          export POSTGRES_USER=restopass_ci
+          export POSTGRES_PASSWORD="$(openssl rand -hex 32)"
+          export REDIS_PASSWORD="$(openssl rand -hex 32)"
+          export SESSION_SECRET="$(openssl rand -hex 32)"
+          export RESTOPASS_MASTER_SECRET="$(openssl rand -hex 32)"
+          export RESTOPASS_SUPERADMIN_PASSWORD="$(openssl rand -hex 24)"
+          export RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS='{"RW01":{"username":"manager@rw01.test","password":"ci_unique_admin_password_rw01_2026"}}'
+          compose=(docker compose -p restopass-ci -f deploy/docker-compose.prod.yml)
+          cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          "${compose[@]}" up -d --build
+          ready=0
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:3000/api/ready >/tmp/restopass-compose-ready.json; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Cloud Compose stack did not become ready."
+            "${compose[@]}" ps
+            "${compose[@]}" logs --no-color
+            exit 1
+          fi
+          grep -q '"status":"ready"' /tmp/restopass-compose-ready.json
+          table_count="$("${compose[@]}" exec -T postgres sh -ec 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '''public''' AND table_type = '''BASE TABLE''';"')"
+          if ! [[ "$table_count" =~ ^[0-9]+$ ]] || (( table_count < 10 )); then
+            echo "Cloud PostgreSQL schema is incomplete: $table_count tables."
+            exit 1
+          fi
+          "${compose[@]}" restart app
+          restarted=0
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/api/ready >/tmp/restopass-compose-restart.json; then
+              restarted=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$restarted" -ne 1 ]; then
+            echo "Cloud application failed readiness after restart."
+            "${compose[@]}" logs --no-color app
+            exit 1
+          fi
+          grep -q '"status":"ready"' /tmp/restopass-compose-restart.json
+
       - name: Build production Docker image
         run: docker build --pull --tag restopass-ci:${{ github.sha }} .
 
