@@ -782,7 +782,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
                 />
               </div>
 
-              {customerPortalStatus?.status === 'needs_pin_setup' && customerPortalStatus.customer ? (
+              {customerPortalStatus?.status === 'needs_pin_setup' ? (
                 <div className="space-y-3 p-3.5 rounded-2xl bg-emerald-950/50 border-2 border-emerald-500/70">
                   <div className="flex items-start gap-2.5">
                     <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
@@ -884,10 +884,10 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
                 <div>
                   <div className="text-white font-bold text-xs flex items-center gap-1.5">
                     <UserPlus className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>New Student? Register &amp; Subscribe Online</span>
+                    <span>New Student? Register Online</span>
                   </div>
                   <div className="text-[11px] text-slate-300 mt-0.5">
-                    Skip counter queues: Fill your details, pay via MoMo, and submit for Boss approval.
+                    Submit your details now, then visit reception to pay and confirm your registration.
                   </div>
                 </div>
                 <button
