@@ -20,7 +20,7 @@ A 4 GB VPS can accommodate this **single-instance pilot configuration** if the h
 - Docker Engine and Docker Compose plugin.
 - A static public IP and DNS record for the production hostname.
 - At least 4 GB RAM for the pilot profile; 2 vCPU is a practical starting point.
-- Persistent SSD storage with enough capacity for the database, uploads and retained backups.
+- Persistent SSD storage with enough capacity for the database, private patron photos under the app data volume, and retained backups.
 - A reverse proxy (Nginx or Caddy) terminating HTTPS in front of the app.
 
 The app is published only on host loopback at 127.0.0.1:3000. PostgreSQL and Redis are not published on host ports; they are reachable only over the private Compose data network. The host firewall should expose only SSH (restricted to administrator IPs where possible), HTTP and HTTPS. Never expose ports 3000, 5432 or 6379 publicly.
@@ -84,7 +84,7 @@ Verify a backup by restoring it into a temporary database. This does not modify 
 
 Schedule the backup script at least daily using the host's scheduler. **The script creates a local backup only.** Copy the encrypted dump, `.sha256` checksum and `.hmac` tag to a separate, access-controlled off-server location. Store `RESTOPASS_BACKUP_ENCRYPTION_KEY` in a separate password manager or secret manager; losing that key makes the backup unrecoverable. A backup on the same VPS is not disaster recovery. Perform and record a restore verification at least weekly and after schema migrations.
 
-Also protect the persistent Docker volumes for PostgreSQL and customer uploads. Do not treat container images or the app's local JSON snapshot as a backup strategy.
+Patron portraits are stored outside the web root under the persistent app data volume at `data/private/patron-photos/`, or in a private S3-compatible bucket. Never enable public bucket access, public-read ACLs, CDN URL prefixes, or static `/uploads` serving. Portrait reads require an authenticated session and customer/tenant authorization; the object key is server-managed and excluded from client state. Protect and back up the app data volume as well as PostgreSQL. Do not treat container images or the app's local JSON snapshot as a backup strategy.
 
 ## 6. Payment and feature gates
 
