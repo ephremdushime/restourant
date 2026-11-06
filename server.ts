@@ -787,6 +787,119 @@ app.get('/api/public/restaurants', apiRateLimiter, (_req, res) => {
 
 // Public customer registration. Payment is deliberately excluded from this request;
 // the customer must visit reception for payment confirmation before partial activation.
+// Reception-only payment confirmation for an existing self-registration.
+// The server creates the boss approval record and grants exactly four provisional grace plates.
+app.post('/api/reception/customer/payment-confirm', apiRateLimiter, requireAuth(['stand_staff', 'restaurant_admin', 'super_admin']), async (req, res) => {
+  if (!serverDbState) return res.status(503).json({ success: false, error: 'Registration service is unavailable.' });
+  const user = req.user!;
+  const body = req.body || {};
+  const customerId = typeof body.customerId === 'string' ? body.customerId.trim() : '';
+  const packageId = typeof body.packageId === 'string' ? body.packageId.trim() : '';
+  const paymentMethod = typeof body.paymentMethod === 'string' ? body.paymentMethod : '';
+  const paymentReferenceInput = typeof body.paymentReference === 'string' ? body.paymentReference.trim().toUpperCase() : '';
+  const staffName = typeof body.registeredByStaffName === 'string' ? body.registeredByStaffName.trim().slice(0, 120) : user.username;
+  const stationId = typeof body.stationId === 'string' ? body.stationId.trim().slice(0, 120) : '';
+  const stationName = typeof body.stationName === 'string' ? body.stationName.trim().slice(0, 120) : 'Reception Desk';
+
+  if (!customerId || !packageId || !['cash', 'mtn_momo', 'bank_transfer'].includes(paymentMethod)) {
+    return res.status(400).json({ success: false, error: 'Select a valid customer, meal package and payment method.' });
+  }
+  if (paymentMethod !== 'cash' && (!paymentReferenceInput || paymentReferenceInput.length > 100)) {
+    return res.status(400).json({ success: false, error: 'A valid transaction reference is required for this payment method.' });
+  }
+
+  const customer = (serverDbState.customers || []).find((c: any) => c.id === customerId);
+  if (!customer) return res.status(404).json({ success: false, error: 'Registered customer not found.' });
+  if (user.role !== 'super_admin' && customer.restaurantCode !== user.restaurantCode) {
+    return res.status(403).json({ success: false, error: 'You cannot confirm payment for another restaurant.' });
+  }
+  if (customer.registrationStatus !== 'pending_reception_payment' || customer.receptionPaymentStatus === 'confirmed') {
+    return res.status(409).json({ success: false, error: 'This registration is not awaiting reception payment confirmation.' });
+  }
+  const pkg = (serverDbState.packages || []).find((p: any) =>
+    p.id === packageId && p.restaurantCode === customer.restaurantCode
+  );
+  if (!pkg || !Number.isInteger(pkg.platesCount) || pkg.platesCount < 1 || !Number.isFinite(pkg.priceRwf) || pkg.priceRwf <= 0) {
+    return res.status(400).json({ success: false, error: 'The selected meal package is unavailable.' });
+  }
+
+  const paymentReference = paymentReferenceInput || `CASH-${crypto.randomUUID()}`;
+  const duplicateRef = (serverDbState.pendingApprovals || []).some((a: any) =>
+    a.restaurantCode === customer.restaurantCode && String(a.paymentReference || '').toUpperCase() === paymentReference
+  ) || (serverDbState.payments || []).some((p: any) =>
+    p.restaurantCode === customer.restaurantCode && String(p.reference || '').toUpperCase() === paymentReference
+  );
+  if (duplicateRef) return res.status(409).json({ success: false, error: 'This payment reference has already been recorded.' });
+
+  const now = new Date().toISOString();
+  const approvalId = `appr_reg_${crypto.randomUUID()}`;
+  const branch = (serverDbState.branches || []).find((b: any) => b.id === customer.branchId && b.restaurantCode === customer.restaurantCode);
+  const approval = {
+    id: approvalId,
+    restaurantCode: customer.restaurantCode,
+    branchId: branch?.id || customer.branchId || '',
+    branchName: branch?.name || customer.branchName || '',
+    type: 'new_customer',
+    customerId: customer.id,
+    customerName: customer.name,
+    customerPhone: customer.phone,
+    customerPhoto: customer.photoUrl,
+    memberNo: customer.memberNo,
+    packageId: pkg.id,
+    packageName: pkg.name,
+    platesRequested: pkg.platesCount,
+    amountRwf: pkg.priceRwf,
+    paymentMethod,
+    paymentReference,
+    registeredByStaffId: user.userId,
+    registeredByStaffName: staffName,
+    stationId,
+    stationName,
+    gracePlatesAllowed: 4,
+    gracePlatesConsumed: 0,
+    createdAt: now,
+    status: 'pending',
+    requiresSuperAdminCoSign: pkg.platesCount > 120,
+    coSignStatus: pkg.platesCount > 120 ? 'pending_super_admin' : 'not_required',
+  };
+
+  const previousCustomer = { ...customer };
+  if (!Array.isArray(serverDbState.pendingApprovals)) serverDbState.pendingApprovals = [];
+  serverDbState.pendingApprovals.unshift(approval);
+  customer.registrationStatus = 'pending_boss_approval';
+  customer.receptionPaymentStatus = 'confirmed';
+  customer.receptionPaymentConfirmedAt = now;
+  customer.receptionPaymentConfirmedBy = staffName;
+  customer.receptionPaymentReference = paymentReference;
+  customer.provisionalStatus = 'pending_approval';
+  customer.activationStatus = 'partial_active';
+  customer.cardStatus = 'active';
+  customer.gracePlatesAllowed = 4;
+  customer.gracePlatesConsumed = 0;
+  customer.gracePlatesRemaining = 4;
+  customer.pendingApprovalId = approvalId;
+
+  if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
+  serverDbState.auditLogs.unshift({
+    id: `audit_${crypto.randomUUID()}`,
+    timestamp: now,
+    restaurantCode: customer.restaurantCode,
+    branchId: approval.branchId,
+    branchName: approval.branchName,
+    actorRole: user.role,
+    actorName: staffName,
+    action: 'REGISTRATION_PAYMENT_CONFIRMED',
+    details: `Reception confirmed ${pkg.priceRwf} RWF for customer #${customer.memberNo} via ${paymentMethod.toUpperCase()} (Ref: ${paymentReference}). Account partially activated with up to 4 grace plates; awaiting boss approval.`,
+  });
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    serverDbState.pendingApprovals = serverDbState.pendingApprovals.filter((a: any) => a.id !== approvalId);
+    Object.assign(customer, previousCustomer);
+    return res.status(503).json({ success: false, error: 'Payment confirmation could not be saved. Do not retry with a new reference; contact support.' });
+  }
+  return res.json({ success: true, approval, customer: { id: customer.id, registrationStatus: customer.registrationStatus, gracePlatesRemaining: customer.gracePlatesRemaining } });
+});
+
 app.post('/api/public/customer/registration', apiRateLimiter, async (req, res) => {
   if (!serverDbState) {
     return res.status(503).json({ success: false, error: 'Registration service is not initialized. Please try again shortly.' });
