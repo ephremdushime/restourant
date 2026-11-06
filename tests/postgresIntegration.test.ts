@@ -56,8 +56,18 @@ test('PostgreSQL persistence round-trip and concurrent transfer invariants', {
       restaurantSubscriptionPayments: [{ id: `restaurant_payment_${suffix}`, restaurantCode, amountRwf: 65000, status: 'pending' }],
       subscriptionPayments: [{ id: `subscription_payment_${suffix}`, restaurantCode, product: 'restaurant_subscription', status: 'pending' }],
       activationCodes: [{ id: `activation_${suffix}`, restaurantCode, status: 'unused' }],
-      plans: [], scanPoints: [], packages: [], menuItems: [], cashierSessions: [], shifts: [],
+      plans: [], scanPoints: [], packages: [],
+      menuItems: [{ id: `menu_deleted_${suffix}`, restaurantCode, name: 'Retired menu item', priceRwf: 1000 }],
+      cashierSessions: [], shifts: [],
       activationRequests: [], pinRecoveryRequests: [], customTranslations: {},
+      deletionTombstones: [{
+        id: `tombstone_menu_${suffix}`,
+        collection: 'menuItems',
+        recordId: `menu_deleted_${suffix}`,
+        restaurantCode,
+        deletedAt: new Date().toISOString(),
+        deletedBy: 'integration-test',
+      }],
     };
 
     assert.equal(await saveStateToPostgres(state), true);
@@ -81,6 +91,8 @@ test('PostgreSQL persistence round-trip and concurrent transfer invariants', {
     assert.ok(loaded.restaurantSubscriptionPayments.some((item: any) => item.id === `restaurant_payment_${suffix}`));
     assert.ok(loaded.subscriptionPayments.some((item: any) => item.id === `subscription_payment_${suffix}`));
     assert.ok(loaded.activationCodes.some((item: any) => item.id === `activation_${suffix}`));
+    assert.ok(loaded.deletionTombstones.some((item: any) => item.id === `tombstone_menu_${suffix}`));
+    assert.equal(loaded.menuItems.some((item: any) => item.id === `menu_deleted_${suffix}`), false);
 
     const buildTransfer = (label: string, idempotencyKey: string) => {
       const transferId = `transfer_${suffix}_${label}`;
