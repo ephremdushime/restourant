@@ -162,6 +162,7 @@ Because campus environments cannot rely on paid SMS OTP delivery for every login
 3. **Private Customer PIN Setup (`6+ digits`)**: The patron enters their phone number, the 6-digit activation code, and chooses their own **6+ digit numeric PIN** (`completeCustomerActivation`). Staff never choose or see the customer's PIN.
 4. **Phone + PIN Login with Anti-Enumeration & Lockout**:
    - Patrons sign in using their registered phone number and 6+ digit PIN (`/api/customer/auth/login`).
+- WhatsApp magic links are retired. No URL token may authenticate a customer or bypass the personal PIN.
    - Returns a generic `"Invalid phone number or PIN"` on failure to prevent phone-number enumeration.
    - Temporarily locks the account for **15 minutes** after **5 consecutive failed attempts**.
 5. **Audited PIN Recovery**: If a patron forgets their PIN, staff verify their physical ID and log a recovery request (`requestCustomerPinRecovery`), which a manager approves to issue a single-use reset code (`approveCustomerPinRecovery`). Completing recovery increments `keyVersion`, revoking all prior sessions.
