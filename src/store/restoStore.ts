@@ -6799,6 +6799,36 @@ export class RestoStore {
       };
     }
 
+    // New-customer dashboard access lifecycle is enforced independently of the legacy feature flag.
+    // This prevents a disabled legacy monetization flag from bypassing the one-month free entitlement.
+    const lifecycleCustomer = this.state.customers.find((c) => c.id === customerId);
+    const lifecycleSubscription = this.getCustomerSubscription(customerId);
+    if (lifecycleCustomer?.customerAccessStatus === 'pending_super_admin_activation' ||
+        lifecycleCustomer?.customerAccessStatus === 'payment_required' ||
+        lifecycleCustomer?.customerAccessStatus === 'expired') {
+      return {
+        allowed: false,
+        feature,
+        status: lifecycleCustomer.customerAccessStatus,
+        inGracePeriod: false,
+        enforcementEnabled: true,
+        reason: lifecycleCustomer.customerAccessStatus === 'pending_super_admin_activation'
+          ? 'Your registration is approved. Super Admin must activate your complimentary month before digital dashboard access begins.'
+          : 'Your complimentary or paid dashboard access has expired. Visit reception to pay the monthly access fee.',
+      };
+    }
+    if (lifecycleCustomer?.customerAccessStatus === 'active' && lifecycleSubscription?.status === 'expired') {
+      lifecycleCustomer.customerAccessStatus = 'payment_required';
+      return {
+        allowed: false,
+        feature,
+        status: 'payment_required',
+        inGracePeriod: false,
+        enforcementEnabled: true,
+        reason: 'Your dashboard access period has expired. Please pay the monthly access fee to continue.',
+      };
+    }
+
     // 1. If feature flag is disabled at launch: All existing rules apply without subscription requirement
     if (!settings.enabled) {
       return {
