@@ -1533,6 +1533,49 @@ export class RestoStore {
     return this.authToken;
   }
 
+  /**
+   * Upload a customer portrait through the authenticated server endpoint.
+   * Raw data URLs are never persisted in local state or the synchronization payload.
+   */
+  public async uploadCustomerPhoto(
+    customerId: string,
+    photoBase64: string
+  ): Promise<{ success: boolean; photoUrl?: string; error?: string }> {
+    if (!this.authToken) {
+      const recovered = await this.ensureAuthTokenIfOfflineSession();
+      if (!recovered || !this.authToken) {
+        return { success: false, error: 'An authenticated online session is required to upload a customer photo.' };
+      }
+    }
+    try {
+      const response = await fetch('/api/upload/photo', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.authToken}`,
+        },
+        body: JSON.stringify({ customerId, photoBase64 }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success || typeof result.photoUrl !== 'string') {
+        return { success: false, error: result.error || 'The server could not securely store this customer photo.' };
+      }
+
+      const customer = this.state.customers.find((item) => item.id === customerId);
+      if (customer) customer.photoUrl = result.photoUrl;
+      for (const approval of this.state.pendingApprovals || []) {
+        if (approval.customerId === customerId) approval.customerPhoto = result.photoUrl;
+      }
+      if (customer) this.queueOutboxItem('customer', customer.id, customer);
+      this.scheduleSaveState();
+      this.notify();
+      await this.pushStateToServer();
+      return { success: true, photoUrl: result.photoUrl };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Photo upload failed. Check the network and retry.' };
+    }
+  }
+
   private recordDeletionTombstone(collection: string, recordId: string, restaurantCode: string): void {
     if (!this.state.deletionTombstones) this.state.deletionTombstones = [];
     const exists = this.state.deletionTombstones.some(
@@ -3139,7 +3182,7 @@ export class RestoStore {
       restaurantCode: data.restaurantCode,
       name: data.name.trim(),
       phone: phoneClean,
-      photoUrl: data.photoUrl,
+      photoUrl: data.photoUrl?.startsWith('data:') ? '/src/assets/images/avatar_student_male_1790979380050.jpg' : data.photoUrl,
       idType: data.idType,
       idHash,
       idNumberMasked: data.idNumber.length > 5 ? `${data.idNumber.slice(0, 5)}****` : '****',
@@ -3570,6 +3613,7 @@ export class RestoStore {
     }
 
     if (updates.name) customer.name = updates.name.trim();
+    if (updates.photoUrl?.startsWith('data:')) return { success: false, error: 'Photo data must be uploaded through the authenticated photo service.' };
     if (updates.photoUrl) customer.photoUrl = updates.photoUrl;
     if (updates.occupation !== undefined) customer.occupation = updates.occupation;
     if (updates.isStudent !== undefined) customer.isStudent = updates.isStudent;
@@ -5604,7 +5648,7 @@ export class RestoStore {
       branchName: data.branchName || 'Main Campus Dining Hall',
       name: data.name.trim(),
       phone: data.phone.trim(),
-      photoUrl: data.photoUrl || '/src/assets/images/avatar_student_male_1790979380050.jpg',
+      photoUrl: data.photoUrl && !data.photoUrl.startsWith('data:') ? data.photoUrl : '/src/assets/images/avatar_student_male_1790979380050.jpg',
       idType: data.idType || 'Student ID',
       idHash: data.idNumber ? hashIdNumber(data.idType, data.idNumber) : '',
       idNumberMasked: data.idNumber ? (data.idNumber.length > 5 ? `${data.idNumber.slice(0, 5)}****` : '****') : '****',
