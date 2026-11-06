@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { restoStore } from '../../store/restoStore';
-import { PhotoCaptureInput } from '../common/PhotoCaptureInput';
 import {
   UserCheck,
   CheckCircle2,
@@ -53,7 +52,6 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
   // Student Identity Fields
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
-  const [photoUrl, setPhotoUrl] = useState('/src/assets/images/avatar_student_male_1790979380050.jpg');
   const [regNumber, setRegNumber] = useState('');
   const [institution, setInstitution] = useState(activeResto?.name?.includes('ULK') ? 'ULK' : 'University / College');
   const [programme, setProgramme] = useState('');
@@ -241,14 +239,6 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
                 <UserCheck className="w-3.5 h-3.5" />
                 <span>1. Personal &amp; Academic Identity</span>
               </div>
-
-              {/* Photo selfie / upload */}
-              <PhotoCaptureInput
-                photoUrl={photoUrl}
-                onChange={(url) => setPhotoUrl(url)}
-                label="Student Photo (Selfie or Passport Photo)"
-                required
-              />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
