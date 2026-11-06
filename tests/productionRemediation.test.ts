@@ -119,6 +119,65 @@ describe('Production Readiness Remediation & Hardening', () => {
     assert.ok(results.every((res) => res === true), 'All queued saves must complete successfully');
   });
 
+
+  test('offline outbox is acknowledged only after a successful server response and only for submitted entries', async () => {
+    const state = restoStore.getState();
+    const originalOutbox = state.syncOutbox;
+    const originalNetworkStatus = state.networkStatus;
+    const originalToken = restoStore.getAuthToken();
+    const originalFetch = globalThis.fetch;
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+
+    try {
+      state.syncOutbox = [];
+      state.networkStatus = 'online';
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: {} });
+      Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { onLine: true } });
+      restoStore.setAuthToken('test-session-token');
+
+      globalThis.fetch = (async () => ({
+        ok: false,
+        status: 503,
+        json: async () => ({ success: false }),
+      } as Response)) as typeof fetch;
+
+      restoStore.queueOutboxItem('customer', 'offline-customer-1', { id: 'offline-customer-1' });
+      const first = state.syncOutbox[0];
+      assert.equal(first.syncedToCloud, false, 'Online status alone must never mark a queued item synced');
+
+      await restoStore.pushStateToServer();
+      assert.equal(first.syncedToCloud, false, 'A failed server response must leave the item pending');
+
+      let createdDuringRequest: any;
+      globalThis.fetch = (async () => {
+        // This item is created after the request snapshot and must not be
+        // acknowledged by the response to the earlier request.
+        restoStore.queueOutboxItem('customer', 'offline-customer-2', { id: 'offline-customer-2' });
+        createdDuringRequest = state.syncOutbox[state.syncOutbox.length - 1];
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, serverState: null }),
+        } as Response;
+      }) as typeof fetch;
+
+      await restoStore.pushStateToServer();
+      assert.equal(first.syncedToCloud, true, 'The server-acknowledged item should be marked synced');
+      assert.ok(createdDuringRequest);
+      assert.equal(createdDuringRequest.syncedToCloud, false, 'Items created in-flight must remain pending');
+    } finally {
+      state.syncOutbox = originalOutbox;
+      state.networkStatus = originalNetworkStatus;
+      restoStore.setAuthToken(originalToken);
+      globalThis.fetch = originalFetch;
+      if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+      else delete (globalThis as any).window;
+      if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+      else delete (globalThis as any).navigator;
+    }
+  });
+
   test('QR replay protection reliably rejects duplicate scans of dynamic phone passes', () => {
     const { token, step } = generatePhoneToken('RW01', '28491', 1);
     const customerMap = {
