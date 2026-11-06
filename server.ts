@@ -2689,11 +2689,12 @@ function applySyncDeletionTombstones(state: any, incoming: any, user: UserSessio
  * restaurantCode; an existing record's tenant is immutable through generic sync.
  */
 function canMergeTenantScopedRecord(existing: any, incoming: any, allowedRestoCode: string | null): boolean {
-  if (!incoming || typeof incoming !== 'object' || typeof incoming.restaurantCode !== 'string' || !incoming.restaurantCode) {
-    return false;
-  }
+  if (!incoming || typeof incoming !== 'object') return false;
   if (allowedRestoCode && incoming.restaurantCode !== allowedRestoCode) return false;
   if (existing?.restaurantCode && existing.restaurantCode !== incoming.restaurantCode) return false;
+  // Platform-wide records (for example plan templates) may have no tenant.
+  // Tenant-owned records may never lose or change their restaurantCode.
+  if (existing?.restaurantCode && !incoming.restaurantCode) return false;
   return true;
 }
 
