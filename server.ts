@@ -785,6 +785,116 @@ app.get('/api/public/restaurants', apiRateLimiter, (_req, res) => {
   res.json({ success: true, restaurants: safeList });
 });
 
+// Public customer registration. Payment is deliberately excluded from this request;
+// the customer must visit reception for payment confirmation before partial activation.
+app.post('/api/public/customer/registration', apiRateLimiter, async (req, res) => {
+  if (!serverDbState) {
+    return res.status(503).json({ success: false, error: 'Registration service is not initialized. Please try again shortly.' });
+  }
+  const body = req.body || {};
+  const restaurantCode = typeof body.restaurantCode === 'string' ? body.restaurantCode.trim().toUpperCase() : '';
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  const phone = typeof body.phone === 'string' ? body.phone.trim() : '';
+  const idType = typeof body.idType === 'string' ? body.idType.trim() : '';
+  const idNumber = typeof body.idNumber === 'string' ? body.idNumber.trim() : '';
+  const isStudent = body.isStudent === true;
+  const registrationNumber = typeof body.registrationNumber === 'string' ? body.registrationNumber.trim() : '';
+  const institution = typeof body.institution === 'string' ? body.institution.trim() : '';
+  const programme = typeof body.programme === 'string' ? body.programme.trim() : '';
+  const year = Number(body.year);
+
+  if (!restaurantCode || name.length < 2 || name.length > 120 || phone.length < 7 || phone.length > 32 ||
+      !['student_id', 'national_id', 'passport'].includes(idType) || idNumber.length < 3 || idNumber.length > 80) {
+    return res.status(400).json({ success: false, error: 'Please provide valid name, phone number and identity details.' });
+  }
+  if (isStudent && (!registrationNumber || registrationNumber.length > 80 || !institution || institution.length > 120 || !programme || programme.length > 120 || !Number.isInteger(year) || year < 1 || year > 12)) {
+    return res.status(400).json({ success: false, error: 'Please complete the student institution, programme, year and registration number.' });
+  }
+
+  const restaurant = (serverDbState.restaurants || []).find((r: any) => r.code === restaurantCode && r.status !== 'inactive');
+  if (!restaurant) return res.status(404).json({ success: false, error: 'The selected dining facility is unavailable.' });
+
+  const normalizePhone = (value: string) => value.replace(/[^0-9]/g, '').replace(/^250/, '0');
+  const phoneKey = normalizePhone(phone);
+  const normalizedId = idNumber.replace(/[\\s-]/g, '').toUpperCase();
+  const idHash = crypto.createHash('sha256').update(`ID_SALT_RESTOPASS_RWANDA:${idType}:${normalizedId}`).digest('hex');
+  const customers = serverDbState.customers || [];
+  const duplicate = customers.find((c: any) =>
+    c.restaurantCode === restaurantCode &&
+    (normalizePhone(String(c.phone || '')) === phoneKey ||
+      c.idHash === idHash ||
+      (isStudent && c.isStudent && String(c.studentProfile?.registrationNumber || '').trim().toLowerCase() === registrationNumber.toLowerCase()))
+  );
+  if (duplicate) {
+    return res.status(409).json({ success: false, error: 'This phone number or identity is already registered at this dining facility. Please visit reception if you need help.' });
+  }
+
+  const branches = (serverDbState.branches || []).filter((b: any) => b.restaurantCode === restaurantCode && b.status !== 'inactive');
+  const branchId = typeof body.branchId === 'string' && branches.some((b: any) => b.id === body.branchId)
+    ? body.branchId : branches[0]?.id;
+  const branch = branches.find((b: any) => b.id === branchId);
+  const maxNo = customers.filter((c: any) => c.restaurantCode === restaurantCode)
+    .reduce((max: number, c: any) => Math.max(max, Number.parseInt(c.memberNo, 10) || 0), 28490);
+  const memberNo = String(maxNo + 1);
+  const now = new Date().toISOString();
+  const customerId = `cust_${crypto.randomUUID()}`;
+  const customer = {
+    id: customerId,
+    memberNo,
+    restaurantCode,
+    branchId: branch?.id,
+    branchName: branch?.name || restaurant.name,
+    name,
+    phone,
+    photoUrl: '/src/assets/images/avatar_student_male_1790979380050.jpg',
+    idType,
+    idHash,
+    idNumberMasked: normalizedId.length > 5 ? `${normalizedId.slice(0, 5)}****` : '****',
+    isStudent,
+    studentProfile: isStudent ? { institution, programme, year, registrationNumber } : undefined,
+    cardVersion: 1,
+    keyVersion: 1,
+    cardStatus: 'locked',
+    pinHash: '',
+    hasCustomPin: false,
+    provisionalStatus: 'pending_approval',
+    activationStatus: 'pending_reception_payment',
+    registrationStatus: 'pending_reception_payment',
+    receptionPaymentStatus: 'unpaid',
+    gracePlatesAllowed: 0,
+    gracePlatesConsumed: 0,
+    gracePlatesRemaining: 0,
+    cardReadyForPrint: false,
+    failedLoginAttempts: 0,
+    createdAt: now,
+    onboardingToken: `OB-${crypto.randomBytes(12).toString('hex').toUpperCase()}`,
+    consentSigned: true,
+  };
+  serverDbState.customers.push(customer);
+  if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
+  serverDbState.auditLogs.unshift({
+    id: `audit_${crypto.randomUUID()}`,
+    timestamp: now,
+    restaurantCode,
+    branchId: branch?.id,
+    branchName: branch?.name,
+    actorRole: 'customer',
+    actorName: name,
+    action: 'CUSTOMER_SELF_REGISTERED',
+    details: `Customer #${memberNo} submitted an online registration. Awaiting reception payment confirmation.`,
+  });
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    serverDbState.customers = customers.filter((c: any) => c.id !== customerId);
+    return res.status(503).json({ success: false, error: 'Registration could not be saved. Please retry or visit reception.' });
+  }
+  return res.status(201).json({
+    success: true,
+    customer: { id: customerId, memberNo, name, phone, restaurantCode, registrationStatus: 'pending_reception_payment' },
+    nextStep: 'Visit reception to pay and have your payment confirmed.',
+  });
+});
+
 /**
  * Production restaurant administrator credentials are tenant-specific. The
  * environment variable contains a JSON object keyed by restaurant code:
