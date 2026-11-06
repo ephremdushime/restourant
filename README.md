@@ -77,7 +77,7 @@ flowchart TB
 ### 2.1 Stand Scanner Station (`stand_staff`)
 - **Hardware & Camera Scanning**: Supports USB/Bluetooth HID barcode guns (auto-focused wedge input), GPU-accelerated browser `BarcodeDetector` camera scanning, and manual Member ID lookup.
 - **Rogue Wi-Fi Terminal Shield**: Only devices paired with a valid station pairing key (`PAIR-XXXX`) and active `CashierSession` can access the scanning screen.
-- **Reception Provisional Desk**: When the restaurant boss is away, cashiers can register new patrons or submit cash/mobile-money payment references for manual verification, granting up to **3 authorized grace meals** while awaiting boss approval.
+- **Reception Provisional Desk**: When the restaurant boss is away, cashiers can register new patrons or submit cash/mobile-money payment references for manual verification, granting up to **4 grace meals for new registrations** while awaiting Boss approval; existing top-ups retain their configured allowance.
 - **In-Person PIN & Activation Desk**: Issues 15-minute, single-use 6-digit activation and PIN-recovery codes after verifying a patron's physical Student ID or National ID.
 - **Shift Handover & Cash Reconciliation**: Tracks opening float, cash collected, plates served, and variance upon shift closure.
 
@@ -147,9 +147,9 @@ RestoPass separates **customer account status** from **individual transaction ap
 | :--- | :--- | :--- |
 | **Existing balance: `103` · Customer pays for `60` more** | Customer stays active; usable balance remains `103` while top-up is in the Boss Approval Room. | **`163`** (`103 + 60`) |
 | **Existing balance: `5` · Customer pays for `60` more** | Customer uses their remaining `5` paid credits first (`0` grace meals counted). If `2` meals are eaten while pending, balance becomes `3`. | **`63`** (`3 + 60` — no double-charging) |
-| **Existing balance: `0` · Customer pays for `60` more** | Payment enters Boss Approval Room. Customer can consume up to **3 authorized grace meals** while waiting. | **`60 - graceMealsConsumed`** (e.g. `58` if `2` grace meals used) |
-| **New customer registers & pays for `60`** | Registration + payment enter Boss Approval Room. Customer can consume up to **3 grace meals** immediately. | **`60 - graceMealsConsumed`** (e.g. `57` if `3` grace meals used); account & card activate |
-| **Balance is `0` & `3` grace meals already used** | No further grace meals are authorized until the Boss approves the pending payment (submitting a second pending top-up does **not** reset the grace counter). | Reconciled atomically per approved transaction |
+| **Existing balance: `0` · Customer pays for `60` more** | Payment enters Boss Approval Room. An existing customer can consume grace meals up to that top-up approval's configured allowance while waiting. | **`60 - graceMealsConsumed`** (e.g. `58` if `2` grace meals used) |
+| **New customer registers & pays for `60`** | Registration + payment enter Boss Approval Room. Customer can consume up to **4 grace meals** immediately after reception confirms payment. | **`60 - graceMealsConsumed`** (e.g. `56` if `4` grace meals used); account & card activate |
+| **Balance is `0` & the approval's grace allowance is fully used** | No further grace meals are authorized until the Boss approves the pending payment (submitting a second pending top-up does **not** reset the grace counter). | Reconciled atomically per approved transaction |
 
 ---
 

@@ -218,12 +218,56 @@ describe('Part 1: Top-Up, Approval-Linked Ledger, and Grace-Meal Accounting Scen
     assert.equal(fourthGrace.isGraceMeal, true);
 
     assert.equal(reg.approval.gracePlatesConsumed, 4);
+    assert.equal(newCustomer.gracePlatesRemaining, 0);
+
+    // A fifth pre-approval scan must be rejected without changing the paid package.
+    const fifthGraceAttempt = restoStore.processScan(cardToken);
+    assert.equal(fifthGraceAttempt.outcome, 'REJECTED');
+    assert.equal(fifthGraceAttempt.rejectionCode, 'NO_BALANCE');
+    assert.equal(reg.approval.gracePlatesConsumed, 4);
 
     // Boss approves -> Account activates with 60 - 4 = 56
     const apprRes = restoStore.approvePendingRequest(reg.approval.id, 'Restaurant Boss');
     assert.equal(apprRes.success, true);
     assert.equal(restoStore.getCustomerBalance(newCustomer.id), 56);
     assert.equal(newCustomer.provisionalStatus, 'approved');
+  });
+
+  test('Scenario 4b: Approval-specific grace count wins over a stale customer mirror and reconciles exactly once', () => {
+    const reg = restoStore.registerProvisionalCustomer({
+      restaurantCode: 'RW01',
+      name: 'New Student Patron 4b',
+      phone: `+250 788 ${Math.floor(100000 + Math.random() * 899999)}`,
+      idType: 'student_id',
+      idNumber: `STU-SCEN4B-${Date.now()}`,
+      isStudent: true,
+      platesRequested: 60,
+      amountRwf: 66000,
+      paymentMethod: 'mtn_momo',
+      paymentReference: `MOMO-SCEN4B-${Date.now()}`,
+      registeredByStaffId: 'staff_1',
+      registeredByStaffName: 'Cashier',
+      stationId: 'sp_1',
+      stationName: 'Stand 1',
+    });
+    const customer = reg.customer;
+    // One grace plate belongs to this approval. The customer mirror is intentionally stale.
+    reg.approval.gracePlatesConsumed = 1;
+    customer.gracePlatesConsumed = 4;
+
+    const approved = restoStore.approvePendingRequest(reg.approval.id, 'Restaurant Boss');
+    assert.equal(approved.success, true);
+    assert.equal(restoStore.getCustomerBalance(customer.id), 59);
+    assert.equal(restoStore.getState().ledgerEntries.filter((entry) =>
+      entry.idempotencyKey === `idemp_appr_grace_${reg.approval.id}`
+    ).length, 1);
+
+    const repeated = restoStore.approvePendingRequest(reg.approval.id, 'Restaurant Boss');
+    assert.equal(repeated.success, false);
+    assert.equal(restoStore.getCustomerBalance(customer.id), 59);
+    assert.equal(restoStore.getState().ledgerEntries.filter((entry) =>
+      entry.idempotencyKey === `idemp_appr_grace_${reg.approval.id}`
+    ).length, 1);
   });
 
   test('Scenario 5: Existing customer has 0 balance and already used 3 grace meals -> No more grace meals authorized even if a second pending top-up is submitted', () => {
