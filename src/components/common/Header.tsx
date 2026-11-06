@@ -259,7 +259,7 @@ export const Header: React.FC<HeaderProps> = ({
             ZONE 2: Executive Controls & Authenticated Profile Menu
            ======================================================== */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-          {isSessionActive && isDemoMode && onToggleDemoMode && (
+          {import.meta.env.DEV && isSessionActive && isDemoMode && onToggleDemoMode && (
             <button
               type="button"
               onClick={onToggleDemoMode}
@@ -391,7 +391,7 @@ export const Header: React.FC<HeaderProps> = ({
                     </div>
 
                     {/* Demo Mode Toggle */}
-                    {onToggleDemoMode && (
+                    {import.meta.env.DEV && onToggleDemoMode && (
                       <div className="px-2 py-2 border-b border-slate-800">
                         <button
                           type="button"

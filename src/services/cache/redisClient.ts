@@ -7,12 +7,98 @@
  */
 
 import Redis from 'ioredis';
+import crypto from 'node:crypto';
 
 let redisInstance: Redis | null = null;
+const memoryRateLimits = new Map<string, { count: number; resetAt: number }>();
 const memoryReplayCache = new Map<string, number>();
+const memoryRevokedSessions = new Map<string, number>();
+
+
+export type RateLimitResult =
+  | { allowed: true; remaining: number; retryAfterSeconds: number; available: true }
+  | { allowed: false; remaining: 0; retryAfterSeconds: number; available: true }
+  | { allowed: false; remaining: 0; retryAfterSeconds: number; available: false };
+
+/**
+ * Distributed fixed-window rate limiting. Redis INCR + first-write PEXPIRE
+ * execute atomically in Lua so multiple application instances share one quota.
+ * If Redis is configured but unavailable, callers must fail closed.
+ */
+export async function consumeRateLimit(
+  bucket: string,
+  subject: string,
+  maxRequests: number,
+  windowMs: number
+): Promise<RateLimitResult> {
+  const safeBucket = bucket.replace(/[^a-zA-Z0-9:_-]/g, '_').slice(0, 80);
+  const safeSubject = crypto.createHash('sha256').update(subject).digest('hex');
+  const safeMax = Math.max(1, Math.floor(maxRequests));
+  const safeWindow = Math.max(1000, Math.floor(windowMs));
+  const client = getRedisClient();
+
+  if (isRedisConfigured()) {
+    if (!client) {
+      return { allowed: false, remaining: 0, retryAfterSeconds: Math.ceil(safeWindow / 1000), available: false };
+    }
+    try {
+      if (client.status !== 'ready') await client.ping();
+      const result = await client.eval(
+        `local count = redis.call('INCR', KEYS[1])
+         if count == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
+         local ttl = redis.call('PTTL', KEYS[1])
+         return { count, ttl }`,
+        1,
+        `restopass:rate:${safeBucket}:${safeSubject}`,
+        String(safeWindow)
+      ) as [number, number];
+      const count = Number(result?.[0] || 0);
+      const ttl = Math.max(1000, Number(result?.[1] || safeWindow));
+      const retryAfterSeconds = Math.max(1, Math.ceil(ttl / 1000));
+      if (!Number.isFinite(count) || count < 1) throw new Error('Redis returned an invalid rate-limit counter.');
+      if (count > safeMax) {
+        return { allowed: false, remaining: 0, retryAfterSeconds, available: true };
+      }
+      return { allowed: true, remaining: Math.max(0, safeMax - count), retryAfterSeconds, available: true };
+    } catch (err: any) {
+      console.error('[Redis Rate Limiter] Distributed rate limit unavailable:', err?.message || err);
+      return { allowed: false, remaining: 0, retryAfterSeconds: Math.ceil(safeWindow / 1000), available: false };
+    }
+  }
+
+  // Standalone/local deployments are single-process by design.
+  const now = Date.now();
+  if (memoryRateLimits.size > 5000) {
+    for (const [key, value] of memoryRateLimits.entries()) {
+      if (now >= value.resetAt) memoryRateLimits.delete(key);
+    }
+  }
+  const memoryKey = `${safeBucket}:${safeSubject}`;
+  const existing = memoryRateLimits.get(memoryKey);
+  const record = !existing || now >= existing.resetAt
+    ? { count: 1, resetAt: now + safeWindow }
+    : { count: existing.count + 1, resetAt: existing.resetAt };
+  memoryRateLimits.set(memoryKey, record);
+  const retryAfterSeconds = Math.max(1, Math.ceil((record.resetAt - now) / 1000));
+  if (record.count > safeMax) {
+    return { allowed: false, remaining: 0, retryAfterSeconds, available: true };
+  }
+  return { allowed: true, remaining: Math.max(0, safeMax - record.count), retryAfterSeconds, available: true };
+}
 
 export function isRedisConfigured(): boolean {
   return Boolean(process.env.REDIS_URL);
+}
+
+export async function checkRedisReady(): Promise<boolean> {
+  const client = getRedisClient();
+  if (!client) return false;
+  try {
+    return (await client.ping()) === 'PONG';
+  } catch (err: any) {
+    console.error('[Redis Replay Guard] Readiness check failed:', err?.message || err);
+    return false;
+  }
 }
 
 export function getRedisClient(): Redis | null {
@@ -40,7 +126,7 @@ export function getRedisClient(): Redis | null {
       });
 
       redisInstance.connect().catch((err) => {
-        console.error('[Redis Replay Guard] Initial connection failed; replay-protected actions will be rejected:', err.message);
+        console.warn('[Redis Replay Guard] Initial connection failed; distributed replay protection remains unavailable:', err.message);
       });
     } catch (err: any) {
       console.error('[Redis Replay Guard] Failed to initialize Redis client:', err.message);
@@ -49,6 +135,47 @@ export function getRedisClient(): Redis | null {
   }
 
   return redisInstance;
+}
+
+
+/**
+ * Durable session revocation for cloud deployments. Only a one-way digest of
+ * the bearer token is stored; raw session credentials are never written to Redis.
+ */
+export async function revokeSessionToken(tokenDigest: string, ttlSeconds: number): Promise<boolean> {
+  const safeTtl = Math.max(1, Math.min(Math.floor(ttlSeconds), 24 * 60 * 60));
+  const client = getRedisClient();
+  if (isRedisConfigured()) {
+    if (!client) return false;
+    try {
+      if (client.status !== 'ready') await client.ping();
+      if (client.status !== 'ready') return false;
+      return (await client.set(`revoked_session:${tokenDigest}`, '1', 'EX', safeTtl)) === 'OK';
+    } catch (err: any) {
+      console.error('[Redis Session Revocation] Failed to persist revocation:', err?.message || err);
+      return false;
+    }
+  }
+  memoryRevokedSessions.set(tokenDigest, Date.now() + safeTtl * 1000);
+  return true;
+}
+
+export async function isSessionTokenRevoked(tokenDigest: string): Promise<{ revoked: boolean; available: boolean }> {
+  const client = getRedisClient();
+  if (isRedisConfigured()) {
+    if (!client) return { revoked: false, available: false };
+    try {
+      if (client.status !== 'ready') await client.ping();
+      if (client.status !== 'ready') return { revoked: false, available: false };
+      return { revoked: (await client.exists(`revoked_session:${tokenDigest}`)) === 1, available: true };
+    } catch (err: any) {
+      console.error('[Redis Session Revocation] Lookup failed:', err?.message || err);
+      return { revoked: false, available: false };
+    }
+  }
+  const expiresAt = memoryRevokedSessions.get(tokenDigest) || 0;
+  if (expiresAt <= Date.now()) memoryRevokedSessions.delete(tokenDigest);
+  return { revoked: expiresAt > Date.now(), available: true };
 }
 
 /**
@@ -74,24 +201,31 @@ export async function recordTokenScan(
     return { allowed: false, reason: 'INVALID_TTL' };
   }
   const client = getRedisClient();
-  if (!client || client.status !== 'ready') {
-    if (process.env.NODE_ENV === 'production') {
-      return { allowed: false, reason: 'REPLAY_GUARD_UNAVAILABLE' };
-    }
-  } else try {
-    const redisKey = `qr_pass:${tokenKey}`;
-    const res = await client.set(redisKey, '1', 'EX', ttlSeconds, 'NX');
-    return res === 'OK'
-      ? { allowed: true }
-      : { allowed: false, reason: 'REPLAY_DETECTED' };
-  } catch (err: any) {
-    console.error('[Redis Replay Guard] Atomic SET NX failed:', err.message);
-    if (process.env.NODE_ENV === 'production') {
-      return { allowed: false, reason: 'REPLAY_GUARD_UNAVAILABLE' };
+  if (client && client.status === 'ready') {
+    try {
+      const redisKey = `qr_pass:${tokenKey}`;
+      // SET key value EX seconds NX (atomic write if Not eXists)
+      const res = await client.set(redisKey, '1', 'EX', ttlSeconds, 'NX');
+      if (res === 'OK') {
+        return { allowed: true };
+      }
+      return {
+        allowed: false,
+        reason: 'REPLAY_DETECTED',
+      };
+    } catch (err: any) {
+      console.warn('[Redis Replay Guard] Redis query failed; distributed replay protection remains unavailable:', err.message);
+      if (process.env.NODE_ENV === 'production' || isRedisConfigured()) {
+        return { allowed: false, reason: 'REPLAY_GUARD_UNAVAILABLE' };
+      }
     }
   }
 
-  // Process-local fallback is for development and offline test mode only.
+  // In-memory fallback is safe only for an explicitly local/single-process deployment.
+  // If Redis was configured (or running in production without standalone override) and is unavailable, fail closed.
+  if (isRedisConfigured() || (process.env.NODE_ENV === 'production' && process.env.RESTOPASS_DEPLOYMENT_MODE !== 'standalone')) {
+    return { allowed: false, reason: 'REPLAY_GUARD_UNAVAILABLE' };
+  }
   const now = Date.now();
   pruneMemoryCache(now);
   const existingExpire = memoryReplayCache.get(tokenKey);
@@ -126,7 +260,9 @@ export async function isTokenUsed(tokenKey: string): Promise<boolean> {
  * Resets memory cache (useful for automated testing)
  */
 export function resetMemoryCache(): void {
+  memoryRateLimits.clear();
   memoryReplayCache.clear();
+  memoryRevokedSessions.clear();
 }
 
 /**
@@ -154,6 +290,7 @@ export async function closeRedis(): Promise<void> {
     }
     redisInstance = null;
   }
+  memoryRateLimits.clear();
   memoryReplayCache.clear();
 }
 
@@ -185,4 +322,16 @@ export async function ensureRedisReady(timeoutMs = 10000): Promise<boolean> {
       client.connect().catch(() => finish(false));
     }
   });
+}
+
+export async function checkDistributedRateLimit(
+  bucketKey: string,
+  maxAttempts: number,
+  windowMs: number
+): Promise<{ allowed: boolean; retryAfterSec?: number }> {
+  const result = await consumeRateLimit(bucketKey, bucketKey, maxAttempts, windowMs);
+  return {
+    allowed: result.allowed,
+    retryAfterSec: result.allowed ? undefined : result.retryAfterSeconds,
+  };
 }

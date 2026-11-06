@@ -19,6 +19,7 @@ import { translations } from '../../services/i18n';
 import { CardPrintStudio } from './CardPrintStudio';
 import { ExportTransactionsModal } from './ExportTransactionsModal';
 import { PhotoCaptureInput } from '../common/PhotoCaptureInput';
+import { PrivatePhoto } from '../common/PrivatePhoto';
 import { PricingAnalyticsDashboard } from './PricingAnalyticsDashboard';
 import { BossApprovalsManager } from './BossApprovalsManager';
 import { BranchesAndStationsManager } from './BranchesAndStationsManager';
@@ -465,8 +466,14 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
       return;
     }
 
+    const capturedPhoto = regPhotoUrl.startsWith('data:') ? regPhotoUrl : null;
+    const fallbackPhoto = '/src/assets/images/avatar_student_male_1790979380050.jpg';
     const result = await restoStore.registerProvisionalCustomerAuthoritative({
-      name: regName, phone: regPhone, photoUrl: regPhotoUrl, idType: regIdType, idNumber: regIdNumber,
+      name: regName,
+      phone: regPhone,
+      photoUrl: capturedPhoto ? fallbackPhoto : regPhotoUrl,
+      idType: regIdType,
+      idNumber: regIdNumber,
       isStudent: regIsStudent,
       studentProfile: regIsStudent ? {
         institution: regInstitution, programme: regProgramme, year: Number(regYear), registrationNumber: regRegNumber,
@@ -477,10 +484,21 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
     });
 
     if (result.success && result.customer) {
-      setRegSuccess(`Registration #${result.customer.memberNo} was recorded and sent to the Boss Approval queue. Up to 3 grace meals are available while payment is verified.`);
+      let successMessage = `Registration #${result.customer.memberNo} was recorded and sent to the Boss Approval queue. Up to 4 grace meals are available while payment is verified.`;
+      if (capturedPhoto) {
+        await restoStore.pushStateToServer();
+        const photoResult = await restoStore.uploadCustomerPhoto(result.customer.id, capturedPhoto);
+        if (!photoResult.success) {
+          setRegError(`Registration succeeded, but the portrait was not saved: ${photoResult.error || 'Upload unavailable'}. You can retry the photo from the customer profile.`);
+        } else {
+          successMessage += ' Portrait stored privately.';
+        }
+      }
+      setRegSuccess(successMessage);
       setRegName('');
       setRegPhone('+250 78');
       setRegIdNumber('');
+      setRegPhotoUrl(fallbackPhoto);
       setRegPaymentRef('MOMO-' + Math.floor(1000000 + Math.random() * 9000000));
     } else {
       setRegError(result.error || 'Registration failed');
@@ -791,7 +809,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
     if (success) {
       setManageCustomer(null);
       setDeleteCustomerConfirmOpen(false);
-      setActionToast(`Permanently deleted customer account #${cust.memberNo} (${cust.name}). All badges and credentials revoked.`);
+      setActionToast(`Removed customer account #${cust.memberNo} (${cust.name}) from active rosters. Credentials revoked; transaction history retained.`);
       setTimeout(() => setActionToast(null), 4000);
     }
   };
@@ -1411,7 +1429,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
                   {overviewPendingList.map((appr) => {
                     const cust = state.customers.find((c) => c.id === appr.customerId);
-                    const graceMeals = appr.gracePlatesConsumed || cust?.gracePlatesConsumed || 0;
+                    const graceMeals = typeof appr.gracePlatesConsumed === 'number' ? appr.gracePlatesConsumed : (cust?.gracePlatesConsumed || 0);
                     const isCopied = copiedOverviewRef === appr.id;
 
                     return (
@@ -1421,7 +1439,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex items-center gap-3">
-                            <img
+                            <PrivatePhoto
                               src={appr.customerPhoto || cust?.photoUrl || '/src/assets/images/avatar_patron_male_1790979396731.jpg'}
                               alt={appr.customerName}
                               className="w-10 h-10 rounded-full object-cover border-2 border-amber-500/60"
@@ -2097,7 +2115,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                           onClick={() => openManageCustomer(cust, 'cards')}
                           className="flex items-center gap-3 cursor-pointer group"
                         >
-                          <img
+                          <PrivatePhoto
                             src={cust.photoUrl}
                             alt=""
                             className="w-10 h-10 rounded-lg object-cover border border-slate-700 group-hover:border-emerald-500 transition-colors"
@@ -2646,7 +2664,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                                 </span>
                               ) : targetCust ? (
                                 <div className="flex items-center gap-2">
-                                  <img src={targetCust.photoUrl} alt="" className="w-6 h-6 rounded-md object-cover" />
+                                  <PrivatePhoto src={targetCust.photoUrl} alt="" className="w-6 h-6 rounded-md object-cover" />
                                   <div>
                                     <div className="font-semibold text-white text-[11px]">{targetCust.name}</div>
                                     <div className="text-slate-500 font-mono text-[10px]">#{targetCust.memberNo}</div>
@@ -4454,7 +4472,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
             {/* Modal Header */}
             <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/90">
               <div className="flex items-center gap-3.5">
-                <img
+                <PrivatePhoto
                   src={manageCustomer.photoUrl}
                   alt={manageCustomer.name}
                   className="w-12 h-12 rounded-xl object-cover border border-slate-700 shadow-md shrink-0"
@@ -4796,7 +4814,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                   <div>
                     <label className="font-semibold text-slate-300 block mb-1">Member Photo</label>
                     <div className="flex items-center gap-3">
-                      <img
+                      <PrivatePhoto
                         src={editPhotoUrl}
                         alt="Preview"
                         className="w-14 h-14 rounded-xl object-cover border border-slate-700 shrink-0"
@@ -5532,11 +5550,10 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
           <div className="bg-slate-900 border border-rose-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
             <div className="flex items-center gap-3 text-rose-400">
               <AlertTriangle className="w-6 h-6 shrink-0" />
-              <h3 className="text-base font-bold text-white">Permanently Delete Member?</h3>
+              <h3 className="text-base font-bold text-white">Remove Member Account?</h3>
             </div>
             <p className="text-xs text-slate-300 leading-relaxed">
-              Are you sure you want to delete member <strong>{manageCustomer.name} (#{manageCustomer.memberNo})</strong>?
-              This action will revoke physical card V{manageCustomer.cardVersion}, digital passes, and remove their account from active cafeteria rosters.
+              Are you sure you want to remove <strong>{manageCustomer.name} (#{manageCustomer.memberNo})</strong> from active cafeteria rosters? Their card and digital access will be revoked. Transaction and audit history will be retained.
             </p>
             <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
               <button
@@ -5626,7 +5643,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
 
             <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <img
+                <PrivatePhoto
                   src={overviewApprovedModal.customer.photoUrl}
                   alt={overviewApprovedModal.customer.name}
                   className="w-11 h-11 rounded-xl object-cover border border-slate-700"

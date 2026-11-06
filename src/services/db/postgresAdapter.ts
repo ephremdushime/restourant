@@ -1,7 +1,7 @@
 /**
  * RestoPass PostgreSQL Relational Persistence Adapter
  * 
- * Provides production-grade relational persistence for 50,000 DAU multi-tenant campus workloads.
+ * Provides production-grade relational persistence for single-instance pilot multi-tenant campus workloads.
  * When DATABASE_URL is configured, all authoritative state is persisted to PostgreSQL
  * with strict constraints (including UNIQUE idempotency_key on ledger_entries).
  * When DATABASE_URL is omitted, the application falls back automatically to local atomic JSON persistence
@@ -11,12 +11,27 @@
 import { Pool, PoolConfig } from 'pg';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'node:url';
+
+const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 
 let pool: Pool | null = null;
 let isInitialized = false;
 
 export function isPostgresConfigured(): boolean {
   return Boolean(process.env.DATABASE_URL || process.env.POSTGRES_URL);
+}
+
+export async function checkPostgresReady(): Promise<boolean> {
+  const p = getPostgresPool();
+  if (!p || !isInitialized) return false;
+  try {
+    await p.query('SELECT 1');
+    return true;
+  } catch (err) {
+    console.error('[PostgreSQL Adapter] Readiness check failed:', err);
+    return false;
+  }
 }
 
 export function getPostgresPool(): Pool | null {
@@ -33,10 +48,21 @@ export function getPostgresPool(): Pool | null {
       connectionTimeoutMillis: 5000,
     };
 
-    if (sslMode === 'disable' || isLocalhost) {
+    // Never disable certificate verification implicitly for remote databases.
+    // Local development may explicitly opt out; production should use provider CA trust.
+    if (sslMode === 'disable') {
+      if (process.env.NODE_ENV === 'production' && process.env.ALLOW_INSECURE_DB_TLS !== 'true') {
+        throw new Error('PGSSLMODE=disable is forbidden in production.');
+      }
       poolConfig.ssl = false;
-    } else {
+    } else if (sslMode === 'verify-full' || sslMode === 'verify-ca' || (!isLocalhost && process.env.NODE_ENV === 'production')) {
       poolConfig.ssl = { rejectUnauthorized: true };
+    } else if (sslMode === 'require') {
+      // "require" encrypts the connection but does not validate the server identity.
+      // Prefer verify-full with the database provider's CA certificate in production.
+      poolConfig.ssl = { rejectUnauthorized: false };
+    } else {
+      poolConfig.ssl = false;
     }
 
     pool = new Pool(poolConfig);
@@ -59,17 +85,20 @@ export async function initPostgres(initialStateToMigrate?: any): Promise<boolean
   }
 
   try {
-    // Resolve from the application root so ESM/tsx runtimes do not depend on CommonJS __dirname.
-    const schemaPath = path.resolve(process.cwd(), 'src/services/db/schema.sql');
+    const candidateModulePath = path.resolve(moduleDirectory, 'schema.sql');
+    const schemaPath = fs.existsSync(candidateModulePath)
+      ? candidateModulePath
+      : path.resolve(process.cwd(), 'src/services/db/schema.sql');
     let ddl = '';
     if (fs.existsSync(schemaPath)) {
       ddl = fs.readFileSync(schemaPath, 'utf-8');
     }
 
-    if (ddl) {
-      await p.query(ddl);
-      console.log('[PostgreSQL Adapter] Relational schema and indexes verified successfully.');
+    if (!ddl.trim()) {
+      throw new Error('PostgreSQL schema.sql was not found; refusing to start with an uninitialized database.');
     }
+    await p.query(ddl);
+    console.log('[PostgreSQL Adapter] Relational schema and indexes verified successfully.');
 
     isInitialized = true;
 
@@ -78,7 +107,8 @@ export async function initPostgres(initialStateToMigrate?: any): Promise<boolean
       const { rows } = await p.query('SELECT COUNT(*) as count FROM restaurants');
       if (Number(rows[0]?.count || 0) === 0) {
         console.log('[PostgreSQL Adapter] Database is empty. Auto-migrating flat-file state to PostgreSQL...');
-        await saveStateToPostgres(initialStateToMigrate);
+        const migrated = await saveStateToPostgres(initialStateToMigrate);
+        if (!migrated) throw new Error('Initial state migration failed; refusing to continue with an empty PostgreSQL authority.');
         console.log('[PostgreSQL Adapter] Auto-migration to PostgreSQL complete.');
       }
     }
@@ -176,8 +206,38 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         activationRequests: settingsMap.get('activationRequests') || [],
         pinRecoveryRequests: settingsMap.get('pinRecoveryRequests') || [],
         studentSubscriptionPayments: settingsMap.get('studentSubscriptionPayments') || [],
+        restaurantSubscriptions: settingsMap.get('restaurantSubscriptions') || [],
+        restaurantSubscriptionPayments: settingsMap.get('restaurantSubscriptionPayments') || [],
+        subscriptionPayments: settingsMap.get('subscriptionPayments') || [],
+        activationCodes: settingsMap.get('activationCodes') || [],
+        deletionTombstones: settingsMap.get('deletionTombstones') || [],
         usedTokens: [],
       };
+
+      // Tombstones hide deleted operational records without erasing financial
+      // history. Reapply them on every database hydration so old rows cannot
+      // silently resurrect after a restart or restore.
+      const tombstoneCollections: Record<string, string> = {
+        customers: 'customers',
+        stationUsers: 'stationUsers',
+        branches: 'branches',
+        packages: 'packages',
+        menuItems: 'menuItems',
+        scanPoints: 'scanPoints',
+        cashierSessions: 'cashierSessions',
+      };
+      const deletedKeys = new Set(
+        (state.deletionTombstones as any[])
+          .filter((item) => item && tombstoneCollections[item.collection] && item.recordId && item.restaurantCode)
+          .map((item) => `${item.collection}:${item.restaurantCode}:${item.recordId}`)
+      );
+      for (const [collection, stateKey] of Object.entries(tombstoneCollections)) {
+        if (Array.isArray(state[stateKey])) {
+          state[stateKey] = state[stateKey].filter(
+            (item: any) => !deletedKeys.has(`${collection}:${item.restaurantCode}:${item.id}`)
+          );
+        }
+      }
 
       console.log(`[PostgreSQL Adapter] Hydrated state: ${state.restaurants.length} restaurants, ${state.customers.length} patrons, ${state.ledgerEntries.length} ledger entries.`);
       return state;
@@ -278,20 +338,111 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
       }
     }
 
-    // 3a. Individually provisioned station staff accounts. Credential fields are
-    // already scrypt-hashed by the server before this persistence boundary.
+    // 3a. Commercial licenses
+    if (Array.isArray(state.licenses)) {
+      for (const item of state.licenses) {
+        if (!item?.id || !item?.restaurantCode) continue;
+        await client.query(
+          `INSERT INTO licenses (id, restaurant_code, plan_id, valid_until, data)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (id) DO UPDATE SET restaurant_code = EXCLUDED.restaurant_code, plan_id = EXCLUDED.plan_id, valid_until = EXCLUDED.valid_until, data = EXCLUDED.data`,
+          [item.id, item.restaurantCode, item.planId || item.plan || 'default', item.validUntil || item.expiresAt || new Date(0).toISOString(), JSON.stringify(item)]
+        );
+      }
+    }
+
+    // 3b. Existing payment records (meal top-ups and other restaurant-side payments)
+    if (Array.isArray(state.payments)) {
+      for (const item of state.payments) {
+        if (!item?.id || !item?.restaurantCode || !Number.isSafeInteger(Number(item.amountRwf ?? item.amount ?? 0))) continue;
+        await client.query(
+          `INSERT INTO payments (id, restaurant_code, customer_id, amount_rwf, data)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (id) DO UPDATE SET customer_id = EXCLUDED.customer_id, amount_rwf = EXCLUDED.amount_rwf, data = EXCLUDED.data`,
+          [item.id, item.restaurantCode, item.customerId || null, Number(item.amountRwf ?? item.amount ?? 0), JSON.stringify(item)]
+        );
+      }
+    }
+
+    // 3c. Scan events
+    if (Array.isArray(state.scanEvents)) {
+      for (const item of state.scanEvents) {
+        if (!item?.id || !item?.restaurantCode || !item?.customerId) continue;
+        await client.query(
+          `INSERT INTO scan_events (id, restaurant_code, customer_id, station_id, status, data)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (id) DO UPDATE SET station_id = EXCLUDED.station_id, status = EXCLUDED.status, data = EXCLUDED.data`,
+          [item.id, item.restaurantCode, item.customerId, item.stationId || null, item.status || 'recorded', JSON.stringify(item)]
+        );
+      }
+    }
+
+    // 3d. Branches and station users
+    if (Array.isArray(state.branches)) {
+      for (const item of state.branches) {
+        if (!item?.id || !item?.restaurantCode) continue;
+        await client.query(
+          `INSERT INTO branches (id, restaurant_code, code, name, data)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (id) DO UPDATE SET restaurant_code = EXCLUDED.restaurant_code, code = EXCLUDED.code, name = EXCLUDED.name, data = EXCLUDED.data`,
+          [item.id, item.restaurantCode, item.code || item.id, item.name || 'Branch', JSON.stringify(item)]
+        );
+      }
+    }
     if (Array.isArray(state.stationUsers)) {
-      for (const u of state.stationUsers) {
-        if (!u?.id || !u?.restaurantCode || !u?.username) continue;
+      for (const item of state.stationUsers) {
+        if (!item?.id || !item?.restaurantCode || !item?.username) continue;
         await client.query(
           `INSERT INTO station_users (id, restaurant_code, username, role, data)
            VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (id) DO UPDATE
-           SET restaurant_code = EXCLUDED.restaurant_code,
-               username = EXCLUDED.username,
-               role = EXCLUDED.role,
-               data = EXCLUDED.data`,
-          [u.id, u.restaurantCode, u.username, u.role || 'stand_staff', JSON.stringify(u)]
+           ON CONFLICT (id) DO UPDATE SET restaurant_code = EXCLUDED.restaurant_code, username = EXCLUDED.username, role = EXCLUDED.role, data = EXCLUDED.data`,
+          [item.id, item.restaurantCode, item.username, item.role || 'stand_staff', JSON.stringify(item)]
+        );
+      }
+    }
+
+    // 3e. Notifications, expenses, transfers and audit records
+    if (Array.isArray(state.notifications)) {
+      for (const item of state.notifications) {
+        if (!item?.id || !item?.restaurantCode) continue;
+        await client.query(
+          `INSERT INTO notifications (id, restaurant_code, recipient_id, data)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (id) DO UPDATE SET recipient_id = EXCLUDED.recipient_id, data = EXCLUDED.data`,
+          [item.id, item.restaurantCode, item.target === 'all' ? null : (item.target || item.recipientId || item.customerId || null), JSON.stringify(item)]
+        );
+      }
+    }
+    if (Array.isArray(state.expenses)) {
+      for (const item of state.expenses) {
+        if (!item?.id || !item?.restaurantCode) continue;
+        await client.query(
+          `INSERT INTO expenses (id, restaurant_code, amount_rwf, data)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (id) DO UPDATE SET amount_rwf = EXCLUDED.amount_rwf, data = EXCLUDED.data`,
+          [item.id, item.restaurantCode, Number(item.amountRwf ?? item.amount ?? 0), JSON.stringify(item)]
+        );
+      }
+    }
+    if (Array.isArray(state.transfers)) {
+      for (const item of state.transfers) {
+        if (!item?.id || !item?.restaurantCode || !item?.senderCustomerId || !item?.recipientCustomerId) continue;
+        await client.query(
+          `INSERT INTO transfers (id, restaurant_code, sender_customer_id, recipient_customer_id, plates, data, idempotency_key)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (id) DO UPDATE SET plates = EXCLUDED.plates, data = EXCLUDED.data`,
+          [item.id, item.restaurantCode, item.senderCustomerId, item.recipientCustomerId, Number(item.plates || 0), JSON.stringify(item), item.idempotencyKey || item.id]
+        );
+      }
+    }
+    if (Array.isArray(state.auditLogs)) {
+      for (const item of state.auditLogs) {
+        if (!item?.id || !item?.action) continue;
+        await client.query(
+          `INSERT INTO audit_logs (id, restaurant_code, user_id, action, data)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (id) DO NOTHING`,
+          [item.id, item.restaurantCode || 'GLOBAL', item.userId || item.actorId || item.actorName || null, item.action, JSON.stringify(item)]
         );
       }
     }
@@ -338,136 +489,6 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
       }
     }
 
-    // 6a. Licenses
-    if (Array.isArray(state.licenses)) {
-      for (const lic of state.licenses) {
-        if (!lic?.id || !lic?.restaurantCode) continue;
-        await client.query(
-          `INSERT INTO licenses (id, restaurant_code, plan_id, valid_until, data)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (id) DO UPDATE
-           SET restaurant_code = EXCLUDED.restaurant_code,
-               plan_id = EXCLUDED.plan_id,
-               valid_until = EXCLUDED.valid_until,
-               data = EXCLUDED.data`,
-          [
-            lic.id,
-            lic.restaurantCode,
-            lic.planId || 'enterprise',
-            lic.validUntil || new Date(Date.now() + 30 * 86400000).toISOString(),
-            JSON.stringify(lic),
-          ]
-        );
-      }
-    }
-
-    // 6b. Payments
-    if (Array.isArray(state.payments)) {
-      for (const pmt of state.payments) {
-        if (!pmt?.id || !pmt?.restaurantCode) continue;
-        await client.query(
-          `INSERT INTO payments (id, restaurant_code, customer_id, amount_rwf, data)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (id) DO UPDATE
-           SET amount_rwf = EXCLUDED.amount_rwf, data = EXCLUDED.data`,
-          [pmt.id, pmt.restaurantCode, pmt.customerId || null, Number(pmt.amountRwf || 0), JSON.stringify(pmt)]
-        );
-      }
-    }
-
-    // 6c. Scan Events
-    if (Array.isArray(state.scanEvents)) {
-      for (const se of state.scanEvents) {
-        if (!se?.id || !se?.restaurantCode || !se?.customerId) continue;
-        await client.query(
-          `INSERT INTO scan_events (id, restaurant_code, customer_id, station_id, status, data)
-           VALUES ($1, $2, $3, $4, $5, $6)
-           ON CONFLICT (id) DO UPDATE
-           SET status = EXCLUDED.status, data = EXCLUDED.data`,
-          [se.id, se.restaurantCode, se.customerId, se.stationId || null, se.status || 'accepted', JSON.stringify(se)]
-        );
-      }
-    }
-
-    // 6d. Branches
-    if (Array.isArray(state.branches)) {
-      for (const br of state.branches) {
-        if (!br?.id || !br?.restaurantCode) continue;
-        await client.query(
-          `INSERT INTO branches (id, restaurant_code, code, name, data)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (id) DO UPDATE
-           SET restaurant_code = EXCLUDED.restaurant_code,
-               code = EXCLUDED.code,
-               name = EXCLUDED.name,
-               data = EXCLUDED.data`,
-          [br.id, br.restaurantCode, br.code || br.id, br.name || 'Branch', JSON.stringify(br)]
-        );
-      }
-    }
-
-    // 6e. Notifications
-    if (Array.isArray(state.notifications)) {
-      for (const nf of state.notifications) {
-        if (!nf?.id || !nf?.restaurantCode) continue;
-        await client.query(
-          `INSERT INTO notifications (id, restaurant_code, recipient_id, data)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (id) DO UPDATE
-           SET data = EXCLUDED.data`,
-          [nf.id, nf.restaurantCode, nf.recipientId || nf.customerId || null, JSON.stringify(nf)]
-        );
-      }
-    }
-
-    // 6f. Expenses
-    if (Array.isArray(state.expenses)) {
-      for (const exp of state.expenses) {
-        if (!exp?.id || !exp?.restaurantCode) continue;
-        await client.query(
-          `INSERT INTO expenses (id, restaurant_code, amount_rwf, data)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (id) DO UPDATE
-           SET amount_rwf = EXCLUDED.amount_rwf, data = EXCLUDED.data`,
-          [exp.id, exp.restaurantCode, Number(exp.amountRwf || exp.amount || 0), JSON.stringify(exp)]
-        );
-      }
-    }
-
-    // 6g. Transfers
-    if (Array.isArray(state.transfers)) {
-      for (const tr of state.transfers) {
-        if (!tr?.id || !tr?.restaurantCode || !tr?.senderCustomerId || !tr?.recipientCustomerId) continue;
-        await client.query(
-          `INSERT INTO transfers (id, restaurant_code, sender_customer_id, recipient_customer_id, plates, idempotency_key, data)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
-           ON CONFLICT (id) DO NOTHING`,
-          [
-            tr.id,
-            tr.restaurantCode,
-            tr.senderCustomerId,
-            tr.recipientCustomerId,
-            Math.max(1, Number(tr.plates || 1)),
-            tr.idempotencyKey || tr.id,
-            JSON.stringify(tr),
-          ]
-        );
-      }
-    }
-
-    // 6h. Audit Logs (Append-only)
-    if (Array.isArray(state.auditLogs)) {
-      for (const al of state.auditLogs) {
-        if (!al?.id || !al?.restaurantCode) continue;
-        await client.query(
-          `INSERT INTO audit_logs (id, restaurant_code, user_id, action, data)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (id) DO NOTHING`,
-          [al.id, al.restaurantCode, al.userId || al.actorId || null, al.action || 'audit_event', JSON.stringify(al)]
-        );
-      }
-    }
-
     // 7. System Settings & Collections
     const settingsToSave: Array<[string, any]> = [
       ['studentSubscriptionSettings', state.studentSubscriptionSettings],
@@ -480,7 +501,16 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
       ['shifts', state.shifts],
       ['activationRequests', state.activationRequests],
       ['pinRecoveryRequests', state.pinRecoveryRequests],
+      // Subscription payment records are kept in durable JSONB settings until
+      // their dedicated normalized billing tables are introduced.
       ['studentSubscriptionPayments', state.studentSubscriptionPayments],
+      ['restaurantSubscriptions', state.restaurantSubscriptions],
+      ['restaurantSubscriptionPayments', state.restaurantSubscriptionPayments],
+      ['subscriptionPayments', state.subscriptionPayments],
+      ['activationCodes', state.activationCodes],
+      // Durable soft-deletion markers prevent deleted operational records from
+      // being reintroduced by stale offline clients or database hydration.
+      ['deletionTombstones', state.deletionTombstones || []],
     ];
 
     for (const [key, val] of settingsToSave) {
@@ -501,6 +531,148 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
     await client.query('ROLLBACK');
     console.error('[PostgreSQL Adapter] Error saving state to PostgreSQL transaction:', err);
     return false;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Atomically commits a plate transfer under PostgreSQL row locks.
+ * This is the authoritative path for cloud mode; balance validation and both
+ * ledger entries, transfer, notifications and audit record share one transaction.
+ */
+export async function commitPlateTransferPostgres(input: {
+  transfer: any;
+  ledgerOut: any;
+  ledgerIn: any;
+  auditLog: any;
+  notifications: any[];
+}): Promise<
+  | { ok: true; idempotent: boolean; transfer: any; senderBalance: number; recipientBalance: number }
+  | { ok: false; code: 'NOT_READY' | 'CUSTOMER_NOT_FOUND' | 'INSUFFICIENT_BALANCE' | 'IDEMPOTENCY_CONFLICT' | 'PERSISTENCE_ERROR'; message: string }
+> {
+  const p = getPostgresPool();
+  if (!p || !isInitialized) return { ok: false, code: 'NOT_READY', message: 'PostgreSQL is not ready.' };
+
+  const { transfer, ledgerOut, ledgerIn, auditLog, notifications } = input;
+  const client = await p.connect();
+  let transactionOpen = false;
+  try {
+    await client.query('BEGIN');
+    transactionOpen = true;
+
+    // Lock both customer rows in deterministic order to serialize concurrent transfers
+    // and avoid deadlocks when two customers transfer to one another simultaneously.
+    const locked = await client.query(
+      'SELECT id FROM customers WHERE id = ANY($1::varchar[]) AND restaurant_code = $2 ORDER BY id FOR UPDATE',
+      [[transfer.senderCustomerId, transfer.recipientCustomerId], transfer.restaurantCode]
+    );
+    if (locked.rowCount !== 2) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      return { ok: false, code: 'CUSTOMER_NOT_FOUND', message: 'Sender or recipient no longer exists in this restaurant.' };
+    }
+
+    const prior = await client.query(
+      'SELECT data FROM transfers WHERE idempotency_key = $1 OR id = $2 LIMIT 1',
+      [transfer.idempotencyKey, transfer.id]
+    );
+    if (prior.rows.length) {
+      const existing = prior.rows[0].data;
+      // An idempotency key may only replay the exact same transfer. Reusing it
+      // with altered parties, tenant, or amount is a conflict, never success.
+      const sameRequest =
+        existing?.id === transfer.id &&
+        existing?.idempotencyKey === transfer.idempotencyKey &&
+        existing?.restaurantCode === transfer.restaurantCode &&
+        existing?.senderCustomerId === transfer.senderCustomerId &&
+        existing?.recipientCustomerId === transfer.recipientCustomerId &&
+        Number(existing?.plates) === Number(transfer.plates);
+      if (!sameRequest) {
+        await client.query('ROLLBACK');
+        transactionOpen = false;
+        return { ok: false, code: 'IDEMPOTENCY_CONFLICT', message: 'This idempotency key was already used for a different transfer.' };
+      }
+      const balances = await client.query(
+        'SELECT customer_id, COALESCE(SUM(plates_delta), 0)::int AS balance FROM ledger_entries WHERE restaurant_code = $1 AND customer_id = ANY($2::varchar[]) GROUP BY customer_id',
+        [transfer.restaurantCode, [transfer.senderCustomerId, transfer.recipientCustomerId]]
+      );
+      const byCustomer = new Map(balances.rows.map((row: any) => [row.customer_id, Number(row.balance)]));
+      await client.query('COMMIT');
+      transactionOpen = false;
+      return {
+        ok: true,
+        idempotent: true,
+        transfer: existing,
+        senderBalance: byCustomer.get(transfer.senderCustomerId) || 0,
+        recipientBalance: byCustomer.get(transfer.recipientCustomerId) || 0,
+      };
+    }
+
+    const balanceResult = await client.query(
+      'SELECT COALESCE(SUM(plates_delta), 0)::int AS balance FROM ledger_entries WHERE restaurant_code = $1 AND customer_id = $2',
+      [transfer.restaurantCode, transfer.senderCustomerId]
+    );
+    const senderBalance = Number(balanceResult.rows[0]?.balance || 0);
+    if (senderBalance < transfer.plates) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      return {
+        ok: false,
+        code: 'INSUFFICIENT_BALANCE',
+        message: `Insufficient plates. Available balance: ${senderBalance}.`,
+      };
+    }
+
+    await client.query(
+      `INSERT INTO transfers (id, restaurant_code, sender_customer_id, recipient_customer_id, plates, data, idempotency_key)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [transfer.id, transfer.restaurantCode, transfer.senderCustomerId, transfer.recipientCustomerId, transfer.plates, JSON.stringify(transfer), transfer.idempotencyKey]
+    );
+
+    for (const entry of [ledgerOut, ledgerIn]) {
+      await client.query(
+        `INSERT INTO ledger_entries (id, restaurant_code, customer_id, type, plates_delta, amount_rwf, idempotency_key, timestamp, data)
+         VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8)`,
+        [entry.id, entry.restaurantCode, entry.customerId, entry.type, entry.platesDelta, entry.idempotencyKey, new Date(entry.timestamp).toISOString(), JSON.stringify(entry)]
+      );
+    }
+
+    await client.query(
+      'INSERT INTO audit_logs (id, restaurant_code, user_id, action, data) VALUES ($1, $2, $3, $4, $5)',
+      [auditLog.id, auditLog.restaurantCode, auditLog.userId || transfer.senderCustomerId, auditLog.action, JSON.stringify(auditLog)]
+    );
+
+    for (const notification of notifications) {
+      await client.query(
+        'INSERT INTO notifications (id, restaurant_code, recipient_id, data) VALUES ($1, $2, $3, $4)',
+        [notification.id, notification.restaurantCode, notification.target === 'all' ? null : notification.target || null, JSON.stringify(notification)]
+      );
+    }
+
+    const finalBalances = await client.query(
+      'SELECT customer_id, COALESCE(SUM(plates_delta), 0)::int AS balance FROM ledger_entries WHERE restaurant_code = $1 AND customer_id = ANY($2::varchar[]) GROUP BY customer_id',
+      [transfer.restaurantCode, [transfer.senderCustomerId, transfer.recipientCustomerId]]
+    );
+    const byCustomer = new Map(finalBalances.rows.map((row: any) => [row.customer_id, Number(row.balance)]));
+    await client.query('COMMIT');
+    transactionOpen = false;
+    return {
+      ok: true,
+      idempotent: false,
+      transfer,
+      senderBalance: byCustomer.get(transfer.senderCustomerId) || 0,
+      recipientBalance: byCustomer.get(transfer.recipientCustomerId) || 0,
+    };
+  } catch (err: any) {
+    if (transactionOpen) {
+      try { await client.query('ROLLBACK'); } catch {}
+    }
+    if (err?.code === '23505') {
+      return { ok: false, code: 'IDEMPOTENCY_CONFLICT', message: 'This transfer request has already been processed. Refresh your balance before retrying.' };
+    }
+    console.error('[PostgreSQL Adapter] Atomic plate transfer failed:', err);
+    return { ok: false, code: 'PERSISTENCE_ERROR', message: 'Transfer could not be committed. No transfer was confirmed.' };
   } finally {
     client.release();
   }
@@ -555,9 +727,11 @@ export async function recordUsedTokenPostgres(
   if (!Number.isInteger(ttlSeconds) || ttlSeconds < 1 || ttlSeconds > 600) {
     return { allowed: false };
   }
-  if (!p || !isInitialized) {
-    // Production must never interpret an unavailable replay store as permission.
+  if (!p) {
     return { allowed: process.env.NODE_ENV !== 'production' };
+  }
+  if (!isInitialized) {
+    return { allowed: false };
   }
 
   try {
@@ -573,7 +747,6 @@ export async function recordUsedTokenPostgres(
     return { allowed };
   } catch (err) {
     console.error('[PostgreSQL Adapter] Used token insert error:', err);
-    // A replay-protection outage is a security failure, not permission to redeem.
     return { allowed: false };
   }
 }

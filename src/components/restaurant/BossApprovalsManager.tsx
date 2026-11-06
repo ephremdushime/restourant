@@ -22,6 +22,7 @@ import {
   Printer,
 } from 'lucide-react';
 import { CardFrontView, CardBackView } from './CardPrintStudio';
+import { PrivatePhoto } from '../common/PrivatePhoto';
 
 interface BossApprovalsManagerProps {
   restaurantCode: string;
@@ -173,16 +174,16 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
         <div className="space-y-1">
           <div className="font-bold text-white flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span>3 Grace Meals Policy Active</span>
+            <span>Grace Meal Policy Active</span>
           </div>
           <p className="text-slate-400 text-[11px] leading-relaxed max-w-2xl">
-            To ensure patrons eat even if the boss is in a meeting or away, provisional members can consume up to <strong>3 grace plates</strong> immediately upon paying at the reception desk. When you confirm the Mobile Money transaction, consumed plates are already accounted for on the ledger.
+            To ensure patrons eat even if the boss is in a meeting or away, new registrations can consume up to <strong>4 grace plates</strong> immediately after reception confirms the full package payment. At Boss approval, only the unused paid package balance is activated. Existing top-up approvals retain their configured grace allowance.
           </p>
         </div>
 
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 font-mono text-[11px] shrink-0">
           <Smartphone className="w-3.5 h-3.5 text-amber-400" />
-          <span>Verify via MTN (*182#) or Airtel</span>
+          <span>Verify the recorded payment reference</span>
         </div>
       </div>
 
@@ -236,11 +237,11 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
           {displayedList.map((appr) => {
             const customer = state.customers.find((c) => c.id === appr.customerId);
             const graceConsumed =
-              (appr.gracePlatesConsumed || 0) > 0
+              typeof appr.gracePlatesConsumed === 'number'
                 ? appr.gracePlatesConsumed
                 : appr.type === 'new_customer'
-                ? (customer?.gracePlatesConsumed || 0)
-                : 0;
+                  ? (customer?.gracePlatesConsumed || 0)
+                  : 0;
             const isPending = appr.status === 'pending';
 
             return (
@@ -257,7 +258,7 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
                 {/* Header row: Customer identity & Request Type badge */}
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 border-b border-slate-800 pb-3">
                   <div className="flex items-center gap-3.5">
-                    <img
+                    <PrivatePhoto
                       src={appr.customerPhoto || customer?.photoUrl || '/src/assets/images/avatar_student_male_1790979380050.jpg'}
                       alt={appr.customerName}
                       className="w-12 h-12 rounded-xl object-cover border border-slate-700 shrink-0 shadow-sm"
@@ -370,7 +371,7 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
                   <div className="flex items-center gap-2">
                     <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
                     <span>
-                      Grace Plates Consumed at Stand: <strong>{graceConsumed} of 3 plates</strong>
+                      Grace Plates Consumed at Stand: <strong>{graceConsumed} of {appr.gracePlatesAllowed ?? (appr.type === 'new_customer' ? 4 : 3)} plates</strong>
                     </span>
                   </div>
 
@@ -544,7 +545,7 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
                 <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <img
+                      <PrivatePhoto
                         src={approvedModalData.customer.photoUrl}
                         alt={approvedModalData.customer.name}
                         className="w-11 h-11 rounded-xl object-cover border border-slate-700"
@@ -569,7 +570,7 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
                     </div>
                   </div>
 
-                  {/* Net Balance Breakdown minus Consumed Grace Meals (< 3) */}
+                  {/* Net Balance Breakdown minus consumed grace plates */}
                   <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 text-xs flex items-center justify-between">
                     <div className="text-slate-300">
                       <span>Grace Meals Reconciled: </span>

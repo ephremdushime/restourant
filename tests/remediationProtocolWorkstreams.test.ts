@@ -138,7 +138,19 @@ describe('Production Readiness & Security Remediation Protocol (Workstreams A–
 
     const state = getServerDbState();
     ensureServerDbDefaults(state);
-    const customer = state.customers.find((c: any) => c.restaurantCode === 'RW01');
+    let customer = state.customers.find((c: any) => c.restaurantCode === 'RW01' && c.memberNo);
+    if (!customer) {
+      customer = {
+        id: 'cust_ws_b_rw01',
+        memberNo: '28491',
+        name: 'Workstream Test Patron',
+        restaurantCode: 'RW01',
+        cardVersion: 1,
+        keyVersion: 1,
+        cardStatus: 'active',
+      };
+      state.customers.unshift(customer);
+    }
     assert.ok(customer, 'Test customer in RW01 must exist');
 
     const oldCardVer = customer.cardVersion || 1;
@@ -214,7 +226,7 @@ describe('Production Readiness & Security Remediation Protocol (Workstreams A–
   test('Workstream C: Patron photo deletion enforces tenant isolation and records audit trail', async () => {
     const state = getServerDbState();
     ensureServerDbDefaults(state);
-    const customer = state.customers.find((c: any) => c.restaurantCode === 'RW01');
+    const customer = state.customers.find((c: any) => c.restaurantCode === 'RW01' && c.memberNo) || state.customers.find((c: any) => c.restaurantCode === 'RW01');
     assert.ok(customer);
 
     // Upload a valid PNG photo first
@@ -270,7 +282,7 @@ describe('Production Readiness & Security Remediation Protocol (Workstreams A–
     resetMemoryCache();
     const state = getServerDbState();
     ensureServerDbDefaults(state);
-    const customer = state.customers.find((c: any) => c.restaurantCode === 'RW01');
+    const customer = state.customers.find((c: any) => c.restaurantCode === 'RW01' && c.memberNo) || state.customers.find((c: any) => c.restaurantCode === 'RW01');
     assert.ok(customer);
 
     const custToken = createSessionToken({
@@ -351,7 +363,7 @@ describe('Production Readiness & Security Remediation Protocol (Workstreams A–
 
       const state = getServerDbState();
       ensureServerDbDefaults(state);
-      const customer = state.customers.find((c: any) => c.restaurantCode === 'RW01');
+      const customer = state.customers.find((c: any) => c.restaurantCode === 'RW01' && c.memberNo) || state.customers.find((c: any) => c.restaurantCode === 'RW01');
       assert.ok(customer);
 
       const custToken = createSessionToken({

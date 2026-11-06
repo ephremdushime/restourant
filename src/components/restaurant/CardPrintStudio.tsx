@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Customer, Package, Restaurant } from '../../types';
 import { restoStore } from '../../store/restoStore';
+import { PrivatePhoto } from '../common/PrivatePhoto';
 import { QrCanvas } from '../common/QrCanvas';
 import {
   Printer,
@@ -494,7 +495,7 @@ export const CardPrintStudio: React.FC<CardPrintStudioProps> = ({
                       : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:text-white'
                   }`}
                 >
-                  <img src={c.photoUrl} alt="" className="w-4 h-4 rounded-full object-cover" />
+                  <PrivatePhoto src={c.photoUrl} alt="" className="w-4 h-4 rounded-full object-cover" />
                   <span>{c.name}</span>
                   <span className="font-mono text-slate-400 text-[11px]">#{c.memberNo}</span>
                   {c.cardReadyForPrint && (
