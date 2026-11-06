@@ -213,7 +213,7 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     stationUser.status = 'active';
     stationUser.authType = 'pin8';
     assert.equal(verifyStationUserCredentials('LegacyStaffPassword#2026', stationUser), false);
-    assert.equal(verifyStationUserCredentials('654321', stationUser), true);
+    assert.equal(verifyStationUserCredentials('987654', stationUser), true);
   });
 
   test('invalidates production staff sessions when the station account is blocked or deleted', () => {
