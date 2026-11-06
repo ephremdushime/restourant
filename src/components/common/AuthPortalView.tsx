@@ -76,7 +76,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   const [selectedStationId, setSelectedStationId] = useState(state.currentStationId);
 
   // Form input fields
-  const [username, setUsername] = useState('boss@example.local');
+  const [username, setUsername] = useState(isDemoMode ? 'boss@example.local' : '');
   const [password, setPassword] = useState('');
   const [pin, setPin] = useState('');
   const [phoneOrMember, setPhoneOrMember] = useState(isDemoMode ? '28491' : '');
@@ -135,7 +135,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   useEffect(() => {
     setErrorMessage(null);
     if (activeRole === 'restaurant_admin') {
-      setUsername('boss@example.local');
+      setUsername(isDemoMode ? 'boss@example.local' : '');
       setPassword('');
     } else if (activeRole === 'stand_staff') {
       setUsername('eric.n');
@@ -215,6 +215,12 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
 
     try {
       if (activeRole === 'restaurant_admin') {
+        if (!username.trim()) {
+          setErrorMessage('Enter your assigned restaurant administrator username.');
+          sound.playDangerAlarm();
+          setIsVerifying(false);
+          return;
+        }
         if (!password) {
           setErrorMessage(t.auth.enterPassword);
           sound.playDangerAlarm();
@@ -225,7 +231,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
         // Try server login first
         const serverAuth = await restoStore.loginToServer({
           role: 'restaurant_admin',
-          username: username || 'boss@example.local',
+          username: username.trim(),
           password,
           restaurantCode: selectedRestoCode,
         });
