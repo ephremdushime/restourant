@@ -1412,11 +1412,25 @@ app.post('/api/customer/auth/login', authRateLimiter, async (req, res) => {
     });
   }
 
-  // Approval status checks
-  if (cust.provisionalStatus === 'pending_approval') {
+  // Registration lifecycle checks. Reception-confirmed customers may set a PIN
+  // and use the limited onboarding dashboard while awaiting final boss approval.
+  if (cust.registrationStatus === 'pending_reception_payment' ||
+      (cust.provisionalStatus === 'pending_approval' && cust.receptionPaymentStatus !== 'confirmed' && cust.registrationStatus !== 'approved')) {
     return res.status(403).json({
       success: false,
-      error: 'Your registration is pending restaurant boss approval. You can eat grace meals at the stand with your Member ID.',
+      error: 'Your registration is saved. Please visit reception to pay and confirm your payment before setting a PIN.',
+    });
+  }
+  if (cust.registrationStatus === 'pending_boss_approval' && !cust.hasCustomPin) {
+    return res.status(403).json({
+      success: false,
+      error: 'Reception has confirmed your payment. Set your personal PIN first to access your limited onboarding dashboard.',
+    });
+  }
+  if (cust.provisionalStatus === 'pending_approval' && cust.registrationStatus !== 'pending_boss_approval') {
+    return res.status(403).json({
+      success: false,
+      error: 'Your registration is awaiting restaurant boss approval.',
     });
   }
   if (cust.provisionalStatus === 'rejected') {
@@ -1584,31 +1598,39 @@ app.post('/api/customer/activation/complete', authRateLimiter, (req, res) => {
   );
   if (!cust) return res.status(400).json({ success: false, error: 'Invalid activation credentials or code.' });
 
-  const requests = serverDbState?.activationRequests || [];
-  const codeHash = crypto.createHash('sha256').update(cleanCode).digest('hex');
-  const actReq = requests.find(
-    (r: any) =>
-      r.customerId === cust.id &&
-      !r.used &&
-      (r.activationCode === cleanCode || r.codeHash === codeHash) &&
-      new Date(r.expiresAt).getTime() > Date.now()
-  );
-
-  if (!actReq) {
-    return res.status(400).json({ success: false, error: 'Invalid, expired, or already used activation code.' });
+  const canSetPinAfterReceptionPayment =
+    cust.registrationStatus === 'pending_boss_approval' &&
+    cust.receptionPaymentStatus === 'confirmed' &&
+    !cust.hasCustomPin;
+  let actReq: any = null;
+  if (!canSetPinAfterReceptionPayment) {
+    const requests = serverDbState?.activationRequests || [];
+    const codeHash = crypto.createHash('sha256').update(cleanCode).digest('hex');
+    actReq = requests.find(
+      (r: any) =>
+        r.customerId === cust.id &&
+        !r.used &&
+        (r.activationCode === cleanCode || r.codeHash === codeHash) &&
+        new Date(r.expiresAt).getTime() > Date.now()
+    );
+    if (!actReq) {
+      return res.status(400).json({ success: false, error: 'Invalid, expired, or already used activation code.' });
+    }
   }
 
   const pinHash = computeServerCustomerPinHash(cleanPin, cust.id, cust.memberNo);
   cust.pinHash = pinHash;
   cust.hasCustomPin = true;
   cust.pinSetAt = new Date().toISOString();
-  cust.activationStatus = 'active';
+  cust.activationStatus = cust.registrationStatus === 'pending_boss_approval' ? 'partial_active' : 'active';
   cust.failedLoginAttempts = 0;
   cust.lockedUntil = null;
-  cust.cardReadyForPrint = true;
+  cust.cardReadyForPrint = cust.registrationStatus === 'approved';
 
-  actReq.used = true;
-  actReq.usedAt = new Date().toISOString();
+  if (actReq) {
+    actReq.used = true;
+    actReq.usedAt = new Date().toISOString();
+  }
 
   queueDbSave(serverDbState);
 
@@ -1628,6 +1650,8 @@ app.post('/api/customer/activation/complete', authRateLimiter, (req, res) => {
       memberNo: cust.memberNo,
       phone: cust.phone,
       restaurantCode: cust.restaurantCode,
+      registrationStatus: cust.registrationStatus,
+      activationStatus: cust.activationStatus,
     },
   });
 });
