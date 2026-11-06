@@ -2747,8 +2747,6 @@ app.post('/api/superadmin/customer/subscription/activate-paid', apiRateLimiter, 
   };
   serverDbState.studentSubscriptionPayments.unshift(payment);
   customer.customerAccessStatus = 'active';
-  customer.freeAccessStartedAt = now;
-  customer.freeAccessExpiresAt = periodEnd;
 
   if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
   const auditId = `audit_${crypto.randomUUID()}`;
@@ -2789,7 +2787,7 @@ app.post('/api/superadmin/customer/subscription/activate-paid', apiRateLimiter, 
     serverDbState.notifications = serverDbState.notifications.filter((n: any) => n.id !== notificationId);
     return res.status(503).json({ success: false, error: 'Payment activation could not be saved. Please retry after checking the payment reference.' });
   }
-  return res.json({ success: true, subscription, payment, customer: { id: customer.id, customerAccessStatus: customer.customerAccessStatus, freeAccessExpiresAt: customer.freeAccessExpiresAt } });
+  return res.json({ success: true, subscription, payment, customer: { id: customer.id, customerAccessStatus: customer.customerAccessStatus } });
 });
 
 // POST /api/customer/subscription/cancel: Cancels future subscription renewal
