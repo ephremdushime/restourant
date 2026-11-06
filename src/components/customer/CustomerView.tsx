@@ -60,7 +60,9 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
     ? restoStore.checkStudentEntitlement(customer.id, 'customer_dashboard')
     : null;
   const freeAccessExpired = Boolean(
-    customer?.freeAccessExpiresAt && new Date(customer.freeAccessExpiresAt).getTime() <= Date.now()
+    customer?.customerAccessStatus === 'complimentary' &&
+    customer.freeAccessExpiresAt &&
+    new Date(customer.freeAccessExpiresAt).getTime() <= Date.now()
   );
   const isDashboardGated = Boolean(
     customer && (
