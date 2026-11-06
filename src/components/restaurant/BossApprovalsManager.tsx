@@ -174,16 +174,16 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
         <div className="space-y-1">
           <div className="font-bold text-white flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span>3 Grace Meals Policy Active</span>
+            <span>Grace Meal Policy Active</span>
           </div>
           <p className="text-slate-400 text-[11px] leading-relaxed max-w-2xl">
-            To ensure patrons eat even if the boss is in a meeting or away, provisional members can consume up to <strong>3 grace plates</strong> immediately upon paying at the reception desk. When you confirm the Mobile Money transaction, consumed plates are already accounted for on the ledger.
+            To ensure patrons eat even if the boss is in a meeting or away, new registrations can consume up to <strong>4 grace plates</strong> immediately after reception confirms the full package payment. At Boss approval, only the unused paid package balance is activated. Existing top-up approvals retain their configured grace allowance.
           </p>
         </div>
 
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 font-mono text-[11px] shrink-0">
           <Smartphone className="w-3.5 h-3.5 text-amber-400" />
-          <span>Verify via MTN (*182#) or Airtel</span>
+          <span>Verify the recorded payment reference</span>
         </div>
       </div>
 
@@ -237,11 +237,11 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
           {displayedList.map((appr) => {
             const customer = state.customers.find((c) => c.id === appr.customerId);
             const graceConsumed =
-              (appr.gracePlatesConsumed || 0) > 0
+              typeof appr.gracePlatesConsumed === 'number'
                 ? appr.gracePlatesConsumed
                 : appr.type === 'new_customer'
-                ? (customer?.gracePlatesConsumed || 0)
-                : 0;
+                  ? (customer?.gracePlatesConsumed || 0)
+                  : 0;
             const isPending = appr.status === 'pending';
 
             return (
