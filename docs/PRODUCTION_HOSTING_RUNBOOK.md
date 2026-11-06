@@ -82,7 +82,24 @@ Verify a backup by restoring it into a temporary database. This does not modify 
 
     bash deploy/verify-postgres-backup.sh backups/postgres/restopass_YYYYMMDDTHHMMSSZ.dump.enc
 
-Schedule the backup script at least daily using the host's scheduler. **The script creates a local backup only.** Copy the encrypted dump, `.sha256` checksum and `.hmac` tag to a separate, access-controlled off-server location. Store `RESTOPASS_BACKUP_ENCRYPTION_KEY` in a separate password manager or secret manager; losing that key makes the backup unrecoverable. A backup on the same VPS is not disaster recovery. Perform and record a restore verification at least weekly and after schema migrations.
+The coordinated backup workflow creates both datasets using one UTC timestamp and publishes a completion manifest only after all six encrypted artifacts have uploaded successfully. It verifies local SHA-256/HMAC integrity before upload. Configure a **separate private S3-compatible backup bucket** (AWS S3, Cloudflare R2, DigitalOcean Spaces or MinIO) using dedicated least-privilege credentials, not the application photo-storage credentials. Required `.env` settings:
+
+- `RESTOPASS_BACKUP_S3_BUCKET`
+- `RESTOPASS_BACKUP_S3_REGION`
+- `RESTOPASS_BACKUP_S3_ENDPOINT` (leave empty for AWS S3; set the provider endpoint for R2/Spaces/MinIO)
+- `RESTOPASS_BACKUP_S3_ACCESS_KEY_ID`
+- `RESTOPASS_BACKUP_S3_SECRET_ACCESS_KEY`
+- `RESTOPASS_BACKUP_S3_PREFIX` (default `restopass`)
+- `RESTOPASS_BACKUP_ENCRYPTION_KEY` (64 hex characters)
+
+Install AWS CLI v2 and cron on the VPS, then run once as the same Linux account that owns the deployment and can access Docker:
+
+    bash deploy/install-backup-schedule.sh
+    bash deploy/backup-all.sh
+
+The installer adds an idempotent user crontab: paired PostgreSQL + photo backup and off-site upload daily at 02:15 host-local time; remote recovery verification every Sunday at 04:00. The scheduled backup uploads each encrypted archive and its `.sha256` and `.hmac` sidecars, then uploads the manifest last. The manifest is the completion marker; do not treat an object prefix without a manifest as a complete backup. The weekly verifier downloads the latest paired backup from the off-site bucket, checks the manifest, restores PostgreSQL into a temporary database, and decrypts/extracts the photo archive into isolated temporary storage. It never modifies the live database or live photo directory. Logs are written to `backups/logs/backup.log` and `backups/logs/verify.log`; monitor these logs and alert on non-zero cron exits.
+
+The scripts retain local backups according to `RESTOPASS_BACKUP_RETENTION_DAYS` (default 14 days). Configure a bucket lifecycle policy separately to retain remote encrypted backup objects for your chosen recovery window (recommended starting point: 30–90 days); the application deliberately does not delete remote objects. Enable bucket versioning where supported, block public access, and restrict the backup credential to listing/reading/writing only the dedicated backup prefix. The backup key must be stored separately in a password manager or secret manager; losing that key makes backups unrecoverable. A successful upload is not proof of recoverability: inspect the weekly recovery-verification log and periodically perform a full host rebuild/restore exercise.
 
 Patron portraits are stored outside the web root under the persistent app data volume at `data/private/patron-photos/`, or in a private S3-compatible bucket.
 
