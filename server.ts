@@ -508,6 +508,13 @@ const photoRateLimiter = createRateLimiter('photo', 10, 60 * 1000); // 10 photo 
 
 // Request body parser with scoped limits (supports patron portrait uploads)
 app.use(express.json({ limit: '10mb' }));
+// Block legacy public upload paths before either Vite or production static middleware.
+app.use((req, res, next) => {
+  if (req.path === '/uploads' || req.path.startsWith('/uploads/')) {
+    return res.status(404).json({ success: false, error: 'Resource not found.' });
+  }
+  return next();
+});
 // Patron photos are never served from a public static directory. All reads use
 // the authenticated, tenant-scoped endpoint below.
 
