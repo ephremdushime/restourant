@@ -14,6 +14,7 @@ import {
   verifyStationUserCredentials,
   isActiveStationSession,
   applySyncDeletionTombstones,
+  canMergeTenantScopedRecord,
   UserSession,
 } from '../server';
 import { restoStore } from '../src/store/restoStore';
@@ -234,6 +235,29 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     }), false);
     assert.equal(isActiveStationSession(session, { stationUsers: [] }), false);
     assert.equal(isActiveStationSession({ ...session, role: 'customer' }, { stationUsers: [] }), true);
+  });
+
+  test('prevents tenant admins from reassigning records through ID collisions', () => {
+    const rw01AdminCode = 'RW01';
+    const existing = { id: 'shared_id', restaurantCode: 'RW02', name: 'Other tenant record' };
+    assert.equal(canMergeTenantScopedRecord(existing, {
+      id: 'shared_id', restaurantCode: 'RW01', name: 'Forged reassignment',
+    }, rw01AdminCode), false);
+    assert.equal(canMergeTenantScopedRecord(
+      { id: 'tenant_record', restaurantCode: 'RW01' },
+      { id: 'tenant_record', name: 'Tenant omitted' },
+      rw01AdminCode
+    ), false);
+    assert.equal(canMergeTenantScopedRecord(
+      { id: 'same_tenant', restaurantCode: 'RW01' },
+      { id: 'same_tenant', restaurantCode: 'RW01', name: 'Valid update' },
+      rw01AdminCode
+    ), true);
+    assert.equal(canMergeTenantScopedRecord(
+      { id: 'global_plan' },
+      { id: 'global_plan', name: 'Updated global plan' },
+      null
+    ), true);
   });
 
   test('applies tenant-scoped soft-deletion tombstones without deleting financial history', () => {
