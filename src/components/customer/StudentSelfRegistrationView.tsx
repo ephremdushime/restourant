@@ -323,7 +323,16 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
             </label>
             <select
               value={selectedRestoCode}
-              onChange={(e) => setSelectedRestoCode(e.target.value)}
+              onChange={(e) => {
+                const nextCode = e.target.value;
+                const nextBranches = restoStore.getRestaurantBranches(nextCode);
+                const nextPackages = restoStore.getRestaurantPackages(nextCode);
+                setSelectedRestoCode(nextCode);
+                setBranchId(nextBranches[0]?.id || '');
+                setSelectedPackageId(nextPackages[0]?.id || '');
+                setIsCustomPlates(false);
+                setCustomPlates(10);
+              }}
               className="w-full bg-slate-900 border border-slate-700 focus:border-emerald-500 rounded-xl px-3 py-2 text-white font-medium text-xs sm:text-sm outline-hidden"
             >
               {state.restaurants.map((r) => (
@@ -523,17 +532,6 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
                   }`}
                 >
                   <span>MTN Mobile Money</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('airtel_money')}
-                  className={`p-3 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
-                    paymentMethod === 'airtel_money'
-                      ? 'bg-rose-500/20 border-rose-500 text-rose-300'
-                      : 'bg-slate-950 border-slate-800 text-slate-400'
-                  }`}
-                >
-                  <span>Airtel Money</span>
                 </button>
               </div>
 
