@@ -735,7 +735,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-300 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
                 >
                   <Gift className="w-4 h-4" />
-                  <span>Grant Complimentary</span>
+                  <span>Activate 1-Month Free Access</span>
                 </button>
               </div>
             </div>
@@ -875,7 +875,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   {(state.customerSubscriptions || []).length === 0 ? (
                     <tr>
                       <td colSpan={7} className="py-8 text-center text-slate-500 italic">
-                        No customer subscriptions recorded yet. Use &quot;Grant Complimentary&quot; or initiate a Mobile Money checkout to test.
+                        No customer subscriptions recorded yet. Activate the complimentary month for boss-approved customers or review paid renewals here.
                       </td>
                     </tr>
                   ) : (
@@ -1012,7 +1012,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2 text-amber-400">
                 <Gift className="w-4 h-4" />
-                <h3 className="text-sm font-bold text-white">Grant Complimentary Access</h3>
+                <h3 className="text-sm font-bold text-white">Activate 1-Month Free Access</h3>
               </div>
               <button
                 onClick={() => setComplimentaryModalOpen(false)}
@@ -1023,7 +1023,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
             </div>
 
             <p className="text-slate-300 text-[11px] leading-relaxed">
-              Grants temporary or permanent student digital subscription access with a mandatory audited reason.
+              Activates a 30-day complimentary digital dashboard period for an approved new customer. The period starts when Super Admin confirms activation and is fully audited.
               Does not create fabricated payment records.
             </p>
 
@@ -1074,7 +1074,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
               </div>
 
               <div>
-                <label className="font-semibold text-slate-300 block mb-1">Duration (Days)</label>
+                <label className="font-semibold text-slate-300 block mb-1">Complimentary Period (Days)</label>
                 <input
                   type="number"
                   min={1}

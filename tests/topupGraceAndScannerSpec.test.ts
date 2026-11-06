@@ -39,6 +39,13 @@ function setupCustomerWithBalance(balance: number, nameSuffix: string) {
     reg.approval.platesRequested = 0;
     restoStore.approvePendingRequest(reg.approval.id, 'Boss Admin');
   }
+  // Test fixture simulates the Super Admin activating the one-month complimentary period.
+  restoStore.grantComplimentarySubscription({
+    customerId: reg.customer.id,
+    reason: 'Automated test fixture: Super Admin activation',
+    durationDays: 30,
+    grantedBy: 'Test Super Admin',
+  });
 
   return reg.customer;
 }
@@ -167,7 +174,7 @@ describe('Part 1: Top-Up, Approval-Linked Ledger, and Grace-Meal Accounting Scen
     assert.equal(restoStore.getCustomerBalance(customer.id), 58);
   });
 
-  test('Scenario 4: New customer pays for 60 -> Uses 3 grace meals before approval; after approval account activates with 57 (60 - 3)', () => {
+  test('Scenario 4: New customer pays for 60 -> Uses up to 4 grace meals before approval; after approval account activates with 56 (60 - 4)', () => {
     const helperCustomer = setupCustomerWithBalance(10, 'Helper4');
     const helperToken = generateCardToken(helperCustomer.restaurantCode, helperCustomer.memberNo, helperCustomer.cardVersion);
 
@@ -191,20 +198,31 @@ describe('Part 1: Top-Up, Approval-Linked Ledger, and Grace-Meal Accounting Scen
     const newCustomer = reg.customer;
     const cardToken = generateCardToken(newCustomer.restaurantCode, newCustomer.memberNo, newCustomer.cardVersion);
 
-    // Consume 3 grace meals (interleaving with helperCustomer)
+    // Consume three meals, then age the oldest scan beyond the 120-minute serving limit
+    // before using the fourth onboarding grace meal.
     for (let i = 1; i <= 3; i++) {
       const scan = restoStore.processScan(cardToken);
       assert.equal(scan.outcome, 'ACCEPTED');
       assert.equal(scan.isGraceMeal, true);
       restoStore.processScan(helperToken);
     }
+    const priorGraceScans = restoStore.getState().scanEvents.filter(
+      (event) => event.customerId === newCustomer.id && event.isGracePlate && event.platesDeducted > 0
+    );
+    assert.equal(priorGraceScans.length, 3);
+    priorGraceScans[priorGraceScans.length - 1].timestamp =
+      new Date(restoStore.getGuardedTime('RW01') - 121 * 60 * 1000).toISOString();
+    restoStore.processScan(helperToken);
+    const fourthGrace = restoStore.processScan(cardToken);
+    assert.equal(fourthGrace.outcome, 'ACCEPTED');
+    assert.equal(fourthGrace.isGraceMeal, true);
 
-    assert.equal(reg.approval.gracePlatesConsumed, 3);
+    assert.equal(reg.approval.gracePlatesConsumed, 4);
 
-    // Boss approves -> Account activates with 60 - 3 = 57
+    // Boss approves -> Account activates with 60 - 4 = 56
     const apprRes = restoStore.approvePendingRequest(reg.approval.id, 'Restaurant Boss');
     assert.equal(apprRes.success, true);
-    assert.equal(restoStore.getCustomerBalance(newCustomer.id), 57);
+    assert.equal(restoStore.getCustomerBalance(newCustomer.id), 56);
     assert.equal(newCustomer.provisionalStatus, 'approved');
   });
 

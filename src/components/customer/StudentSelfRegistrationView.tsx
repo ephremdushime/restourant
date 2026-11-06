@@ -1,22 +1,14 @@
 import React, { useState } from 'react';
 import { restoStore } from '../../store/restoStore';
-import { PhotoCaptureInput } from '../common/PhotoCaptureInput';
-import { PaymentMethod, Restaurant } from '../../types';
 import {
   UserCheck,
-  Smartphone,
-  CreditCard,
   CheckCircle2,
   AlertTriangle,
   Building2,
   GraduationCap,
-  Sparkles,
   ArrowRight,
   ShieldCheck,
   ArrowLeft,
-  DollarSign,
-  Utensils,
-  Clock,
 } from 'lucide-react';
 
 interface StudentSelfRegistrationViewProps {
@@ -55,31 +47,16 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
     return state.currentRestaurantCode || state.restaurants[0]?.code || 'RW01';
   });
 
-  const activeResto = state.restaurants.find((r) => r.code === selectedRestoCode) || state.restaurants[0];
-  const packages = restoStore.getRestaurantPackages(selectedRestoCode);
   const branches = restoStore.getRestaurantBranches(selectedRestoCode);
-  const singlePlatePrice = restoStore.getRestaurantDefaultPlatePrice(selectedRestoCode);
 
   // Student Identity Fields
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
-  const [photoUrl, setPhotoUrl] = useState('/src/assets/images/avatar_student_male_1790979380050.jpg');
   const [regNumber, setRegNumber] = useState('');
-  const [institution, setInstitution] = useState(activeResto?.name?.includes('ULK') ? 'ULK' : 'University / College');
+  const [institution, setInstitution] = useState('University / College');
   const [programme, setProgramme] = useState('');
   const [year, setYear] = useState(1);
   const [branchId, setBranchId] = useState(branches[0]?.id || 'br_rw01_main');
-
-  // Plate Package Selection
-  const [selectedPackageId, setSelectedPackageId] = useState<string>(packages[0]?.id || '');
-  const [isCustomPlates, setIsCustomPlates] = useState(false);
-  const [customPlates, setCustomPlates] = useState(10);
-
-  // MoMo Payment Fields
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('mtn_momo');
-  const [momoPayerName, setMomoPayerName] = useState('');
-  const [paymentReference, setPaymentReference] = useState('');
-  const [paymentTime, setPaymentTime] = useState(() => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
 
   // Status & Error
   const [error, setError] = useState<string | null>(null);
@@ -87,15 +64,7 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
   const [submittedResult, setSubmittedResult] = useState<{
     memberNo: string;
     name: string;
-    plates: number;
-    amount: number;
-    ref: string;
-    payer: string;
   } | null>(null);
-
-  const selectedPkg = packages.find((p) => p.id === selectedPackageId) || packages[0];
-  const effectivePlates = isCustomPlates ? customPlates : selectedPkg ? selectedPkg.platesCount : 10;
-  const effectiveAmount = isCustomPlates ? customPlates * singlePlatePrice : selectedPkg ? selectedPkg.priceRwf : 12000;
 
   const isValidPhoneNumber = (rawPhone: string): boolean => {
     const cleaned = rawPhone.replace(/[\s()-]/g, '');
@@ -104,114 +73,49 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
     return digitsOnly.length >= 9 && digitsOnly.length <= 15;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-
     const trimmedName = name.trim();
     const trimmedPhone = phone.trim();
     const trimmedRegNo = regNumber.trim();
     const trimmedInstitution = institution.trim();
     const trimmedProgramme = programme.trim();
-    const trimmedPayer = momoPayerName.trim();
-    const trimmedRef = paymentReference.trim().toUpperCase();
 
-    if (trimmedName.length < 2) {
-      setError('Please enter your full official name (at least 2 characters).');
-      return;
-    }
-    if (!trimmedPhone || !isValidPhoneNumber(trimmedPhone)) {
-      setError('Please enter a valid phone number (e.g. 0788 123 456 or +250 788 123 456).');
-      return;
-    }
-    if (!trimmedRegNo) {
-      setError('Please enter your Student ID / Registration Number.');
-      return;
-    }
-    if (!trimmedProgramme) {
-      setError('Please enter your Class, Faculty, or Programme (e.g. Class 3B or Computer Science Yr 2).');
-      return;
-    }
-    if (!trimmedPayer) {
-      setError('Please enter the name on the Mobile Money account used to pay.');
-      return;
-    }
-    if (!trimmedRef) {
-      setError('Please enter the Mobile Money SMS transaction reference ID.');
-      return;
-    }
-
-    // Check duplicate customer phone or Student ID in this restaurant
-    const dupCheck = restoStore.checkDuplicateCustomerIdentity(
-      selectedRestoCode,
-      trimmedPhone,
-      'student_id',
-      trimmedRegNo,
-      trimmedRegNo
-    );
-    if (dupCheck.isDuplicate) {
-      setError(dupCheck.message || 'An account with this phone number or Student ID is already registered.');
-      return;
-    }
+    if (trimmedName.length < 2) return setError('Please enter your full official name (at least 2 characters).');
+    if (!trimmedPhone || !isValidPhoneNumber(trimmedPhone)) return setError('Please enter a valid phone number (e.g. 0788 123 456 or +250 788 123 456).');
+    if (!trimmedRegNo) return setError('Please enter your Student ID / Registration Number.');
+    if (!trimmedProgramme) return setError('Please enter your Class, Faculty, or Programme.');
+    const curBranch = branches.find((b) => b.id === branchId) || branches[0];
 
     setIsSubmitting(true);
     try {
-      const curBranch = branches.find((b) => b.id === branchId) || branches[0];
-      const result = restoStore.registerProvisionalCustomer(
-        {
+      const response = await fetch('/api/public/customer/registration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           restaurantCode: selectedRestoCode,
-          branchId: curBranch?.id || 'br_rw01_main',
-          branchName: curBranch?.name || activeResto?.name || 'Main Dining Hall',
+          branchId: curBranch?.id,
           name: trimmedName,
           phone: trimmedPhone,
-          photoUrl,
           idType: 'student_id',
           idNumber: trimmedRegNo,
           isStudent: true,
-          studentProfile: {
-            institution: trimmedInstitution || 'University Campus',
-            programme: trimmedProgramme,
-            year,
-            registrationNumber: trimmedRegNo,
-          },
-          packageId: isCustomPlates ? undefined : selectedPkg?.id,
-          platesRequested: effectivePlates,
-          amountRwf: effectiveAmount,
-          paymentMethod,
-          paymentReference: trimmedRef,
-          registeredByStaffId: 'self_student_portal',
-          registeredByStaffName: `${trimmedName} (Self-Registered Online)`,
-          stationId: 'online_self_service',
-          stationName: 'Online Student Portal',
-        },
-        trimmedName
-      );
-
-      // Send high-priority notification to Boss Approvals Room
-      restoStore.sendNotification({
-        restaurantCode: selectedRestoCode,
-        target: 'all',
-        senderRole: 'system',
-        senderName: 'Student Self-Service Portal',
-        type: 'topup_success',
-        title: `New Online Registration: ${trimmedName} (${effectivePlates} Plates)`,
-        message: `Student ${trimmedName} (${trimmedProgramme}, ID: ${trimmedRegNo}) registered online for ${effectivePlates} plates (${effectiveAmount.toLocaleString()} RWF). Paid via ${paymentMethod.toUpperCase()} (Payer: "${trimmedPayer}", Ref: ${trimmedRef}, Time: ${paymentTime}). Awaiting Boss verification.`,
-        priority: 'urgent',
-        actionTab: 'approvals',
+          institution: trimmedInstitution || 'University Campus',
+          programme: trimmedProgramme,
+          year,
+          registrationNumber: trimmedRegNo,
+        }),
       });
-
-      setIsSubmitting(false);
-      setSubmittedResult({
-        memberNo: result.customer.memberNo,
-        name: trimmedName,
-        plates: effectivePlates,
-        amount: effectiveAmount,
-        ref: trimmedRef,
-        payer: trimmedPayer,
-      });
+      const result = await response.json();
+      if (!response.ok || !result.success || !result.customer?.memberNo) {
+        throw new Error(result.error || 'Registration could not be saved. Please retry or visit reception.');
+      }
+      setSubmittedResult({ memberNo: result.customer.memberNo, name: trimmedName });
     } catch (err: any) {
+      setError(err?.message || 'Unable to submit registration. Please check your connection and retry.');
+    } finally {
       setIsSubmitting(false);
-      setError(err?.message || 'Failed to submit online registration request.');
     }
   };
 
@@ -238,34 +142,15 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
 
           <div className="space-y-1.5">
             <h2 className="text-2xl font-black text-white tracking-tight">
-              Registration Request Sent!
+              Registration Request Received!
             </h2>
+            <div className="inline-flex items-center gap-2 rounded-xl bg-slate-950 border border-slate-700 px-4 py-2 mt-2">
+              <span className="text-xs text-slate-400">Member number</span>
+              <strong className="font-mono text-lg text-white">#{submittedResult.memberNo}</strong>
+            </div>
             <p className="text-sm text-emerald-200">
-              Welcome, <strong>{submittedResult.name}</strong>! Your account has been queued for verification.
+              Welcome, <strong>{submittedResult.name}</strong>! Your details have been saved. Please visit reception to complete payment confirmation.
             </p>
-          </div>
-
-          <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-left space-y-2.5 text-xs sm:text-sm">
-            <div className="flex justify-between items-center py-1 border-b border-slate-800">
-              <span className="text-slate-400 font-medium">Assigned Member ID:</span>
-              <span className="font-mono font-black text-white text-base">#{submittedResult.memberNo}</span>
-            </div>
-            <div className="flex justify-between items-center py-1 border-b border-slate-800">
-              <span className="text-slate-400 font-medium">Plates Requested:</span>
-              <span className="font-bold text-emerald-400">{submittedResult.plates} Plates</span>
-            </div>
-            <div className="flex justify-between items-center py-1 border-b border-slate-800">
-              <span className="text-slate-400 font-medium">Amount Paid:</span>
-              <span className="font-bold text-white font-mono">{submittedResult.amount.toLocaleString()} RWF</span>
-            </div>
-            <div className="flex justify-between items-center py-1 border-b border-slate-800">
-              <span className="text-slate-400 font-medium">MoMo Transaction ID:</span>
-              <span className="font-mono font-bold text-amber-300">{submittedResult.ref}</span>
-            </div>
-            <div className="flex justify-between items-center py-1">
-              <span className="text-slate-400 font-medium">Payer Account:</span>
-              <span className="font-bold text-white">{submittedResult.payer}</span>
-            </div>
           </div>
 
           {/* Next Steps Card */}
@@ -276,13 +161,13 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
             </div>
             <ol className="list-decimal list-inside space-y-1 text-slate-300 leading-relaxed">
               <li>
-                <strong>Boss Verification</strong>: The Restaurant Boss verifies your MoMo SMS code against the restaurant account.
+                <strong>Reception payment</strong>: Visit the reception desk, choose your meal package and pay. The receptionist records and confirms the payment.
               </li>
               <li>
-                <strong>Instant Dashboard Access</strong>: Once verified, open the Customer Portal with your phone number and create your private 6-digit PIN.
+                <strong>PIN setup</strong>: After reception confirms payment, sign in with your registered phone number and set your private PIN. You will receive limited onboarding dashboard access while the boss reviews your registration.
               </li>
               <li>
-                <strong>Card Pickup</strong>: Your customized PVC card is automatically sent for printing. Collect it at the cafeteria counter!
+                <strong>Final approval and card</strong>: The Restaurant Boss approves your registration. Your full dashboard and physical card become available after approval.
               </li>
             </ol>
           </div>
@@ -309,7 +194,7 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
                   Student Meal Pass Registration
                 </h1>
                 <p className="text-xs sm:text-sm text-slate-300 mt-0.5">
-                  Register, subscribe to meal plates, and submit your Mobile Money payment.
+                  Register now, then visit reception to choose and pay for your meal package.
                 </p>
               </div>
             </div>
@@ -323,7 +208,12 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
             </label>
             <select
               value={selectedRestoCode}
-              onChange={(e) => setSelectedRestoCode(e.target.value)}
+              onChange={(e) => {
+                const nextCode = e.target.value;
+                const nextBranches = restoStore.getRestaurantBranches(nextCode);
+                setSelectedRestoCode(nextCode);
+                setBranchId(nextBranches[0]?.id || '');
+              }}
               className="w-full bg-slate-900 border border-slate-700 focus:border-emerald-500 rounded-xl px-3 py-2 text-white font-medium text-xs sm:text-sm outline-hidden"
             >
               {state.restaurants.map((r) => (
@@ -349,14 +239,6 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
                 <UserCheck className="w-3.5 h-3.5" />
                 <span>1. Personal &amp; Academic Identity</span>
               </div>
-
-              {/* Photo selfie / upload */}
-              <PhotoCaptureInput
-                photoUrl={photoUrl}
-                onChange={(url) => setPhotoUrl(url)}
-                label="Student Photo (Selfie or Passport Photo)"
-                required
-              />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
@@ -430,173 +312,10 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
               </div>
             </div>
 
-            {/* STEP 2: MEAL PACKAGE SELECTION */}
-            <div className="space-y-3.5 border-t border-slate-800 pt-4">
-              <div className="text-xs font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
-                <Utensils className="w-3.5 h-3.5" />
-                <span>2. Select Meal Package</span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                {packages.map((pkg) => (
-                  <button
-                    key={pkg.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedPackageId(pkg.id);
-                      setIsCustomPlates(false);
-                    }}
-                    className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer relative ${
-                      !isCustomPlates && selectedPackageId === pkg.id
-                        ? 'bg-emerald-950/80 border-emerald-500 shadow-md ring-2 ring-emerald-500/20'
-                        : 'bg-slate-950 border-slate-800 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="text-xs text-slate-400 font-bold uppercase">{pkg.name}</div>
-                    <div className="text-lg font-black text-white mt-0.5">{pkg.platesCount} Plates</div>
-                    <div className="text-xs font-mono font-bold text-emerald-300 mt-1">
-                      {pkg.priceRwf.toLocaleString()} RWF
-                    </div>
-                  </button>
-                ))}
-
-                {/* Custom Plates Option */}
-                <button
-                  type="button"
-                  onClick={() => setIsCustomPlates(true)}
-                  className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
-                    isCustomPlates
-                      ? 'bg-emerald-950/80 border-emerald-500 shadow-md ring-2 ring-emerald-500/20'
-                      : 'bg-slate-950 border-slate-800 hover:border-slate-700'
-                  }`}
-                >
-                  <div className="text-xs text-slate-400 font-bold uppercase">Custom Plates</div>
-                  <div className="text-lg font-black text-white mt-0.5">Flexible Plates</div>
-                  <div className="text-xs font-mono font-bold text-emerald-300 mt-1">
-                    @{singlePlatePrice.toLocaleString()} RWF / plate
-                  </div>
-                </button>
-              </div>
-
-              {isCustomPlates && (
-                <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
-                  <div className="flex justify-between items-center text-xs">
-                    <span className="font-bold text-slate-200">Number of Plates:</span>
-                    <span className="font-mono font-black text-emerald-400 text-sm">
-                      {customPlates} plates = {(customPlates * singlePlatePrice).toLocaleString()} RWF
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min={1}
-                    max={120}
-                    value={customPlates}
-                    onChange={(e) => setCustomPlates(parseInt(e.target.value, 10))}
-                    className="w-full accent-emerald-500 cursor-pointer"
-                  />
-                  <div className="flex justify-between text-[10px] text-slate-500 font-mono">
-                    <span>1 plate</span>
-                    <span>30 plates</span>
-                    <span>60 plates</span>
-                    <span>120 plates</span>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* STEP 3: MOBILE MONEY PAYMENT & PROOF */}
-            <div className="space-y-3.5 border-t border-slate-800 pt-4">
-              <div className="text-xs font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
-                <Smartphone className="w-3.5 h-3.5" />
-                <span>3. Mobile Money Payment &amp; Proof</span>
-              </div>
-
-              {/* Provider selection */}
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('mtn_momo')}
-                  className={`p-3 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
-                    paymentMethod === 'mtn_momo'
-                      ? 'bg-amber-500/20 border-amber-500 text-amber-300'
-                      : 'bg-slate-950 border-slate-800 text-slate-400'
-                  }`}
-                >
-                  <span>MTN Mobile Money</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('airtel_money')}
-                  className={`p-3 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
-                    paymentMethod === 'airtel_money'
-                      ? 'bg-rose-500/20 border-rose-500 text-rose-300'
-                      : 'bg-slate-950 border-slate-800 text-slate-400'
-                  }`}
-                >
-                  <span>Airtel Money</span>
-                </button>
-              </div>
-
-              {/* How to Pay Banner */}
-              <div className="p-4 rounded-2xl bg-emerald-950/60 border border-emerald-500/40 space-y-2 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-emerald-300 uppercase">Payment Instruction:</span>
-                  <span className="font-mono font-black text-white text-sm">
-                    Total: {effectiveAmount.toLocaleString()} RWF
-                  </span>
-                </div>
-                <p className="text-slate-200 leading-relaxed">
-                  Pay <strong>{effectiveAmount.toLocaleString()} RWF</strong> to the cafeteria merchant code:
-                </p>
-                <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 font-mono font-bold text-center text-sm text-emerald-400 select-all">
-                  *182*8*1*{activeResto?.code === 'RW01' ? '054321' : '012345'}*{effectiveAmount}#
-                </div>
-                <div className="text-[11px] text-slate-400">
-                  Recipient Name: <strong>{activeResto?.name || 'Campus Dining Services Ltd'}</strong>
-                </div>
-              </div>
-
-              {/* Transaction details inputs */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="font-semibold text-slate-200 block mb-1">
-                    Payer Name on MoMo <span className="text-emerald-400">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Name shown on MoMo SMS"
-                    value={momoPayerName}
-                    onChange={(e) => setMomoPayerName(e.target.value)}
-                    className="w-full py-2.5 px-3 rounded-xl bg-slate-950 border border-slate-700 text-white focus:border-emerald-400 outline-hidden"
-                  />
-                </div>
-
-                <div>
-                  <label className="font-semibold text-slate-200 block mb-1">
-                    MoMo SMS Reference ID <span className="text-emerald-400">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. MP261030.1420.B81920"
-                    value={paymentReference}
-                    onChange={(e) => setPaymentReference(e.target.value.toUpperCase())}
-                    className="w-full py-2.5 px-3 rounded-xl bg-slate-950 border border-slate-700 text-white focus:border-emerald-400 outline-hidden font-mono"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="font-semibold text-slate-200 block mb-1">Payment Time</label>
-                <input
-                  type="text"
-                  placeholder="e.g. 14:25 PM"
-                  value={paymentTime}
-                  onChange={(e) => setPaymentTime(e.target.value)}
-                  className="w-full py-2.5 px-3 rounded-xl bg-slate-950 border border-slate-700 text-white focus:border-emerald-400 outline-hidden font-mono"
-                />
-              </div>
+            {/* Payment is completed in person at reception after registration. */}
+            <div className="p-4 rounded-2xl bg-emerald-950/50 border border-emerald-500/30 text-sm text-emerald-100">
+              <strong>Next step: visit reception.</strong>
+              <p className="mt-1 text-xs text-emerald-200">Your registration does not collect payment. Reception will select your meal package, receive payment and confirm it in RestoPass. You can then set your PIN using this phone number.</p>
             </div>
 
             {/* SUBMIT BUTTON */}
@@ -610,13 +329,13 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
                   <span>Submitting to Restaurant Boss...</span>
                 ) : (
                   <>
-                    <span>Submit Registration &amp; Payment Proof</span>
+                    <span>Submit Registration</span>
                     <ArrowRight className="w-4 h-4" />
                   </>
                 )}
               </button>
               <p className="text-[11px] text-slate-400 text-center mt-2">
-                Your request is delivered directly to the Restaurant Boss for Mobile Money SMS confirmation.
+                No payment is collected online. Your registration is sent to the selected dining facility.
               </p>
             </div>
           </form>

@@ -785,6 +785,295 @@ app.get('/api/public/restaurants', apiRateLimiter, (_req, res) => {
   res.json({ success: true, restaurants: safeList });
 });
 
+// Public customer registration. Payment is deliberately excluded from this request;
+// the customer must visit reception for payment confirmation before partial activation.
+// Rate-limited, minimal status lookup so a customer can set a PIN on a new device
+// without downloading the tenant's customer database or exposing personal details.
+app.post('/api/customer/registration/status', apiRateLimiter, (req, res) => {
+  const phone = typeof req.body?.phone === 'string' ? req.body.phone.trim() : '';
+  const restaurantCode = typeof req.body?.restaurantCode === 'string' ? req.body.restaurantCode.trim().toUpperCase() : '';
+  if (phone.length < 7 || phone.length > 32 || !restaurantCode) {
+    return res.status(400).json({ success: false, error: 'Enter your registered phone number and dining facility.' });
+  }
+  const normalizePhone = (value: string) => value.replace(/[^0-9]/g, '').replace(/^250/, '0');
+  const phoneKey = normalizePhone(phone);
+  const customer = (serverDbState?.customers || []).find((c: any) =>
+    c.restaurantCode === restaurantCode && normalizePhone(String(c.phone || '')) === phoneKey
+  );
+  if (!customer) return res.status(404).json({ success: false, error: 'No registration was found for those details.' });
+
+  let status = 'ready_for_login';
+  if (customer.registrationStatus === 'rejected' || customer.provisionalStatus === 'rejected' || customer.activationStatus === 'suspended') {
+    status = 'rejected';
+  } else if (customer.registrationStatus === 'pending_reception_payment' || customer.receptionPaymentStatus === 'unpaid') {
+    status = 'pending_reception_payment';
+  } else if (customer.registrationStatus === 'pending_boss_approval' && !customer.hasCustomPin) {
+    status = 'needs_pin_setup';
+  } else if (customer.provisionalStatus === 'pending_approval' && customer.registrationStatus !== 'pending_boss_approval') {
+    status = 'pending_boss_approval';
+  } else if (!customer.hasCustomPin || customer.activationStatus === 'ready_for_activation') {
+    status = 'needs_pin_setup';
+  }
+  return res.json({ success: true, status, memberNo: customer.memberNo });
+});
+
+// Reception-only payment confirmation for an existing self-registration.
+// The server creates the boss approval record and grants exactly four provisional grace plates.
+app.post('/api/reception/customer/payment-confirm', apiRateLimiter, requireAuth(['stand_staff', 'restaurant_admin', 'super_admin']), async (req, res) => {
+  if (!serverDbState) return res.status(503).json({ success: false, error: 'Registration service is unavailable.' });
+  const user = req.user!;
+  const body = req.body || {};
+  const customerId = typeof body.customerId === 'string' ? body.customerId.trim() : '';
+  const packageId = typeof body.packageId === 'string' ? body.packageId.trim() : '';
+  const paymentMethod = typeof body.paymentMethod === 'string' ? body.paymentMethod : '';
+  const paymentReferenceInput = typeof body.paymentReference === 'string' ? body.paymentReference.trim().toUpperCase() : '';
+  const staffName = typeof body.registeredByStaffName === 'string' ? body.registeredByStaffName.trim().slice(0, 120) : user.username;
+  const stationId = typeof body.stationId === 'string' ? body.stationId.trim().slice(0, 120) : '';
+  const stationName = typeof body.stationName === 'string' ? body.stationName.trim().slice(0, 120) : 'Reception Desk';
+
+  if (!customerId || !packageId || !['cash', 'mtn_momo', 'bank_transfer'].includes(paymentMethod)) {
+    return res.status(400).json({ success: false, error: 'Select a valid customer, meal package and payment method.' });
+  }
+  if (paymentMethod !== 'cash' && (!paymentReferenceInput || paymentReferenceInput.length > 100)) {
+    return res.status(400).json({ success: false, error: 'A valid transaction reference is required for this payment method.' });
+  }
+
+  const customer = (serverDbState.customers || []).find((c: any) => c.id === customerId);
+  if (!customer) return res.status(404).json({ success: false, error: 'Registered customer not found.' });
+  if (user.role !== 'super_admin' && customer.restaurantCode !== user.restaurantCode) {
+    return res.status(403).json({ success: false, error: 'You cannot confirm payment for another restaurant.' });
+  }
+  if (customer.registrationStatus !== 'pending_reception_payment' || customer.receptionPaymentStatus === 'confirmed') {
+    return res.status(409).json({ success: false, error: 'This registration is not awaiting reception payment confirmation.' });
+  }
+  const pkg = (serverDbState.packages || []).find((p: any) =>
+    p.id === packageId && p.restaurantCode === customer.restaurantCode
+  );
+  if (!pkg || !Number.isInteger(pkg.platesCount) || pkg.platesCount < 1 || !Number.isFinite(pkg.priceRwf) || pkg.priceRwf <= 0) {
+    return res.status(400).json({ success: false, error: 'The selected meal package is unavailable.' });
+  }
+
+  const paymentReference = paymentReferenceInput || `CASH-${crypto.randomUUID()}`;
+  const duplicateRef = (serverDbState.pendingApprovals || []).some((a: any) =>
+    a.restaurantCode === customer.restaurantCode && String(a.paymentReference || '').toUpperCase() === paymentReference
+  ) || (serverDbState.payments || []).some((p: any) =>
+    p.restaurantCode === customer.restaurantCode && String(p.reference || '').toUpperCase() === paymentReference
+  );
+  if (duplicateRef) return res.status(409).json({ success: false, error: 'This payment reference has already been recorded.' });
+
+  const now = new Date().toISOString();
+  const approvalId = `appr_reg_${crypto.randomUUID()}`;
+  const branch = (serverDbState.branches || []).find((b: any) => b.id === customer.branchId && b.restaurantCode === customer.restaurantCode);
+  const approval = {
+    id: approvalId,
+    restaurantCode: customer.restaurantCode,
+    branchId: branch?.id || customer.branchId || '',
+    branchName: branch?.name || customer.branchName || '',
+    type: 'new_customer',
+    customerId: customer.id,
+    customerName: customer.name,
+    customerPhone: customer.phone,
+    customerPhoto: customer.photoUrl,
+    memberNo: customer.memberNo,
+    packageId: pkg.id,
+    packageName: pkg.name,
+    platesRequested: pkg.platesCount,
+    amountRwf: pkg.priceRwf,
+    paymentMethod,
+    paymentReference,
+    registeredByStaffId: user.userId,
+    registeredByStaffName: staffName,
+    stationId,
+    stationName,
+    gracePlatesAllowed: 4,
+    gracePlatesConsumed: 0,
+    createdAt: now,
+    status: 'pending',
+    requiresSuperAdminCoSign: pkg.platesCount > 120,
+    coSignStatus: pkg.platesCount > 120 ? 'pending_super_admin' : 'not_required',
+  };
+
+  const previousCustomer = { ...customer };
+  if (!Array.isArray(serverDbState.pendingApprovals)) serverDbState.pendingApprovals = [];
+  serverDbState.pendingApprovals.unshift(approval);
+  customer.registrationStatus = 'pending_boss_approval';
+  customer.receptionPaymentStatus = 'confirmed';
+  customer.receptionPaymentConfirmedAt = now;
+  customer.receptionPaymentConfirmedBy = staffName;
+  customer.receptionPaymentReference = paymentReference;
+  customer.provisionalStatus = 'pending_approval';
+  customer.activationStatus = 'partial_active';
+  customer.cardStatus = 'active';
+  customer.gracePlatesAllowed = 4;
+  customer.gracePlatesConsumed = 0;
+  customer.gracePlatesRemaining = 4;
+  customer.pendingApprovalId = approvalId;
+
+  if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
+  serverDbState.auditLogs.unshift({
+    id: `audit_${crypto.randomUUID()}`,
+    timestamp: now,
+    restaurantCode: customer.restaurantCode,
+    branchId: approval.branchId,
+    branchName: approval.branchName,
+    actorRole: user.role,
+    actorName: staffName,
+    action: 'REGISTRATION_PAYMENT_CONFIRMED',
+    details: `Reception confirmed ${pkg.priceRwf} RWF for customer #${customer.memberNo} via ${paymentMethod.toUpperCase()} (Ref: ${paymentReference}). Account partially activated with up to 4 grace plates; awaiting boss approval.`,
+  });
+  if (!Array.isArray(serverDbState.notifications)) serverDbState.notifications = [];
+  const bossNotificationId = `notif_${crypto.randomUUID()}`;
+  const customerNotificationId = `notif_${crypto.randomUUID()}`;
+  serverDbState.notifications.unshift(
+    {
+      id: bossNotificationId,
+      restaurantCode: customer.restaurantCode,
+      target: 'all',
+      senderRole: 'system',
+      senderName: `${staffName} (${stationName})`,
+      type: 'system_broadcast',
+      title: `Payment Confirmed: New Customer #${customer.memberNo}`,
+      message: `Reception confirmed payment for ${customer.name}. Review and approve the registration to activate the full account and issue the physical card.`,
+      priority: 'important',
+      timestamp: now,
+      readByCustomerIds: [],
+      actionTab: 'approvals',
+    },
+    {
+      id: customerNotificationId,
+      restaurantCode: customer.restaurantCode,
+      target: customer.id,
+      targetName: `${customer.name} (#${customer.memberNo})`,
+      senderRole: 'system',
+      senderName: stationName,
+      type: 'topup_success',
+      title: 'Payment Confirmed — PIN Setup Available',
+      message: 'Your reception payment is confirmed. Set your personal PIN to access the limited onboarding dashboard. Your full account and physical card will be enabled after boss approval.',
+      priority: 'important',
+      timestamp: now,
+      readByCustomerIds: [],
+      actionTab: 'my_card',
+    }
+  );
+
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    serverDbState.notifications = serverDbState.notifications.filter((n: any) => n.id !== bossNotificationId && n.id !== customerNotificationId);
+    serverDbState.pendingApprovals = serverDbState.pendingApprovals.filter((a: any) => a.id !== approvalId);
+    Object.assign(customer, previousCustomer);
+    return res.status(503).json({ success: false, error: 'Payment confirmation could not be saved. Do not retry with a new reference; contact support.' });
+  }
+  return res.json({ success: true, approval, customer: { id: customer.id, registrationStatus: customer.registrationStatus, gracePlatesRemaining: customer.gracePlatesRemaining } });
+});
+
+app.post('/api/public/customer/registration', apiRateLimiter, async (req, res) => {
+  if (!serverDbState) {
+    return res.status(503).json({ success: false, error: 'Registration service is not initialized. Please try again shortly.' });
+  }
+  const body = req.body || {};
+  const restaurantCode = typeof body.restaurantCode === 'string' ? body.restaurantCode.trim().toUpperCase() : '';
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  const phone = typeof body.phone === 'string' ? body.phone.trim() : '';
+  const idType = typeof body.idType === 'string' ? body.idType.trim() : '';
+  const idNumber = typeof body.idNumber === 'string' ? body.idNumber.trim() : '';
+  const isStudent = body.isStudent === true;
+  const registrationNumber = typeof body.registrationNumber === 'string' ? body.registrationNumber.trim() : '';
+  const institution = typeof body.institution === 'string' ? body.institution.trim() : '';
+  const programme = typeof body.programme === 'string' ? body.programme.trim() : '';
+  const year = Number(body.year);
+
+  if (!restaurantCode || name.length < 2 || name.length > 120 || phone.length < 7 || phone.length > 32 ||
+      !['student_id', 'national_id', 'passport'].includes(idType) || idNumber.length < 3 || idNumber.length > 80) {
+    return res.status(400).json({ success: false, error: 'Please provide valid name, phone number and identity details.' });
+  }
+  if (isStudent && (!registrationNumber || registrationNumber.length > 80 || !institution || institution.length > 120 || !programme || programme.length > 120 || !Number.isInteger(year) || year < 1 || year > 12)) {
+    return res.status(400).json({ success: false, error: 'Please complete the student institution, programme, year and registration number.' });
+  }
+
+  const restaurant = (serverDbState.restaurants || []).find((r: any) => r.code === restaurantCode && r.status !== 'inactive');
+  if (!restaurant) return res.status(404).json({ success: false, error: 'The selected dining facility is unavailable.' });
+
+  const normalizePhone = (value: string) => value.replace(/[^0-9]/g, '').replace(/^250/, '0');
+  const phoneKey = normalizePhone(phone);
+  const normalizedId = idNumber.replace(/[\s-]/g, '').toUpperCase();
+  const idHash = crypto.createHash('sha256').update(`ID_SALT_RESTOPASS_RWANDA:${idType}:${normalizedId}`).digest('hex');
+  const customers = serverDbState.customers || [];
+  const duplicate = customers.find((c: any) =>
+    c.restaurantCode === restaurantCode &&
+    (normalizePhone(String(c.phone || '')) === phoneKey ||
+      c.idHash === idHash ||
+      (isStudent && c.isStudent && String(c.studentProfile?.registrationNumber || '').trim().toLowerCase() === registrationNumber.toLowerCase()))
+  );
+  if (duplicate) {
+    return res.status(409).json({ success: false, error: 'This phone number or identity is already registered at this dining facility. Please visit reception if you need help.' });
+  }
+
+  const branches = (serverDbState.branches || []).filter((b: any) => b.restaurantCode === restaurantCode && b.status !== 'inactive');
+  const branchId = typeof body.branchId === 'string' && branches.some((b: any) => b.id === body.branchId)
+    ? body.branchId : branches[0]?.id;
+  const branch = branches.find((b: any) => b.id === branchId);
+  const maxNo = customers.filter((c: any) => c.restaurantCode === restaurantCode)
+    .reduce((max: number, c: any) => Math.max(max, Number.parseInt(c.memberNo, 10) || 0), 28490);
+  const memberNo = String(maxNo + 1);
+  const now = new Date().toISOString();
+  const customerId = `cust_${crypto.randomUUID()}`;
+  const customer = {
+    id: customerId,
+    memberNo,
+    restaurantCode,
+    branchId: branch?.id,
+    branchName: branch?.name || restaurant.name,
+    name,
+    phone,
+    photoUrl: '/src/assets/images/avatar_student_male_1790979380050.jpg',
+    idType,
+    idHash,
+    idNumberMasked: normalizedId.length > 5 ? `${normalizedId.slice(0, 5)}****` : '****',
+    isStudent,
+    studentProfile: isStudent ? { institution, programme, year, registrationNumber } : undefined,
+    cardVersion: 1,
+    keyVersion: 1,
+    cardStatus: 'locked',
+    pinHash: '',
+    hasCustomPin: false,
+    provisionalStatus: 'pending_approval',
+    activationStatus: 'pending_reception_payment',
+    registrationStatus: 'pending_reception_payment',
+    receptionPaymentStatus: 'unpaid',
+    gracePlatesAllowed: 0,
+    gracePlatesConsumed: 0,
+    gracePlatesRemaining: 0,
+    cardReadyForPrint: false,
+    failedLoginAttempts: 0,
+    createdAt: now,
+    onboardingToken: `OB-${crypto.randomBytes(12).toString('hex').toUpperCase()}`,
+    consentSigned: true,
+  };
+  serverDbState.customers.push(customer);
+  if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
+  serverDbState.auditLogs.unshift({
+    id: `audit_${crypto.randomUUID()}`,
+    timestamp: now,
+    restaurantCode,
+    branchId: branch?.id,
+    branchName: branch?.name,
+    actorRole: 'customer',
+    actorName: name,
+    action: 'CUSTOMER_SELF_REGISTERED',
+    details: `Customer #${memberNo} submitted an online registration. Awaiting reception payment confirmation.`,
+  });
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    serverDbState.customers = customers.filter((c: any) => c.id !== customerId);
+    return res.status(503).json({ success: false, error: 'Registration could not be saved. Please retry or visit reception.' });
+  }
+  return res.status(201).json({
+    success: true,
+    customer: { id: customerId, memberNo, name, phone, restaurantCode, registrationStatus: 'pending_reception_payment' },
+    nextStep: 'Visit reception to pay and have your payment confirmed.',
+  });
+});
+
 /**
  * Production restaurant administrator credentials are tenant-specific. The
  * environment variable contains a JSON object keyed by restaurant code:
@@ -1189,11 +1478,25 @@ app.post('/api/customer/auth/login', authRateLimiter, async (req, res) => {
     });
   }
 
-  // Approval status checks
-  if (cust.provisionalStatus === 'pending_approval') {
+  // Registration lifecycle checks. Reception-confirmed customers may set a PIN
+  // and use the limited onboarding dashboard while awaiting final boss approval.
+  if (cust.registrationStatus === 'pending_reception_payment' ||
+      (cust.provisionalStatus === 'pending_approval' && cust.receptionPaymentStatus !== 'confirmed' && cust.registrationStatus !== 'approved')) {
     return res.status(403).json({
       success: false,
-      error: 'Your registration is pending restaurant boss approval. You can eat grace meals at the stand with your Member ID.',
+      error: 'Your registration is saved. Please visit reception to pay and confirm your payment before setting a PIN.',
+    });
+  }
+  if (cust.registrationStatus === 'pending_boss_approval' && !cust.hasCustomPin) {
+    return res.status(403).json({
+      success: false,
+      error: 'Reception has confirmed your payment. Set your personal PIN first to access your limited onboarding dashboard.',
+    });
+  }
+  if (cust.provisionalStatus === 'pending_approval' && cust.registrationStatus !== 'pending_boss_approval') {
+    return res.status(403).json({
+      success: false,
+      error: 'Your registration is awaiting restaurant boss approval.',
     });
   }
   if (cust.provisionalStatus === 'rejected') {
@@ -1341,7 +1644,7 @@ app.post(
 );
 
 // POST /api/customer/activation/complete: Customer privately sets their 6+ digit PIN
-app.post('/api/customer/activation/complete', authRateLimiter, (req, res) => {
+app.post('/api/customer/activation/complete', authRateLimiter, async (req, res) => {
   const { phoneOrMember, activationCode, newPin } = req.body;
   const cleanIdentifier = (phoneOrMember || '').trim();
   const cleanPin = (newPin || '').trim();
@@ -1361,33 +1664,56 @@ app.post('/api/customer/activation/complete', authRateLimiter, (req, res) => {
   );
   if (!cust) return res.status(400).json({ success: false, error: 'Invalid activation credentials or code.' });
 
-  const requests = serverDbState?.activationRequests || [];
-  const codeHash = crypto.createHash('sha256').update(cleanCode).digest('hex');
-  const actReq = requests.find(
-    (r: any) =>
-      r.customerId === cust.id &&
-      !r.used &&
-      (r.activationCode === cleanCode || r.codeHash === codeHash) &&
-      new Date(r.expiresAt).getTime() > Date.now()
-  );
-
-  if (!actReq) {
-    return res.status(400).json({ success: false, error: 'Invalid, expired, or already used activation code.' });
+  const canSetPinAfterReceptionPayment =
+    cust.registrationStatus === 'pending_boss_approval' &&
+    cust.receptionPaymentStatus === 'confirmed' &&
+    !cust.hasCustomPin;
+  let actReq: any = null;
+  if (!canSetPinAfterReceptionPayment) {
+    const requests = serverDbState?.activationRequests || [];
+    const codeHash = crypto.createHash('sha256').update(cleanCode).digest('hex');
+    actReq = requests.find(
+      (r: any) =>
+        r.customerId === cust.id &&
+        !r.used &&
+        (r.activationCode === cleanCode || r.codeHash === codeHash) &&
+        new Date(r.expiresAt).getTime() > Date.now()
+    );
+    if (!actReq) {
+      return res.status(400).json({ success: false, error: 'Invalid, expired, or already used activation code.' });
+    }
   }
 
+  const previousCustomerAuth = {
+    pinHash: cust.pinHash,
+    hasCustomPin: cust.hasCustomPin,
+    pinSetAt: cust.pinSetAt,
+    activationStatus: cust.activationStatus,
+    cardReadyForPrint: cust.cardReadyForPrint,
+    failedLoginAttempts: cust.failedLoginAttempts,
+    lockedUntil: cust.lockedUntil,
+  };
+  const previousActivationRequest = actReq ? { used: actReq.used, usedAt: actReq.usedAt } : null;
   const pinHash = computeServerCustomerPinHash(cleanPin, cust.id, cust.memberNo);
   cust.pinHash = pinHash;
   cust.hasCustomPin = true;
   cust.pinSetAt = new Date().toISOString();
-  cust.activationStatus = 'active';
+  cust.activationStatus = cust.registrationStatus === 'pending_boss_approval' ? 'partial_active' : 'active';
   cust.failedLoginAttempts = 0;
   cust.lockedUntil = null;
-  cust.cardReadyForPrint = true;
+  cust.cardReadyForPrint = cust.registrationStatus === 'approved';
 
-  actReq.used = true;
-  actReq.usedAt = new Date().toISOString();
+  if (actReq) {
+    actReq.used = true;
+    actReq.usedAt = new Date().toISOString();
+  }
 
-  queueDbSave(serverDbState);
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    Object.assign(cust, previousCustomerAuth);
+    if (actReq && previousActivationRequest) Object.assign(actReq, previousActivationRequest);
+    return res.status(503).json({ success: false, error: 'PIN setup could not be saved. Please retry.' });
+  }
 
   const token = createSessionToken({
     userId: cust.id,
@@ -1405,6 +1731,8 @@ app.post('/api/customer/activation/complete', authRateLimiter, (req, res) => {
       memberNo: cust.memberNo,
       phone: cust.phone,
       restaurantCode: cust.restaurantCode,
+      registrationStatus: cust.registrationStatus,
+      activationStatus: cust.activationStatus,
     },
   });
 });
@@ -2099,6 +2427,67 @@ function checkServerStudentEntitlement(
       inGracePeriod: sub?.status === 'grace_period',
       enforcementEnabled: Boolean(settings?.enabled),
       reason: 'Physical card QR scanning does not require a dashboard subscription.',
+    };
+  }
+
+  const lifecycleCustomer = (serverDbState?.customers || []).find((c: any) => c.id === customerId);
+  const lifecycleSub = (serverDbState?.customerSubscriptions || []).find((sub: any) => sub.customerId === customerId);
+  const lifecycleNow = Date.now();
+  if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'complimentary') {
+    const freeEnd = new Date(lifecycleCustomer.freeAccessExpiresAt || lifecycleSub?.currentPeriodEnd || 0).getTime();
+    if (!freeEnd || lifecycleNow > freeEnd) {
+      lifecycleCustomer.customerAccessStatus = 'payment_required';
+      if (lifecycleSub) lifecycleSub.status = 'expired';
+    }
+  }
+  if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'active' && (lifecycleSub?.status === 'active' || lifecycleSub?.status === 'grace_period')) {
+    const paidEnd = new Date(lifecycleSub.currentPeriodEnd || 0).getTime();
+    const graceEnd = new Date(lifecycleSub.gracePeriodEnd || paidEnd + (settings?.graceDays || 3) * 86400000).getTime();
+    if (graceEnd && lifecycleNow > graceEnd) {
+      lifecycleSub.status = 'expired';
+      lifecycleCustomer.customerAccessStatus = 'payment_required';
+    } else if (paidEnd && lifecycleNow > paidEnd) {
+      lifecycleSub.status = 'grace_period';
+    }
+  }
+  if (lifecycleCustomer?.registrationStatus && (
+      lifecycleCustomer.customerAccessStatus === 'pending_super_admin_activation' ||
+      lifecycleCustomer.customerAccessStatus === 'payment_required' ||
+      lifecycleCustomer.customerAccessStatus === 'expired'
+    )) {
+    return {
+      allowed: false,
+      feature,
+      status: lifecycleCustomer.customerAccessStatus,
+      inGracePeriod: false,
+      enforcementEnabled: true,
+      reason: lifecycleCustomer.customerAccessStatus === 'pending_super_admin_activation'
+        ? 'Super Admin must activate the complimentary month before digital dashboard access begins.'
+        : 'Your dashboard access period has expired. Pay the monthly access fee to continue.',
+    };
+  }
+
+  if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'complimentary' && lifecycleSub?.status === 'complimentary') {
+    return {
+      allowed: true,
+      feature,
+      status: 'complimentary',
+      inGracePeriod: false,
+      enforcementEnabled: true,
+      expiresAt: lifecycleSub.currentPeriodEnd,
+      reason: 'Super Admin activated the one-month complimentary dashboard period.',
+    };
+  }
+  if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'active' &&
+      (lifecycleSub?.status === 'active' || lifecycleSub?.status === 'grace_period')) {
+    return {
+      allowed: true,
+      feature,
+      status: lifecycleSub.status,
+      inGracePeriod: lifecycleSub.status === 'grace_period',
+      enforcementEnabled: true,
+      expiresAt: lifecycleSub.currentPeriodEnd,
+      gracePeriodEnd: lifecycleSub.gracePeriodEnd,
     };
   }
 

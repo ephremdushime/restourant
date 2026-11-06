@@ -2577,7 +2577,11 @@ export class RestoStore {
       // Digital dashboard QR (verifyResult.isCard === false) requires an active subscription when monetization is enabled.
       if (!verifyResult.isCard) {
         const qrEntitlement = this.checkStudentEntitlement(customer.id, 'digital_qr');
-        if (!qrEntitlement.allowed) {
+        const provisionalGraceQrAllowed =
+          customer.registrationStatus === 'pending_boss_approval' &&
+          customer.receptionPaymentStatus === 'confirmed' &&
+          (customer.gracePlatesRemaining || 0) > 0;
+        if (!qrEntitlement.allowed && !provisionalGraceQrAllowed) {
           return buildRejection(
             'ACCOUNT_INACTIVE',
             'Digital QR pass requires an active dashboard subscription (500 RWF/mo). Please scan your physical card or activate your subscription.',
@@ -2601,15 +2605,16 @@ export class RestoStore {
         totalGraceUsedAcrossPending,
         customer.provisionalStatus === 'pending_approval' ? (customer.gracePlatesConsumed || 0) : 0
       );
+      const graceLimit = customer.gracePlatesAllowed || 3;
       const hasQualifyingPendingPayment =
         customerPendingApprovals.length > 0 || customer.provisionalStatus === 'pending_approval';
-      const eligibleGraceAvailable = hasQualifyingPendingPayment && effectiveGraceConsumed < 3;
+      const eligibleGraceAvailable = hasQualifyingPendingPayment && effectiveGraceConsumed < graceLimit;
 
       // 3. Available Credits: Does the customer have an approved meal balance >= 1 or an eligible grace meal?
       if (currentBalance < 1 && !eligibleGraceAvailable) {
         const noBalMsg =
-          hasQualifyingPendingPayment && effectiveGraceConsumed >= 3
-            ? 'No balance — Grace meal limit reached (3/3 meals consumed). Please await payment approval.'
+          hasQualifyingPendingPayment && effectiveGraceConsumed >= graceLimit
+            ? `No balance — Grace meal limit reached (${graceLimit}/${graceLimit} meals consumed). Please await payment approval.`
             : 'No balance — please top up or await payment approval.';
         return buildRejection(
           'NO_BALANCE',
@@ -2709,7 +2714,7 @@ export class RestoStore {
           customerPendingApprovals
             .slice()
             .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-            .find((a) => (a.gracePlatesConsumed || 0) < (a.gracePlatesAllowed || 3)) ||
+            .find((a) => (a.gracePlatesConsumed || 0) < (a.gracePlatesAllowed || customer.gracePlatesAllowed || 3)) ||
           customerPendingApprovals[0];
 
         if (targetApproval) {
@@ -2717,8 +2722,8 @@ export class RestoStore {
         }
         const updatedTotalGrace = effectiveGraceConsumed + 1;
         customer.gracePlatesConsumed = updatedTotalGrace;
-        customer.gracePlatesRemaining = Math.max(0, 3 - updatedTotalGrace);
-        overrideReason = `Authorized grace meal (#${updatedTotalGrace}/3 served). Awaiting boss Mobile Money payment approval.`;
+        customer.gracePlatesRemaining = Math.max(0, graceLimit - updatedTotalGrace);
+        overrideReason = `Authorized grace meal (#${updatedTotalGrace}/${graceLimit} served). Awaiting boss registration approval.`;
       }
 
       // Update active shift stats
@@ -2917,7 +2922,7 @@ export class RestoStore {
           .filter((a) => a.customerId === customer.id && a.status === 'pending')
           .reduce((sum, a) => sum + (a.gracePlatesConsumed || 0), 0);
         customer.gracePlatesConsumed = remainingGraceUsed;
-        customer.gracePlatesRemaining = Math.max(0, 3 - remainingGraceUsed);
+        customer.gracePlatesRemaining = Math.max(0, (customer.gracePlatesAllowed || 3) - remainingGraceUsed);
       }
     } else {
       const undoEntry: LedgerEntry = {
@@ -5611,7 +5616,7 @@ export class RestoStore {
 
   /**
    * Scanner station user / reception provisionally registers a new customer.
-   * Customer can immediately receive up to 3 grace plates while awaiting boss approval!
+   * Customer can receive up to 4 grace plates after reception confirms payment, while awaiting boss approval.
    */
   public registerProvisionalCustomer(
     data: {
@@ -5664,15 +5669,21 @@ export class RestoStore {
       studentProfile: data.studentProfile,
       cardVersion: 1,
       keyVersion: 1,
-      cardStatus: 'active', // Allowed for provisional grace taps
-      pinHash: '1234',
+      cardStatus: 'active', // Reception-confirmed registration may use only its limited grace allowance
+      pinHash: '',
       hasCustomPin: false,
       provisionalStatus: 'pending_approval',
-      activationStatus: 'pending_approval',
+      activationStatus: 'partial_active',
+      registrationStatus: 'pending_boss_approval',
+      receptionPaymentStatus: 'confirmed',
+      receptionPaymentConfirmedAt: now,
+      receptionPaymentConfirmedBy: data.registeredByStaffName,
+      receptionPaymentReference: data.paymentReference,
+      gracePlatesAllowed: 4,
       cardReadyForPrint: false,
       failedLoginAttempts: 0,
       gracePlatesConsumed: 0,
-      gracePlatesRemaining: 3,
+      gracePlatesRemaining: 4,
       pendingApprovalId: approvalId,
       createdAt: now,
       onboardingToken: `OB-${memberNo}-PROV`,
@@ -5704,7 +5715,7 @@ export class RestoStore {
       registeredByStaffName: data.registeredByStaffName || 'Station Staff',
       stationId: data.stationId || 'sp_kgl_01',
       stationName: data.stationName || 'Reception POS Desk',
-      gracePlatesAllowed: 3,
+      gracePlatesAllowed: 4,
       gracePlatesConsumed: 0,
       createdAt: now,
       status: 'pending',
@@ -5725,7 +5736,7 @@ export class RestoStore {
       actorRole: 'reception',
       actorName: staffName,
       action: 'PROVISIONAL_CUSTOMER_REGISTERED',
-      details: `Provisionally registered #${memberNo} (${newCustomer.name}). MoMo/Payment Ref: "${approval.paymentReference}" (${(approval.amountRwf || 0).toLocaleString()} RWF for ${data.platesRequested} plates). Awaiting boss Mobile Money confirmation. Grace plates allowed: 3.`,
+      details: `Provisionally registered #${memberNo} (${newCustomer.name}). MoMo/Payment Ref: "${approval.paymentReference}" (${(approval.amountRwf || 0).toLocaleString()} RWF for ${data.platesRequested} plates). Reception payment confirmed. Awaiting boss registration approval. Grace plates allowed: 4.`,
     });
 
     // Notify Restaurant Boss
@@ -5736,7 +5747,7 @@ export class RestoStore {
       senderName: `${staffName} (${approval.stationName})`,
       type: 'system_broadcast',
       title: `Pending Approval: New Customer #${memberNo}`,
-      message: `${newCustomer.name} provisionally registered with ${approval.paymentMethod.toUpperCase()} ref ${approval.paymentReference} (${(approval.amountRwf || 0).toLocaleString()} RWF). Please verify payment on Mobile Money.`,
+      message: `${newCustomer.name} provisionally registered with ${approval.paymentMethod.toUpperCase()} ref ${approval.paymentReference} (${(approval.amountRwf || 0).toLocaleString()} RWF). Reception has confirmed payment. Please review and approve the customer registration.`,
       priority: 'important',
       actionTab: 'approvals',
     });
@@ -5750,7 +5761,7 @@ export class RestoStore {
       senderName: approval.stationName,
       type: 'topup_success',
       title: `Registration Recorded (#${memberNo}) — Awaiting Boss Approval`,
-      message: `Your registration for ${platesCount} plates (${(approval.amountRwf || 0).toLocaleString()} RWF, Ref: ${approval.paymentReference}) is in the Boss approval queue. You may consume up to 3 grace meals while waiting.`,
+      message: `Your registration for ${platesCount} plates (${(approval.amountRwf || 0).toLocaleString()} RWF, Ref: ${approval.paymentReference}) is in the Boss approval queue. You may consume up to 4 grace meals while waiting.`,
       priority: 'important',
       actionTab: 'my_card',
     });
@@ -5759,6 +5770,56 @@ export class RestoStore {
     // The registration UI awaits this sync before attaching an optional private portrait.
     this.notify();
     return { customer: newCustomer, approval };
+  }
+
+  /**
+   * Reception confirms payment for a customer who self-registered online.
+   * This is a separate event from registration and from final boss approval.
+   */
+  public async confirmRegistrationPayment(data: {
+    customerId: string;
+    packageId?: string;
+    platesRequested: number;
+    amountRwf: number;
+    paymentMethod: PaymentMethod;
+    paymentReference: string;
+    registeredByStaffId: string;
+    registeredByStaffName: string;
+    stationId: string;
+    stationName: string;
+  }): Promise<{ success: boolean; approval?: PendingApproval; error?: string }> {
+    if (typeof window === 'undefined' || !navigator.onLine || !this.authToken) {
+      return { success: false, error: 'Reception payment confirmation requires an authenticated online connection.' };
+    }
+    if (!data.packageId) {
+      return { success: false, error: 'Select an available meal package. Custom packages must be configured by the restaurant administrator.' };
+    }
+    try {
+      const response = await fetch('/api/reception/customer/payment-confirm', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.authToken}`,
+        },
+        body: JSON.stringify({
+          customerId: data.customerId,
+          packageId: data.packageId,
+          paymentMethod: data.paymentMethod,
+          paymentReference: data.paymentReference.trim(),
+          registeredByStaffName: data.registeredByStaffName,
+          stationId: data.stationId,
+          stationName: data.stationName,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        return { success: false, error: result.error || 'Payment confirmation failed.' };
+      }
+      await this.pullStateFromServer();
+      return { success: true, approval: result.approval as PendingApproval };
+    } catch {
+      return { success: false, error: 'Unable to reach the RestoPass server. Payment was not confirmed.' };
+    }
   }
 
   /**
@@ -5827,12 +5888,17 @@ export class RestoStore {
     if (!customer.provisionalStatus) {
       customer.provisionalStatus = 'approved';
     }
+    // Existing approved-customer top-ups retain the legacy three-meal grace policy.
+    // The four-meal allowance is reserved for first-time registrations awaiting boss approval.
+    if (customer.registrationStatus === 'approved' || customer.provisionalStatus === 'approved') {
+      customer.gracePlatesAllowed = 3;
+    }
     const totalPendingGraceConsumed = this.state.pendingApprovals
       .filter((a) => a.customerId === customer.id && a.status === 'pending')
       .reduce((sum, a) => sum + (a.gracePlatesConsumed || 0), 0);
     const effectiveGraceUsed = Math.max(totalPendingGraceConsumed, customer.gracePlatesConsumed || 0);
     customer.gracePlatesConsumed = effectiveGraceUsed;
-    customer.gracePlatesRemaining = Math.max(0, 3 - effectiveGraceUsed);
+    customer.gracePlatesRemaining = Math.max(0, (customer.gracePlatesAllowed || 3) - effectiveGraceUsed);
     if (!customer.pendingApprovalId) {
       customer.pendingApprovalId = approvalId;
     }
@@ -5966,7 +6032,7 @@ export class RestoStore {
         platesDelta: -graceConsumed,
         timestamp: now,
         staffId: bossName,
-        reason: `Deduction: -${graceConsumed} grace meals consumed while awaiting boss approval (< 3 policy)`,
+        reason: `Deduction: -${graceConsumed} grace meals consumed while awaiting boss approval (< 4 policy)`,
         reference: `GRACE-CONSUMED-${customer.memberNo}-${approval.id}`,
         idempotencyKey: `idemp_appr_grace_${approval.id}`,
       };
@@ -6009,10 +6075,12 @@ export class RestoStore {
     customer.provisionalStatus = 'approved';
     customer.cardStatus = 'active';
     customer.gracePlatesConsumed = remainingGraceUsed;
-    customer.gracePlatesRemaining = Math.max(0, 3 - remainingGraceUsed);
+    customer.gracePlatesRemaining = Math.max(0, (customer.gracePlatesAllowed || 4) - remainingGraceUsed);
     customer.pendingApprovalId = remainingPending[0]?.id;
     customer.activationStatus = customer.hasCustomPin ? 'active' : 'ready_for_activation';
     if (approval.type === 'new_customer') {
+      customer.registrationStatus = 'approved';
+      customer.customerAccessStatus = customer.customerAccessStatus || 'pending_super_admin_activation';
       customer.cardReadyForPrint = true;
     }
 
@@ -6698,13 +6766,20 @@ export class RestoStore {
 
     // Evaluate expiration & grace period transitions dynamically
     const now = Date.now();
-    if (sub.status === 'active' && sub.currentPeriodEnd) {
+    if ((sub.status === 'active' || sub.status === 'grace_period' || sub.status === 'complimentary') && sub.currentPeriodEnd) {
       const endMs = new Date(sub.currentPeriodEnd).getTime();
       const graceMs = sub.gracePeriodEnd ? new Date(sub.gracePeriodEnd).getTime() : endMs + 3 * 24 * 3600 * 1000;
-      if (now > graceMs) {
+      const lifecycleCustomer = this.state.customers.find((c) => c.id === customerId);
+      if (sub.status === 'complimentary' && now > endMs) {
+        // The onboarding free month ends at 30 days; it has no additional grace period.
         sub.status = 'expired';
         sub.updatedAt = new Date().toISOString();
-      } else if (now > endMs) {
+        if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'complimentary') lifecycleCustomer.customerAccessStatus = 'payment_required';
+      } else if (now > graceMs) {
+        sub.status = 'expired';
+        sub.updatedAt = new Date().toISOString();
+        if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'active') lifecycleCustomer.customerAccessStatus = 'payment_required';
+      } else if (now > endMs && sub.status === 'active') {
         sub.status = 'grace_period';
         sub.updatedAt = new Date().toISOString();
       }
@@ -6728,6 +6803,62 @@ export class RestoStore {
         inGracePeriod: sub?.status === 'grace_period',
         enforcementEnabled: settings.enabled,
         reason: 'Physical card QR scanning does not require a dashboard subscription.',
+      };
+    }
+
+    // New-customer dashboard access lifecycle is enforced independently of the legacy feature flag.
+    // This prevents a disabled legacy monetization flag from bypassing the one-month free entitlement.
+    const lifecycleCustomer = this.state.customers.find((c) => c.id === customerId);
+    const lifecycleSubscription = this.getCustomerSubscription(customerId);
+    if (lifecycleCustomer?.registrationStatus && (
+        lifecycleCustomer.customerAccessStatus === 'pending_super_admin_activation' ||
+        lifecycleCustomer.customerAccessStatus === 'payment_required' ||
+        lifecycleCustomer.customerAccessStatus === 'expired'
+      )) {
+      return {
+        allowed: false,
+        feature,
+        status: lifecycleCustomer.customerAccessStatus === 'pending_super_admin_activation' ? 'inactive' : 'expired',
+        inGracePeriod: false,
+        enforcementEnabled: true,
+        reason: lifecycleCustomer.customerAccessStatus === 'pending_super_admin_activation'
+          ? 'Your registration is approved. Super Admin must activate your complimentary month before digital dashboard access begins.'
+          : 'Your complimentary or paid dashboard access has expired. Visit reception to pay the monthly access fee.',
+      };
+    }
+    if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'active' && lifecycleSubscription?.status === 'expired') {
+      lifecycleCustomer.customerAccessStatus = 'payment_required';
+      return {
+        allowed: false,
+        feature,
+        status: 'expired',
+        inGracePeriod: false,
+        enforcementEnabled: true,
+        reason: 'Your dashboard access period has expired. Please pay the monthly access fee to continue.',
+      };
+    }
+
+    if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'complimentary' && lifecycleSubscription?.status === 'complimentary') {
+      return {
+        allowed: true,
+        feature,
+        status: 'complimentary',
+        inGracePeriod: false,
+        enforcementEnabled: true,
+        expiresAt: lifecycleSubscription.currentPeriodEnd,
+        reason: 'Super Admin activated the one-month complimentary dashboard period.',
+      };
+    }
+    if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'active' &&
+        (lifecycleSubscription?.status === 'active' || lifecycleSubscription?.status === 'grace_period')) {
+      return {
+        allowed: true,
+        feature,
+        status: lifecycleSubscription.status,
+        inGracePeriod: lifecycleSubscription.status === 'grace_period',
+        enforcementEnabled: true,
+        expiresAt: lifecycleSubscription.currentPeriodEnd,
+        gracePeriodEnd: lifecycleSubscription.gracePeriodEnd,
       };
     }
 
@@ -6947,6 +7078,14 @@ export class RestoStore {
       sub.updatedAt = new Date(nowMs).toISOString();
     }
 
+    const paidCustomer = this.state.customers.find((c) => c.id === payment.customerId);
+    if (paidCustomer) {
+      if (paidCustomer.registrationStatus) {
+        paidCustomer.customerAccessStatus = 'active';
+        paidCustomer.freeAccessExpiresAt = new Date(periodEndMs).toISOString();
+      }
+    }
+
     this.logAudit({
       restaurantCode: payment.restaurantCode,
       actorRole: 'customer',
@@ -7018,11 +7157,14 @@ export class RestoStore {
 
     const cust = this.state.customers.find((c) => c.id === params.customerId);
     if (!cust) return { success: false, error: 'Customer not found' };
+    if (cust.registrationStatus && cust.registrationStatus !== 'approved') {
+      return { success: false, error: 'The Restaurant Boss must approve this registration before Super Admin can activate the complimentary month.' };
+    }
 
     if (!this.state.customerSubscriptions) this.state.customerSubscriptions = [];
 
     const nowMs = Date.now();
-    const days = params.durationDays || 30;
+    const days = cust.registrationStatus === 'approved' ? 30 : (params.durationDays || 30);
     const periodEndMs = nowMs + days * 24 * 3600 * 1000;
     const graceEndMs = periodEndMs + 3 * 24 * 3600 * 1000;
 
@@ -7057,6 +7199,12 @@ export class RestoStore {
       sub.complimentaryReason = params.reason.trim();
       sub.complimentaryGrantedBy = params.grantedBy || 'Platform Administrator';
       sub.updatedAt = new Date(nowMs).toISOString();
+    }
+
+    if (cust.registrationStatus === 'approved') {
+      cust.customerAccessStatus = 'complimentary';
+      cust.freeAccessStartedAt = new Date(nowMs).toISOString();
+      cust.freeAccessExpiresAt = new Date(periodEndMs).toISOString();
     }
 
     this.logAudit({
@@ -7197,11 +7345,38 @@ export class RestoStore {
    * Once the Boss approves a new registration, the customer can immediately set their
    * personal 6+ digit PIN on the Customer Portal without needing a magic link or WhatsApp link.
    */
+  public async getCustomerRegistrationStatus(
+    phone: string,
+    restaurantCode: string
+  ): Promise<{ status: 'needs_pin_setup' | 'ready_for_login' | 'pending_reception_payment' | 'pending_boss_approval' | 'rejected' | 'not_found' | 'unavailable'; memberNo?: string; error?: string }> {
+    if (typeof window !== 'undefined' && navigator.onLine) {
+      try {
+        const response = await fetch('/api/customer/registration/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone, restaurantCode }),
+        });
+        const result = await response.json();
+        if (response.ok && result.success && result.status) {
+          return { status: result.status, memberNo: result.memberNo };
+        }
+        return { status: response.status === 404 ? 'not_found' : 'unavailable', error: result.error || 'Unable to verify registration status.' };
+      } catch {
+        if ((import.meta as any).env?.PROD === true) {
+          return { status: 'unavailable', error: 'Cannot reach RestoPass. Reconnect and try again.' };
+        }
+      }
+    } else if ((import.meta as any).env?.PROD === true) {
+      return { status: 'unavailable', error: 'An internet connection is required to verify your registration.' };
+    }
+    return this.checkCustomerPortalStatus(phone, restaurantCode);
+  }
+
   public checkCustomerPortalStatus(
     phoneOrMember: string,
     restaurantCode?: string
   ): {
-    status: 'needs_pin_setup' | 'ready_for_login' | 'pending_boss_approval' | 'rejected' | 'not_found';
+    status: 'needs_pin_setup' | 'ready_for_login' | 'pending_reception_payment' | 'pending_boss_approval' | 'rejected' | 'not_found';
     customer?: Customer;
   } {
     const clean = phoneOrMember.trim();
@@ -7221,11 +7396,19 @@ export class RestoStore {
     });
 
     if (!cust) return { status: 'not_found' };
+    if (cust.registrationStatus === 'rejected' || cust.provisionalStatus === 'rejected' || cust.activationStatus === 'suspended') {
+      return { status: 'rejected', customer: cust };
+    }
+    if (cust.registrationStatus === 'pending_reception_payment' || cust.receptionPaymentStatus === 'unpaid') {
+      return { status: 'pending_reception_payment', customer: cust };
+    }
+    if (cust.registrationStatus === 'pending_boss_approval') {
+      return cust.hasCustomPin
+        ? { status: 'ready_for_login', customer: cust }
+        : { status: 'needs_pin_setup', customer: cust };
+    }
     if (cust.provisionalStatus === 'pending_approval') {
       return { status: 'pending_boss_approval', customer: cust };
-    }
-    if (cust.provisionalStatus === 'rejected' || cust.activationStatus === 'suspended') {
-      return { status: 'rejected', customer: cust };
     }
     if (!cust.hasCustomPin || cust.activationStatus === 'ready_for_activation') {
       return { status: 'needs_pin_setup', customer: cust };
@@ -7256,7 +7439,7 @@ export class RestoStore {
     if (check.status === 'pending_boss_approval') {
       return {
         success: false,
-        error: 'Your registration is still awaiting Restaurant Boss approval. You can use up to 3 grace meals at the stand while waiting.',
+        error: 'Your registration is awaiting Restaurant Boss approval. You can use up to 4 grace meals at the stand while waiting.',
       };
     }
     if (check.status === 'rejected') {
@@ -7279,7 +7462,7 @@ export class RestoStore {
     cust.pinHash = pinHash;
     cust.hasCustomPin = true;
     cust.pinSetAt = new Date().toISOString();
-    cust.activationStatus = 'active';
+    cust.activationStatus = cust.registrationStatus === 'pending_boss_approval' ? 'partial_active' : 'active';
     cust.failedLoginAttempts = 0;
     cust.lockedUntil = null;
     cust.lastLoginAt = new Date().toISOString();
@@ -7337,9 +7520,6 @@ export class RestoStore {
       const cleanIdentifier = params.phoneOrMember.trim();
       const cleanPin = params.newPin.trim();
       const cleanCode = (params.activationCode || '').trim();
-      if (!cleanCode || cleanCode === 'BOSS_APPROVED') {
-        return { success: false, error: 'A valid staff-issued activation code is required.' };
-      }
       if (!/^\\d{6,}$/.test(cleanPin)) {
         return { success: false, error: 'PIN must be at least 6 numeric digits.' };
       }
@@ -7653,7 +7833,7 @@ export class RestoStore {
             this.setRestaurantCode(data.customer.restaurantCode);
           }
           this.setRole('customer');
-          this.pullStateFromServer();
+          await this.pullStateFromServer();
           return { success: true, customer: this.getCurrentCustomer() || undefined };
         }
         if (productionBuild) {
@@ -7690,11 +7870,15 @@ export class RestoStore {
     }
 
     // Check pending / rejected status
-    if (cust.provisionalStatus === 'pending_approval') {
+    if (cust.registrationStatus === 'pending_reception_payment' ||
+        (cust.provisionalStatus === 'pending_approval' && cust.receptionPaymentStatus !== 'confirmed' && cust.registrationStatus !== 'approved')) {
       return {
         success: false,
-        error: 'Your registration is pending restaurant boss approval. You can eat grace meals at the stand with your Member ID.',
+        error: 'Please visit reception to pay and confirm your registration before signing in.',
       };
+    }
+    if (cust.registrationStatus === 'pending_boss_approval' && !cust.hasCustomPin) {
+      return { success: false, error: 'Reception has confirmed your payment. Set your personal PIN to access the limited onboarding dashboard.' };
     }
     if (cust.provisionalStatus === 'rejected') {
       return {

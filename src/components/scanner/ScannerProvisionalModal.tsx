@@ -102,39 +102,95 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
   const handleRegisterNewSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-
     const trimmedName = name.trim();
     const trimmedPhone = phone.trim();
     const trimmedRegNo = regNumber.trim();
     const trimmedNationalId = idNumber.trim();
     const trimmedInstitution = institution.trim();
-    const trimmedPaymentRef = paymentReference.trim();
+    const trimmedPaymentRef = paymentReference.trim().toUpperCase();
 
-    if (trimmedName.length < 2) {
-      setError('Please enter the customer full name (at least 2 characters).');
+    if (trimmedName.length < 2) return setError('Please enter the customer full name (at least 2 characters).');
+    if (!trimmedPhone || !isValidPhoneNumber(trimmedPhone)) return setError('Please enter a valid phone number.');
+    if (isStudent && (!trimmedRegNo || !trimmedInstitution)) return setError('Enter the student registration number and institution.');
+    if (!isStudent && !trimmedNationalId) return setError('Enter the National ID or Passport number.');
+    if (paymentMethod !== 'cash' && !trimmedPaymentRef) return setError('Enter the payment transaction reference.');
+    if (!staffName.trim()) return setError('Enter the reception or staff operator name.');
+    if (isCustomPlates || !selectedPkg?.id) return setError('Choose a configured meal package for this registration.');
+
+    const effectiveIdType = isStudent ? 'student_id' : 'national_id';
+    const effectiveIdNumber = isStudent ? trimmedRegNo : trimmedNationalId;
+    const capturedPhoto = photoUrl.startsWith('data:') ? photoUrl : null;
+
+    try {
+      const registrationResponse = await fetch('/api/public/customer/registration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          restaurantCode: restoCode,
+          branchId: currentBranch?.id,
+          name: trimmedName,
+          phone: trimmedPhone,
+          idType: effectiveIdType,
+          idNumber: effectiveIdNumber,
+          isStudent,
+          institution: trimmedInstitution,
+          programme: programme.trim() || 'Not provided',
+          year,
+          registrationNumber: trimmedRegNo,
+        }),
+      });
+      const registration = await registrationResponse.json();
+      if (!registrationResponse.ok || !registration.success || !registration.customer?.id) {
+        throw new Error(registration.error || 'Customer registration could not be saved.');
+      }
+
+      const paymentResult = await restoStore.confirmRegistrationPayment({
+        customerId: registration.customer.id,
+        packageId: selectedPkg.id,
+        platesRequested: effectivePlates,
+        amountRwf: effectiveAmount,
+        paymentMethod,
+        paymentReference: trimmedPaymentRef || `CASH-${Date.now()}`,
+        registeredByStaffId: currentStation?.assignedStaffUserId || 'reception_staff',
+        registeredByStaffName: staffName.trim(),
+        stationId: currentStation?.id || 'sp_1',
+        stationName: currentStation?.name || 'Reception & Stand 1',
+      });
+      if (!paymentResult.success) {
+        throw new Error(`Registration saved as #${registration.customer.memberNo}, but payment was not confirmed: ${paymentResult.error || 'Please find this customer and retry payment confirmation.'}`);
+      }
+
+      if (capturedPhoto) {
+        const photoResult = await restoStore.uploadCustomerPhoto(registration.customer.id, capturedPhoto);
+        if (!photoResult.success) {
+          setError(`Payment was confirmed for #${registration.customer.memberNo}, but the portrait could not be saved. Retry the photo from the customer profile.`);
+        }
+      }
+      const updatedCustomer = restoStore.getState().customers.find((c) => c.id === registration.customer.id);
+      if (!updatedCustomer) throw new Error('Payment was confirmed, but the customer record has not synchronized yet. Refresh the reception station.');
+      const qrToken = restoStore.getCustomerCardQr(updatedCustomer);
+      setSuccessResult({
+        customer: updatedCustomer,
+        plates: effectivePlates,
+        amount: effectiveAmount,
+        ref: paymentResult.approval?.paymentReference || trimmedPaymentRef || 'CASH',
+        qrToken,
+      });
+      resetNewCustomerFields();
+    } catch (err: any) {
+      setError(err?.message || 'Registration or payment confirmation failed. Check the customer record before retrying.');
+    }
+  };
+
+  const handleTopupSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (!selectedCustomer) {
+      setError('Please search and select a customer account first.');
       return;
     }
-    if (!trimmedPhone || !isValidPhoneNumber(trimmedPhone)) {
-      setError('Please enter a valid phone number (e.g. +250 788 123 456 or 0788 123 456).');
-      return;
-    }
-    if (isStudent) {
-      if (!trimmedRegNo) {
-        setError('Please enter the Student Registration / ID Number.');
-        return;
-      }
-      if (!trimmedInstitution) {
-        setError('Please enter the student institution / university name.');
-        return;
-      }
-    } else {
-      if (!trimmedNationalId) {
-        setError('Please enter the National ID or Passport number.');
-        return;
-      }
-    }
-    if (!trimmedPaymentRef) {
-      setError('Please enter the Mobile Money SMS transaction reference or receipt code.');
+    if (paymentMethod !== 'cash' && !paymentReference.trim()) {
+      setError('Please enter the payment transaction reference.');
       return;
     }
     if (!staffName.trim()) {
@@ -142,123 +198,56 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
       return;
     }
 
-    const effectiveIdType = isStudent ? 'student_id' : 'national_id';
-    const effectiveIdNumber = isStudent ? trimmedRegNo : trimmedNationalId;
-
-    // Prevent duplicate customer phone or ID in the same restaurant
-    const dupCheck = restoStore.checkDuplicateCustomerIdentity(
-      restoCode,
-      trimmedPhone,
-      effectiveIdType,
-      effectiveIdNumber,
-      isStudent ? trimmedRegNo : undefined
-    );
-    if (dupCheck.isDuplicate) {
-      setError(dupCheck.message || 'A customer with this phone number or ID is already registered.');
-      return;
-    }
-
     try {
-      const capturedPhoto = photoUrl.startsWith('data:') ? photoUrl : null;
-      const fallbackPhoto = '/src/assets/images/avatar_student_male_1790979380050.jpg';
-      const result = restoStore.registerProvisionalCustomer(
-        {
-          restaurantCode: restoCode,
-          branchId: currentBranch?.id || 'br_rw01_main',
-          branchName: currentBranch?.name || 'Main Campus Dining Hall',
-          name: trimmedName,
-          phone: trimmedPhone,
-          photoUrl: capturedPhoto ? fallbackPhoto : photoUrl,
-          idType: effectiveIdType,
-          idNumber: effectiveIdNumber,
-          isStudent,
-          studentProfile: isStudent
-            ? {
-                institution: trimmedInstitution,
-                programme: programme.trim(),
-                year,
-                registrationNumber: trimmedRegNo,
-              }
-            : undefined,
-          packageId: isCustomPlates ? undefined : selectedPkg?.id,
-          platesRequested: effectivePlates,
-          amountRwf: effectiveAmount,
-          paymentMethod,
-          paymentReference: trimmedPaymentRef.toUpperCase(),
-          registeredByStaffId: currentStation?.assignedStaffUserId || 'reception_staff',
-          registeredByStaffName: staffName.trim(),
-          stationId: currentStation?.id || 'sp_1',
-          stationName: currentStation?.name || 'Reception & Stand 1',
-        },
-        staffName.trim()
-      );
-
-      if (capturedPhoto) {
-        await restoStore.pushStateToServer();
-        const photoResult = await restoStore.uploadCustomerPhoto(result.customer.id, capturedPhoto);
-        if (!photoResult.success) {
-          setError(`Registration was recorded, but the portrait was not saved: ${photoResult.error || 'Upload unavailable'}. You can retry it from the customer profile.`);
-        }
-      }
-      const qrToken = restoStore.getCustomerCardQr(result.customer);
-      resetNewCustomerFields();
-      setSuccessResult({
-        customer: result.customer,
-        plates: effectivePlates,
-        amount: effectiveAmount,
-        ref: trimmedPaymentRef.toUpperCase(),
-        qrToken,
-      });
-    } catch (err: any) {
-      setError(err?.message || 'Failed to submit provisional registration.');
-    }
-  };
-
-  const handleTopupSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-
-    if (!selectedCustomer) {
-      setError('Please search and select a customer account first.');
-      return;
-    }
-    if (!paymentReference.trim()) {
-      setError('Please enter the Mobile Money transaction reference number.');
-      return;
-    }
-
-    try {
-      restoStore.rechargeProvisionalCustomer(
-        {
-          restaurantCode: restoCode,
-          branchId: currentBranch?.id || selectedCustomer.branchId || 'br_rw01_main',
-          branchName: currentBranch?.name || selectedCustomer.branchName || 'Main Campus Dining Hall',
+      const reference = paymentReference.trim().toUpperCase();
+      if (selectedCustomer.registrationStatus === 'pending_reception_payment') {
+        if (isCustomPlates) throw new Error('Choose a configured meal package to confirm a new registration payment.');
+        const result = await restoStore.confirmRegistrationPayment({
           customerId: selectedCustomer.id,
           packageId: isCustomPlates ? undefined : selectedPkg?.id,
           platesRequested: effectivePlates,
           amountRwf: effectiveAmount,
           paymentMethod,
-          paymentReference: paymentReference.trim().toUpperCase(),
+          paymentReference: reference,
           registeredByStaffId: currentStation?.assignedStaffUserId || 'reception_staff',
           registeredByStaffName: staffName.trim(),
           stationId: currentStation?.id || 'sp_1',
           stationName: currentStation?.name || 'Reception & Stand 1',
-        },
-        staffName.trim()
-      );
+        });
+        if (!result.success) throw new Error(result.error || 'Payment confirmation failed.');
+      } else {
+        restoStore.rechargeProvisionalCustomer(
+          {
+            restaurantCode: restoCode,
+            branchId: currentBranch?.id || selectedCustomer.branchId || 'br_rw01_main',
+            branchName: currentBranch?.name || selectedCustomer.branchName || 'Main Campus Dining Hall',
+            customerId: selectedCustomer.id,
+            packageId: isCustomPlates ? undefined : selectedPkg?.id,
+            platesRequested: effectivePlates,
+            amountRwf: effectiveAmount,
+            paymentMethod,
+            paymentReference: reference || `CASH-${Date.now()}`,
+            registeredByStaffId: currentStation?.assignedStaffUserId || 'reception_staff',
+            registeredByStaffName: staffName.trim(),
+            stationId: currentStation?.id || 'sp_1',
+            stationName: currentStation?.name || 'Reception & Stand 1',
+          },
+          staffName.trim()
+        );
+      }
 
-      const qrToken = restoStore.getCustomerCardQr(selectedCustomer);
-      const refUpper = paymentReference.trim().toUpperCase();
+      const updatedCustomer = restoStore.getState().customers.find((c) => c.id === selectedCustomer.id) || selectedCustomer;
+      const qrToken = restoStore.getCustomerCardQr(updatedCustomer);
       setPaymentReference('');
       setSuccessResult({
-        customer: selectedCustomer,
+        customer: updatedCustomer,
         plates: effectivePlates,
         amount: effectiveAmount,
-        ref: refUpper,
+        ref: reference || 'CASH',
         qrToken,
       });
     } catch (err: any) {
-      setError(err?.message || 'Failed to submit provisional recharge.');
+      setError(err?.message || 'Failed to confirm payment.');
     }
   };
 
@@ -295,7 +284,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                 Customer Registration &amp; Top-Up Desk
               </h3>
               <p className="text-sm text-slate-300 mt-0.5">
-                Register new customers or record recharges. Eligible accounts can use up to <strong>3 grace meals</strong> while awaiting boss verification.
+                Register walk-ins, confirm payments for online registrations, or record recharges. Reception-confirmed new accounts receive up to <strong>4 grace meals</strong> while awaiting boss approval.
               </p>
             </div>
           </div>
@@ -324,7 +313,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                 Submission Recorded!
               </h4>
               <p className="text-sm text-emerald-100 mt-1.5 max-w-md mx-auto leading-relaxed">
-                Customer <strong>#{successResult.customer.memberNo} ({successResult.customer.name})</strong> has been queued for Boss Mobile Money verification.
+                Customer <strong>#{successResult.customer.memberNo} ({successResult.customer.name})</strong> has been registered and the reception payment has been confirmed. It is now awaiting final boss approval.
               </p>
             </div>
 
@@ -332,10 +321,10 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
             <div className="p-4 rounded-xl bg-black/50 border border-emerald-400/50 text-left space-y-2 text-sm">
               <div className="flex items-center gap-2 text-amber-300 font-bold text-base">
                 <ShieldCheck className="w-5 h-5 shrink-0" />
-                <span>Grace Meals Policy: Up to 3 Plates Authorized</span>
+                <span>Grace Meals Policy: Up to 4 Plates Authorized</span>
               </div>
               <p className="text-slate-200 text-sm leading-relaxed">
-                While the boss verifies payment reference <strong>{successResult.ref}</strong> ({successResult.amount.toLocaleString()} RWF for {successResult.plates} plates), the customer may consume up to <strong>3 grace meals</strong> if their paid balance is zero.
+                Reception has confirmed {successResult.amount.toLocaleString()} RWF for {successResult.plates} plates (reference: <strong>{successResult.ref}</strong>). The customer may consume up to <strong>4 grace meals</strong> while the boss reviews the registration.
               </p>
             </div>
 
@@ -409,7 +398,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                 }`}
               >
                 <CreditCard className="w-4 h-4" />
-                <span>Existing Customer Top-Up</span>
+                <span>Find / Confirm Payment</span>
               </button>
             </div>
 
@@ -417,7 +406,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
             <div className="p-3.5 rounded-2xl bg-amber-950/60 border border-amber-500/50 text-sm text-amber-100 flex items-start gap-3">
               <Clock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
               <div className="leading-relaxed">
-                <strong>Boss Approval Policy:</strong> Collect payment, record the Mobile Money reference, and submit. New or zero-balance customers can eat up to <strong>3 grace plates</strong> while waiting for boss approval.
+                <strong>Boss Approval Policy:</strong> Collect payment, record the Mobile Money reference, and submit. New registrations with confirmed reception payment can use up to <strong>4 grace plates</strong> while waiting for boss approval.
               </div>
             </div>
 
@@ -692,7 +681,6 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                         className="w-full py-3 px-3.5 rounded-xl bg-slate-900 border-2 border-slate-700 text-white text-sm focus:border-emerald-400 outline-hidden"
                       >
                         <option value="mtn_momo">MTN Mobile Money (*182#)</option>
-                        <option value="airtel_money">Airtel Money (*500#)</option>
                         <option value="cash">Cash Received at Counter</option>
                         <option value="bank_transfer">Bank Transfer (BK / Equity)</option>
                       </select>
@@ -700,7 +688,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
 
                     <div>
                       <label htmlFor="reg-payment-ref" className="text-slate-200 font-semibold block mb-1.5 text-sm">
-                        Payment / MoMo Reference <span className="text-emerald-400">*</span>
+                        Payment / MoMo Reference {paymentMethod !== 'cash' && <span className="text-emerald-400">*</span>}
                       </label>
                       <input
                         id="reg-payment-ref"
@@ -738,12 +726,12 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                 {/* Search existing member */}
                 <div>
                   <label htmlFor="topup-member-search" className="font-bold text-white block mb-1.5 text-sm">
-                    Find Existing Member
+                    Find Registered Customer
                   </label>
                   <input
                     id="topup-member-search"
                     type="text"
-                    placeholder="Type name, member # (e.g. 28491), or phone..."
+                    placeholder="Search by name, member number, or registered phone..."
                     value={topupSearch}
                     onChange={(e) => setTopupSearch(e.target.value)}
                     className="w-full py-3 px-3.5 rounded-xl bg-slate-950 border-2 border-slate-700 text-white font-mono text-base sm:text-sm placeholder-slate-500 focus:border-emerald-400 outline-hidden"
@@ -789,7 +777,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                         <div>
                           <div className="font-bold text-white text-base">{selectedCustomer.name}</div>
                           <div className="text-slate-300 font-mono text-xs">
-                            Member #{selectedCustomer.memberNo} · Approved Balance: {restoStore.getCustomerBalance(selectedCustomer.id)} plates
+                            Member #{selectedCustomer.memberNo} · {selectedCustomer.registrationStatus === 'pending_reception_payment' ? 'Payment confirmation required' : `Balance: ${restoStore.getCustomerBalance(selectedCustomer.id)} plates`}
                           </div>
                         </div>
                       </div>
@@ -807,7 +795,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                 {/* Package selection */}
                 <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-white text-sm">Top-Up Package</span>
+                    <span className="font-bold text-white text-sm">{selectedCustomer?.registrationStatus === 'pending_reception_payment' ? 'Registration Payment' : 'Top-Up Package'}</span>
                     <span className="text-emerald-400 font-mono font-bold text-sm">
                       +{effectivePlates} Plates ({effectiveAmount.toLocaleString()} RWF)
                     </span>
@@ -834,7 +822,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                         className="w-full py-3 px-3.5 rounded-xl bg-slate-900 border-2 border-slate-700 text-white text-sm focus:border-emerald-400 outline-hidden"
                       >
                         <option value="mtn_momo">MTN Mobile Money (*182#)</option>
-                        <option value="airtel_money">Airtel Money (*500#)</option>
+                        
                         <option value="cash">Cash Received at Counter</option>
                         <option value="bank_transfer">Bank Transfer</option>
                       </select>
@@ -842,12 +830,12 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
 
                     <div>
                       <label htmlFor="topup-payment-ref" className="text-slate-200 font-semibold block mb-1.5 text-sm">
-                        Mobile Money SMS Ref <span className="text-emerald-400">*</span>
+                        Payment Reference {paymentMethod !== 'cash' && <span className="text-emerald-400">*</span>}
                       </label>
                       <input
                         id="topup-payment-ref"
                         type="text"
-                        placeholder="e.g. MOMO-TOPUP-4891"
+                        placeholder={paymentMethod === 'cash' ? 'Optional for cash payments' : 'Enter payment transaction reference'}
                         value={paymentReference}
                         onChange={(e) => setPaymentReference(e.target.value)}
                         className="w-full py-3 px-3.5 rounded-xl bg-slate-900 border-2 border-slate-700 text-white font-mono font-bold text-sm placeholder-slate-500 focus:border-emerald-400 outline-hidden uppercase"
@@ -869,7 +857,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                     disabled={!selectedCustomer}
                     className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-black text-sm shadow-lg cursor-pointer transition-colors"
                   >
-                    Submit Top-Up for Approval
+                    {selectedCustomer?.registrationStatus === 'pending_reception_payment' ? 'Confirm Registration Payment' : 'Submit Top-Up for Approval'}
                   </button>
                 </div>
               </form>

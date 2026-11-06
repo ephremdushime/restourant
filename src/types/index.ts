@@ -123,7 +123,16 @@ export interface Customer {
   hasCustomPin?: boolean; // false until customer sets PIN
   pinSetAt?: string;
   provisionalStatus?: 'pending_approval' | 'approved' | 'rejected';
-  activationStatus?: 'pending_approval' | 'ready_for_activation' | 'active' | 'suspended';
+  activationStatus?: 'pending_reception_payment' | 'partial_active' | 'pending_approval' | 'ready_for_activation' | 'active' | 'suspended';
+  registrationStatus?: 'pending_reception_payment' | 'pending_boss_approval' | 'approved' | 'rejected';
+  receptionPaymentStatus?: 'unpaid' | 'confirmed';
+  receptionPaymentConfirmedAt?: string;
+  receptionPaymentConfirmedBy?: string;
+  receptionPaymentReference?: string;
+  gracePlatesAllowed?: number;
+  customerAccessStatus?: 'pending_super_admin_activation' | 'complimentary' | 'payment_required' | 'active' | 'expired';
+  freeAccessStartedAt?: string;
+  freeAccessExpiresAt?: string;
   cardReadyForPrint?: boolean;
   failedLoginAttempts?: number;
   lockedUntil?: string | null;

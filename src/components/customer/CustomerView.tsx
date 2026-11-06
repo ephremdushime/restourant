@@ -59,8 +59,19 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   const dashboardEntitlement = customer
     ? restoStore.checkStudentEntitlement(customer.id, 'customer_dashboard')
     : null;
+  const freeAccessExpired = Boolean(
+    customer?.customerAccessStatus === 'complimentary' &&
+    customer.freeAccessExpiresAt &&
+    new Date(customer.freeAccessExpiresAt).getTime() <= Date.now()
+  );
   const isDashboardGated = Boolean(
-    customer && subSettings.enabled && (!dashboardEntitlement || !dashboardEntitlement.allowed)
+    customer && (
+      customer.customerAccessStatus === 'pending_super_admin_activation' ||
+      customer.customerAccessStatus === 'payment_required' ||
+      customer.customerAccessStatus === 'expired' ||
+      freeAccessExpired ||
+      (subSettings.enabled && (!dashboardEntitlement || !dashboardEntitlement.allowed))
+    )
   );
 
   // Only read balance when dashboard subscription allows it
@@ -68,7 +79,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
   const [subModalOpen, setSubModalOpen] = useState(false);
   const [momoPhone, setMomoPhone] = useState(customer?.phone || '+250 788 ');
-  const [momoProvider, setMomoProvider] = useState<'mtn_momo' | 'airtel_money'>('mtn_momo');
+  const [momoProvider, setMomoProvider] = useState<'mtn_momo'>('mtn_momo');
   const [subCheckoutLoading, setSubCheckoutLoading] = useState(false);
   const [subCheckoutMessage, setSubCheckoutMessage] = useState<{
     text: string;
@@ -326,6 +337,56 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
     return true;
   });
 
+  if (customer?.registrationStatus === 'pending_boss_approval') {
+    return (
+      <div className="max-w-xl mx-auto px-4 py-8 space-y-5">
+        <PWAInstallBanner />
+        <div className="rounded-3xl border-2 border-amber-500/50 bg-slate-900 p-6 sm:p-8 space-y-4 shadow-xl">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center">
+              <Clock className="w-6 h-6 text-amber-300" />
+            </div>
+            <div>
+              <h2 className="text-xl font-black text-white">Account Partially Activated</h2>
+              <p className="text-xs text-amber-200">Reception payment confirmed</p>
+            </div>
+          </div>
+          <div className="rounded-2xl bg-slate-950 border border-slate-800 p-4 space-y-2">
+            <div className="flex justify-between text-sm"><span className="text-slate-400">Member number</span><strong className="font-mono text-white">#{customer.memberNo}</strong></div>
+            <div className="flex justify-between text-sm"><span className="text-slate-400">Grace meals available</span><strong className="text-emerald-300">{Math.max(0, customer.gracePlatesRemaining ?? 4)} / 4</strong></div>
+            <div className="flex justify-between text-sm"><span className="text-slate-400">Registration review</span><strong className="text-amber-300">Awaiting boss approval</strong></div>
+          </div>
+          <div className="rounded-2xl bg-white p-4 flex flex-col items-center gap-2">
+            <QrCanvas
+              value={generateCardToken(customer.restaurantCode, customer.memberNo, customer.cardVersion)}
+              size={210}
+              className="max-w-full"
+            />
+            <span className="text-xs font-bold text-slate-900">Temporary meal pass · #{customer.memberNo}</span>
+          </div>
+          <p className="text-sm leading-relaxed text-slate-200">
+            Your reception payment has been confirmed. You may use up to four grace meals while the Restaurant Boss reviews your registration. Your full dashboard and physical card will be enabled after approval.
+          </p>
+          <p className="text-xs text-amber-200">Show this QR at the cafeteria scanner for your four provisional grace meals. Do not share or post your QR code.</p>
+          <p className="text-xs text-slate-400">You can sign in with your registered phone number and PIN to check this status. No additional payment is due for this approval step.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (customer?.customerAccessStatus === 'pending_super_admin_activation') {
+    return (
+      <div className="max-w-xl mx-auto px-4 py-8">
+        <div className="rounded-3xl border-2 border-amber-500/50 bg-slate-900 p-6 sm:p-8 space-y-3 shadow-xl">
+          <CheckCircle2 className="w-10 h-10 text-emerald-400" />
+          <h2 className="text-xl font-black text-white">Registration Approved</h2>
+          <p className="text-sm text-slate-200">Your Restaurant Boss has approved your registration and your physical card is ready for issuance. Your one-month complimentary digital access is awaiting Super Admin activation.</p>
+          <p className="text-xs text-slate-400">You will receive dashboard access as soon as the complimentary month is activated.</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!customer) {
     return (
       <div className="max-w-md mx-auto my-12 p-8 rounded-2xl bg-slate-900 border-2 border-slate-700 text-center space-y-4">
@@ -420,7 +481,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             <div className="text-sm font-bold text-white">
               Activate Dashboard Subscription via Mobile Money:
             </div>
-            <div className="grid grid-cols-2 gap-2.5 text-sm">
+            <div className="grid grid-cols-1 gap-2.5 text-sm">
               <button
                 type="button"
                 onClick={() => setMomoProvider('mtn_momo')}
@@ -432,17 +493,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
               >
                 MTN MoMo (*182#)
               </button>
-              <button
-                type="button"
-                onClick={() => setMomoProvider('airtel_money')}
-                className={`p-3 rounded-xl border-2 text-center font-bold transition-all cursor-pointer ${
-                  momoProvider === 'airtel_money'
-                    ? 'bg-rose-500/20 border-rose-400 text-rose-200'
-                    : 'bg-slate-950 border-slate-700 text-slate-300 hover:text-white'
-                }`}
-              >
-                Airtel Money (*500#)
-              </button>
+              
             </div>
 
             <div>
@@ -1587,7 +1638,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
               <div className="space-y-3">
                 <div>
                   <label className="font-bold text-slate-200 block mb-1.5">Select Mobile Money Provider</label>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 gap-2">
                     <button
                       type="button"
                       onClick={() => setMomoProvider('mtn_momo')}
@@ -1599,17 +1650,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                     >
                       MTN MoMo (*182#)
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setMomoProvider('airtel_money')}
-                      className={`p-3 rounded-xl border-2 text-center font-bold text-xs sm:text-sm transition-all cursor-pointer ${
-                        momoProvider === 'airtel_money'
-                          ? 'bg-rose-500/20 border-rose-400 text-rose-200'
-                          : 'bg-slate-950 border-slate-700 text-slate-300 hover:text-white'
-                      }`}
-                    >
-                      Airtel Money (*500#)
-                    </button>
+                    
                   </div>
                 </div>
 

@@ -159,11 +159,28 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   const [showRecoveryModal, setShowRecoveryModal] = useState(false);
   const [pinConfirm, setPinConfirm] = useState('');
 
-  // Check if the entered customer phone/memberNo is Boss-approved and needs first-time PIN setup
-  const customerPortalStatus =
-    activeRole === 'customer' && phoneOrMember.trim()
-      ? restoStore.checkCustomerPortalStatus(phoneOrMember.trim(), selectedRestoCode)
-      : null;
+  // Query only the registration status for the entered phone; never download customer records publicly.
+  const [customerPortalStatus, setCustomerPortalStatus] = useState<{
+    status: 'needs_pin_setup' | 'ready_for_login' | 'pending_reception_payment' | 'pending_boss_approval' | 'rejected' | 'not_found' | 'unavailable';
+    memberNo?: string;
+    error?: string;
+  } | null>(null);
+  useEffect(() => {
+    const identifier = phoneOrMember.trim();
+    if (activeRole !== 'customer' || identifier.replace(/\\D/g, '').length < 9) {
+      setCustomerPortalStatus(null);
+      return;
+    }
+    let current = true;
+    const timeout = window.setTimeout(async () => {
+      const status = await restoStore.getCustomerRegistrationStatus(identifier, selectedRestoCode);
+      if (current) setCustomerPortalStatus(status);
+    }, 400);
+    return () => {
+      current = false;
+      window.clearTimeout(timeout);
+    };
+  }, [activeRole, phoneOrMember, selectedRestoCode]);
 
   // Activation inputs
   const [actPhone, setActPhone] = useState('');
@@ -305,29 +322,62 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           setIsVerifying(false);
           return;
         }
-        if (!enteredPin) {
-          setErrorMessage(t.auth.enterPin);
+
+        const statusCheck = await restoStore.getCustomerRegistrationStatus(cleanPhoneOrMember, selectedRestoCode);
+        if (statusCheck.status === 'unavailable') {
+          setErrorMessage(statusCheck.error || 'Unable to verify your registration. Please reconnect and try again.');
+          setIsVerifying(false);
+          return;
+        }
+        if (statusCheck.status === 'pending_reception_payment') {
+          setErrorMessage('Your registration is saved. Please visit reception to pay and confirm your payment before setting your PIN.');
           sound.playDangerAlarm();
           setIsVerifying(false);
           return;
         }
-
-        // Check if this customer was just approved by the Boss and is setting up their first-time PIN
-        const statusCheck = restoStore.checkCustomerPortalStatus(cleanPhoneOrMember, selectedRestoCode);
         if (statusCheck.status === 'needs_pin_setup') {
-          if (!/^\d{6,}$/.test(enteredPin)) {
-            setErrorMessage('New personal PIN must be at least 6 numeric digits.');
+          if (!/^\\d{6,}$/.test(enteredPin)) {
+            setErrorMessage('Reception confirmed your payment. Create a personal PIN with at least 6 digits.');
             sound.playDangerAlarm();
             setIsVerifying(false);
             return;
           }
           if (enteredPin !== pinConfirm.trim()) {
-            setErrorMessage('PINs do not match. Please confirm your 6+ digit PIN.');
+            setErrorMessage('PINs do not match. Please confirm your new PIN.');
             sound.playDangerAlarm();
             setIsVerifying(false);
             return;
           }
-          setErrorMessage('Your account is approved. Please visit cafeteria reception to receive a one-time activation code before setting your PIN.');
+          const activation = await restoStore.completeCustomerActivation({
+            phoneOrMember: cleanPhoneOrMember,
+            newPin: enteredPin,
+            restaurantCode: selectedRestoCode,
+          });
+          if (activation.success && activation.customer) {
+            setFailedAttempts(0);
+            sound.playSuccessBeep();
+            onLoginSuccess('customer', `${activation.customer.name} (#${activation.customer.memberNo})`);
+          } else {
+            setErrorMessage(activation.error || 'PIN setup failed. No activation was confirmed.');
+            sound.playDangerAlarm();
+          }
+          setIsVerifying(false);
+          return;
+        }
+        if (statusCheck.status === 'pending_boss_approval') {
+          setErrorMessage('Your registration is awaiting final Restaurant Boss approval. Reception has already confirmed payment; you may use up to 4 grace meals.');
+          sound.playDangerAlarm();
+          setIsVerifying(false);
+          return;
+        }
+        if (statusCheck.status === 'rejected') {
+          setErrorMessage('This registration was not approved. Please contact cafeteria management.');
+          sound.playDangerAlarm();
+          setIsVerifying(false);
+          return;
+        }
+        if (!enteredPin) {
+          setErrorMessage(t.auth.enterPin);
           sound.playDangerAlarm();
           setIsVerifying(false);
           return;
@@ -718,7 +768,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
             <>
               <div className="space-y-1.5">
                 <label className="font-bold text-slate-200 text-sm">
-                  Registered Phone Number (or Member No)
+                  Registered Phone Number
                 </label>
                 <input
                   type="text"
@@ -727,21 +777,21 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
                     setPhoneOrMember(e.target.value);
                     setErrorMessage(null);
                   }}
-                  placeholder="e.g. +250 788 123 456 or 28491"
+                  placeholder="e.g. +250 788 123 456"
                   className="w-full bg-slate-950 border-2 border-slate-700 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-white outline-hidden font-mono text-sm font-bold"
                 />
               </div>
 
-              {customerPortalStatus?.status === 'needs_pin_setup' && customerPortalStatus.customer ? (
+              {customerPortalStatus?.status === 'needs_pin_setup' ? (
                 <div className="space-y-3 p-3.5 rounded-2xl bg-emerald-950/50 border-2 border-emerald-500/70">
                   <div className="flex items-start gap-2.5">
                     <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
                     <div>
                       <div className="text-sm font-black text-white">
-                        Registration Approved for {customerPortalStatus.customer.name} (#{customerPortalStatus.customer.memberNo})!
+                        Reception Payment Confirmed · Member #{customerPortalStatus.memberNo || '—'}
                       </div>
                       <p className="text-xs text-emerald-200 font-medium mt-0.5">
-                        Create your personal 6+ digit security PIN below to unlock and access your customer dashboard.
+                        Create your personal 6+ digit security PIN below to access your limited onboarding dashboard while the boss reviews your registration.
                       </p>
                     </div>
                   </div>
@@ -777,13 +827,18 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
                     </div>
                   </div>
                 </div>
-              ) : customerPortalStatus?.status === 'pending_boss_approval' && customerPortalStatus.customer ? (
+              ) : customerPortalStatus?.status === 'pending_reception_payment' ? (
+                <div className="p-3.5 rounded-2xl bg-amber-950/60 border-2 border-amber-500/60 text-amber-200 text-xs space-y-1">
+                  <div className="font-black text-sm text-amber-300">Visit Reception to Complete Payment</div>
+                  <p className="font-medium leading-relaxed">Your registration has been saved. Visit the selected dining facility reception, choose your meal package and pay. The receptionist must confirm your payment before PIN setup becomes available.</p>
+                </div>
+              ) : customerPortalStatus?.status === 'pending_boss_approval' ? (
                 <div className="p-3.5 rounded-2xl bg-amber-950/60 border-2 border-amber-500/60 text-amber-200 text-xs space-y-1">
                   <div className="font-black text-sm text-amber-300">
-                    Registration Awaiting Boss Approval (#{customerPortalStatus.customer.memberNo})
+                    Registration Awaiting Boss Approval (#{customerPortalStatus.memberNo || '—'})
                   </div>
                   <p className="font-medium leading-relaxed">
-                    Your registration is in the Restaurant Boss approval queue. While waiting, you can already eat up to <strong>3 grace meals</strong> at the cafeteria stand. Once approved, return here to set your personal PIN!
+                    Reception has confirmed your payment. Your registration is now awaiting final boss approval. You may use up to <strong>4 grace meals</strong> while waiting.
                   </p>
                 </div>
               ) : (
@@ -810,7 +865,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
               )}
 
               <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 text-xs flex items-center justify-between">
-                <div className="text-slate-300 text-xs font-medium">First time after Boss approval?</div>
+                <div className="text-slate-300 text-xs font-medium">Need to set up your PIN?</div>
                 <button
                   type="button"
                   onClick={() => {
@@ -829,10 +884,10 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
                 <div>
                   <div className="text-white font-bold text-xs flex items-center gap-1.5">
                     <UserPlus className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>New Student? Register &amp; Subscribe Online</span>
+                    <span>New Student? Register Online</span>
                   </div>
                   <div className="text-[11px] text-slate-300 mt-0.5">
-                    Skip counter queues: Fill your details, pay via MoMo, and submit for Boss approval.
+                    Submit your details now, then visit reception to pay and confirm your registration.
                   </div>
                 </div>
                 <button
@@ -991,7 +1046,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
             </div>
 
             <p className="text-sm text-slate-200 leading-relaxed">
-              Once the Restaurant Boss approves your registration, enter your registered phone number (or Member ID) below to create your personal 6+ digit PIN and open your dashboard.
+              Reception has confirmed your payment. Set your personal 6+ digit PIN now to open your limited onboarding dashboard while the Restaurant Boss reviews your registration.
             </p>
 
             <form
