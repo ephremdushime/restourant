@@ -15,6 +15,7 @@ import {
   isActiveStationSession,
   getStationUserAuthVersion,
   isActiveCustomerSession,
+  getCustomerAuthVersion,
   findCustomerForLogin,
   getSuperAdminAuthVersion,
   isCurrentSuperAdminSession,
@@ -342,35 +343,40 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     assert.equal(findCustomerForLogin(state, '0788 123 456', 'RW03'), null);
   });
 
-  test('production customer sessions are invalidated after tenant mismatch, suspension, rejection or deletion', () => {
+  test('production customer sessions are invalidated after tenant mismatch, suspension, rejection, deletion or PIN rotation', () => {
+    const customerRecord = {
+      id: 'customer_session_1',
+      restaurantCode: 'RW01',
+      activationStatus: 'partial_active',
+      provisionalStatus: 'pending_approval',
+      registrationStatus: 'pending_boss_approval',
+      pinHash: 'customer-pin-hash-v1',
+    };
     const session: UserSession = {
       userId: 'customer_session_1',
       username: '+250788123456',
       role: 'customer',
       restaurantCode: 'RW01',
+      authVersion: getCustomerAuthVersion(customerRecord),
       iat: Date.now(),
       exp: Date.now() + 60000,
     };
-    const activeState = {
-      customers: [{
-        id: 'customer_session_1',
-        restaurantCode: 'RW01',
-        activationStatus: 'partial_active',
-        provisionalStatus: 'pending_approval',
-        registrationStatus: 'pending_boss_approval',
-      }],
-    };
+    const activeState = { customers: [customerRecord] };
 
-    assert.equal(isActiveCustomerSession(session, activeState), true);
-    assert.equal(isActiveCustomerSession({ ...session, restaurantCode: 'RW02' }, activeState), false);
-    assert.equal(isActiveCustomerSession(session, { customers: [] }), false);
+    assert.equal(isActiveCustomerSession(session, activeState, true), true);
+    assert.equal(isActiveCustomerSession({ ...session, restaurantCode: 'RW02' }, activeState, true), false);
+    assert.equal(isActiveCustomerSession(session, { customers: [] }, true), false);
     assert.equal(isActiveCustomerSession(session, {
-      customers: [{ ...activeState.customers[0], activationStatus: 'suspended' }],
-    }), false);
+      customers: [{ ...customerRecord, activationStatus: 'suspended' }],
+    }, true), false);
     assert.equal(isActiveCustomerSession(session, {
-      customers: [{ ...activeState.customers[0], provisionalStatus: 'rejected' }],
-    }), false);
-    assert.equal(isActiveCustomerSession({ ...session, role: 'restaurant_admin' }, { customers: [] }), true);
+      customers: [{ ...customerRecord, provisionalStatus: 'rejected' }],
+    }, true), false);
+    assert.equal(isActiveCustomerSession(session, {
+      customers: [{ ...customerRecord, pinHash: 'customer-pin-hash-v2' }],
+    }, true), false);
+    assert.equal(isActiveCustomerSession({ ...session, authVersion: undefined }, activeState, true), false);
+    assert.equal(isActiveCustomerSession({ ...session, role: 'restaurant_admin' }, { customers: [] }, true), true);
   });
 
   test('production Super Admin sessions are invalidated when the configured credential rotates', () => {
