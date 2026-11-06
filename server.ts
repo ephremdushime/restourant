@@ -1282,13 +1282,8 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
 
   // 4. Customer Meal Pass Authentication
   if (role === 'customer') {
-    const customers = serverDbState?.customers || [];
-    const cust = customers.find(
-      (c: any) =>
-        c.memberNo === username ||
-        c.phone === username ||
-        c.id === username
-    );
+    const customerIdentifier = typeof username === 'string' ? username.trim() : '';
+    const cust = findCustomerForLogin(serverDbState, customerIdentifier, restaurantCode);
 
     // Use the dedicated customer-authentication error to avoid account enumeration.
     if (!cust) {
@@ -1329,6 +1324,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       username: cust.memberNo,
       role: 'customer',
       restaurantCode: cust.restaurantCode,
+      authVersion: getCustomerAuthVersion(cust),
     });
 
     return res.json({
@@ -1469,18 +1465,34 @@ function findCustomerForLogin(state: any, identifier: string, restaurantCode: st
   }) || null;
 }
 
-/** Customer sessions stop working immediately after deletion, suspension or rejection. */
-function isActiveCustomerSession(session: UserSession, state: any): boolean {
+function getCustomerAuthVersion(customer: any): string {
+  return crypto.createHmac('sha256', MASTER_KEY)
+    .update([
+      'RESTOPASS_CUSTOMER_AUTH',
+      String(customer?.restaurantCode || '').trim().toUpperCase(),
+      String(customer?.id || ''),
+      String(customer?.pinHash || ''),
+    ].join(':'))
+    .digest('hex');
+}
+
+/** Customer sessions stop working after deletion, suspension, rejection or PIN rotation. */
+function isActiveCustomerSession(
+  session: UserSession,
+  state: any,
+  isProduction = process.env.NODE_ENV === 'production'
+): boolean {
   if (session.role !== 'customer') return true;
   const customer = (state?.customers || []).find(
     (item: any) => item.id === session.userId && item.restaurantCode === session.restaurantCode
   );
-  return Boolean(
-    customer &&
-    customer.activationStatus !== 'suspended' &&
-    customer.provisionalStatus !== 'rejected' &&
-    customer.registrationStatus !== 'rejected'
-  );
+  if (!customer ||
+      customer.activationStatus === 'suspended' ||
+      customer.provisionalStatus === 'rejected' ||
+      customer.registrationStatus === 'rejected') return false;
+  if (!isProduction) return true;
+  const expectedVersion = getCustomerAuthVersion(customer);
+  return typeof session.authVersion === 'string' && timingSafeCompare(session.authVersion, expectedVersion);
 }
 
 function getStationUserAuthVersion(stationUser: any): string {
@@ -1599,6 +1611,7 @@ app.post('/api/customer/auth/login', authRateLimiter, async (req, res) => {
     username: cust.phone || cust.memberNo,
     role: 'customer',
     restaurantCode: cust.restaurantCode,
+    authVersion: getCustomerAuthVersion(cust),
   });
 
   return res.json({
@@ -4020,6 +4033,7 @@ export {
   isActiveStationSession,
   getStationUserAuthVersion,
   isActiveCustomerSession,
+  getCustomerAuthVersion,
   findCustomerForLogin,
   getSuperAdminAuthVersion,
   isCurrentSuperAdminSession,
