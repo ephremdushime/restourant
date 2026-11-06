@@ -6016,10 +6016,12 @@ export class RestoStore {
     const legacyGrace = approval.type === 'new_customer'
       ? ((customer as any).graceMealsConsumed ?? customer.gracePlatesConsumed ?? 0)
       : 0;
-    const graceConsumed = Math.min(
-      requested,
-      Math.max(0, Number(typeof recordedGrace === 'number' ? recordedGrace : legacyGrace) || 0)
-    );
+    const graceConsumed = Number(typeof recordedGrace === 'number' ? recordedGrace : legacyGrace) || 0;
+    const graceAllowance = approval.gracePlatesAllowed ?? (approval.type === 'new_customer' ? 4 : 3);
+    if (!Number.isInteger(graceConsumed) || graceConsumed < 0 ||
+        graceConsumed > graceAllowance || graceConsumed > requested) {
+      return { success: false, error: 'Recorded grace-plate usage exceeds this approval allowance or purchased package. Review the scan history before approving.' };
+    }
 
     // 1. Record confirmed purchase payment on ledger idempotently
     const purchaseIdempKey = `idemp_appr_credit_${approval.id}`;
