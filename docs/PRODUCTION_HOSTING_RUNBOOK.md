@@ -134,8 +134,11 @@ Before calling the hosted instance production-ready, record evidence for each it
 - [ ] PostgreSQL and Redis remain private; only HTTPS is publicly exposed.
 - [ ] /api/ready returns HTTP 200 after startup and becomes unhealthy if a dependency is stopped.
 - [ ] PostgreSQL and Redis integration CI passes.
-- [ ] Backup created and restore drill completed successfully.
-- [ ] Off-server backup copy confirmed.
+- [ ] Daily paired backup cron installed and a manual run completed successfully.
+- [ ] Off-site bucket is private, versioned where supported, and has an appropriate lifecycle retention policy.
+- [ ] Off-site completion manifest and all six encrypted artifacts confirmed.
+- [ ] Weekly off-site recovery-verification log shows successful temporary PostgreSQL restore and isolated photo extraction.
+- [ ] Full host rebuild/restore drill completed and documented.
 - [ ] Customer registration, approval, PIN activation, login and recovery smoke-tested.
 - [ ] Scanner success, replay rejection, offline queue and reconnection tested on the actual devices.
 - [ ] Concurrent balance deductions and transfers tested against the hosted database.
