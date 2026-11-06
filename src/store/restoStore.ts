@@ -7256,7 +7256,7 @@ export class RestoStore {
     phoneOrMember: string,
     restaurantCode?: string
   ): {
-    status: 'needs_pin_setup' | 'ready_for_login' | 'pending_boss_approval' | 'rejected' | 'not_found';
+    status: 'needs_pin_setup' | 'ready_for_login' | 'pending_reception_payment' | 'pending_boss_approval' | 'rejected' | 'not_found';
     customer?: Customer;
   } {
     const clean = phoneOrMember.trim();
@@ -7276,11 +7276,19 @@ export class RestoStore {
     });
 
     if (!cust) return { status: 'not_found' };
+    if (cust.registrationStatus === 'rejected' || cust.provisionalStatus === 'rejected' || cust.activationStatus === 'suspended') {
+      return { status: 'rejected', customer: cust };
+    }
+    if (cust.registrationStatus === 'pending_reception_payment' || cust.receptionPaymentStatus === 'unpaid') {
+      return { status: 'pending_reception_payment', customer: cust };
+    }
+    if (cust.registrationStatus === 'pending_boss_approval') {
+      return cust.hasCustomPin
+        ? { status: 'ready_for_login', customer: cust }
+        : { status: 'needs_pin_setup', customer: cust };
+    }
     if (cust.provisionalStatus === 'pending_approval') {
       return { status: 'pending_boss_approval', customer: cust };
-    }
-    if (cust.provisionalStatus === 'rejected' || cust.activationStatus === 'suspended') {
-      return { status: 'rejected', customer: cust };
     }
     if (!cust.hasCustomPin || cust.activationStatus === 'ready_for_activation') {
       return { status: 'needs_pin_setup', customer: cust };
@@ -7392,8 +7400,9 @@ export class RestoStore {
       const cleanIdentifier = params.phoneOrMember.trim();
       const cleanPin = params.newPin.trim();
       const cleanCode = (params.activationCode || '').trim();
-      if (!cleanCode || cleanCode === 'BOSS_APPROVED') {
-        return { success: false, error: 'A valid staff-issued activation code is required.' };
+      const status = this.checkCustomerPortalStatus(cleanIdentifier, params.restaurantCode);
+      if (!cleanCode && status.status !== 'needs_pin_setup') {
+        return { success: false, error: 'Reception payment must be confirmed before you can set your PIN.' };
       }
       if (!/^\\d{6,}$/.test(cleanPin)) {
         return { success: false, error: 'PIN must be at least 6 numeric digits.' };
@@ -7745,11 +7754,15 @@ export class RestoStore {
     }
 
     // Check pending / rejected status
-    if (cust.provisionalStatus === 'pending_approval') {
+    if (cust.registrationStatus === 'pending_reception_payment' ||
+        (cust.provisionalStatus === 'pending_approval' && cust.receptionPaymentStatus !== 'confirmed' && cust.registrationStatus !== 'approved')) {
       return {
         success: false,
-        error: 'Your registration is pending restaurant boss approval. You can eat grace meals at the stand with your Member ID.',
+        error: 'Please visit reception to pay and confirm your registration before signing in.',
       };
+    }
+    if (cust.registrationStatus === 'pending_boss_approval' && !cust.hasCustomPin) {
+      return { success: false, error: 'Reception has confirmed your payment. Set your personal PIN to access the limited onboarding dashboard.' };
     }
     if (cust.provisionalStatus === 'rejected') {
       return {
