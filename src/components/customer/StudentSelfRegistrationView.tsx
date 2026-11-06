@@ -1,22 +1,15 @@
 import React, { useState } from 'react';
 import { restoStore } from '../../store/restoStore';
 import { PhotoCaptureInput } from '../common/PhotoCaptureInput';
-import { PaymentMethod, Restaurant } from '../../types';
 import {
   UserCheck,
-  Smartphone,
-  CreditCard,
   CheckCircle2,
   AlertTriangle,
   Building2,
   GraduationCap,
-  Sparkles,
   ArrowRight,
   ShieldCheck,
   ArrowLeft,
-  DollarSign,
-  Utensils,
-  Clock,
 } from 'lucide-react';
 
 interface StudentSelfRegistrationViewProps {
@@ -55,7 +48,6 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
     return state.currentRestaurantCode || state.restaurants[0]?.code || 'RW01';
   });
 
-  const activeResto = state.restaurants.find((r) => r.code === selectedRestoCode) || state.restaurants[0];
   const branches = restoStore.getRestaurantBranches(selectedRestoCode);
 
   // Student Identity Fields
@@ -152,8 +144,12 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
 
           <div className="space-y-1.5">
             <h2 className="text-2xl font-black text-white tracking-tight">
-              Registration Request Sent!
+              Registration Request Received!
             </h2>
+            <div className="inline-flex items-center gap-2 rounded-xl bg-slate-950 border border-slate-700 px-4 py-2 mt-2">
+              <span className="text-xs text-slate-400">Member number</span>
+              <strong className="font-mono text-lg text-white">#{submittedResult.memberNo}</strong>
+            </div>
             <p className="text-sm text-emerald-200">
               Welcome, <strong>{submittedResult.name}</strong>! Your details have been saved. Please visit reception to complete payment confirmation.
             </p>
@@ -200,7 +196,7 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
                   Student Meal Pass Registration
                 </h1>
                 <p className="text-xs sm:text-sm text-slate-300 mt-0.5">
-                  Register, subscribe to meal plates, and submit your Mobile Money payment.
+                  Register now, then visit reception to choose and pay for your meal package.
                 </p>
               </div>
             </div>
