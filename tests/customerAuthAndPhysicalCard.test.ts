@@ -69,7 +69,7 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     assert.ok(reg.customer);
     const customerId = reg.customer.id;
 
-    // Simulate consuming 2 grace meals while waiting for boss approval (< 3 allowed)
+    // Simulate consuming 2 grace meals while waiting for boss approval (< 4 allowed)
     reg.customer.gracePlatesConsumed = 2;
 
     // Find the pending approval request in store
