@@ -7008,6 +7008,12 @@ export class RestoStore {
       sub.updatedAt = new Date(nowMs).toISOString();
     }
 
+    const paidCustomer = this.state.customers.find((c) => c.id === payment.customerId);
+    if (paidCustomer) {
+      paidCustomer.customerAccessStatus = 'active';
+      paidCustomer.freeAccessExpiresAt = new Date(periodEndMs).toISOString();
+    }
+
     this.logAudit({
       restaurantCode: payment.restaurantCode,
       actorRole: 'customer',
