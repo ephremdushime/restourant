@@ -759,7 +759,9 @@ function resolveRestaurantAdminAccount(
   try {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    const account = parsed[restaurantCode.trim().toUpperCase()];
+    const accountKey = restaurantCode.trim().toUpperCase();
+    if (!Object.prototype.hasOwnProperty.call(parsed, accountKey)) return null;
+    const account = parsed[accountKey];
     if (!account || typeof account !== 'object' || Array.isArray(account)) return null;
     const username = typeof account.username === 'string' ? account.username.trim() : '';
     const password = typeof account.password === 'string' ? account.password : '';
