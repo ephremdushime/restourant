@@ -15,6 +15,8 @@ import {
   isActiveStationSession,
   applySyncDeletionTombstones,
   canMergeTenantScopedRecord,
+  resolveRestaurantAdminAccount,
+  verifyRestaurantAdminCredentials,
   UserSession,
 } from '../server';
 import { restoStore } from '../src/store/restoStore';
@@ -406,6 +408,22 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     }
   });
 
+  test('resolves and verifies restaurant administrator credentials per tenant', () => {
+    const config = JSON.stringify({
+      RW01: { username: 'manager@rw01.test', password: 'unique_rw01_restaurant_admin_password_2026' },
+      RW02: { username: 'boss@rw02.test', password: 'unique_rw02_restaurant_admin_password_2026' },
+    });
+    assert.deepEqual(resolveRestaurantAdminAccount('rw01', config), {
+      username: 'manager@rw01.test',
+      password: 'unique_rw01_restaurant_admin_password_2026',
+    });
+    assert.equal(verifyRestaurantAdminCredentials('RW01', 'manager@rw01.test', 'unique_rw01_restaurant_admin_password_2026', config, true), true);
+    assert.equal(verifyRestaurantAdminCredentials('RW01', 'boss@rw02.test', 'unique_rw01_restaurant_admin_password_2026', config, true), false);
+    assert.equal(verifyRestaurantAdminCredentials('RW02', 'boss@rw02.test', 'unique_rw01_restaurant_admin_password_2026', config, true), false);
+    assert.equal(resolveRestaurantAdminAccount('RW03', config), null);
+    assert.equal(verifyRestaurantAdminCredentials('RW03', 'anyone', 'long_enough_password_2026', config, true), false);
+  });
+
   test('validateProductionSecrets throws fatal error in production when secrets are missing or weak', () => {
     // Missing secrets in production must throw
     assert.throws(
@@ -456,10 +474,27 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
           SESSION_SECRET: 'prod_session_secret_with_at_least_32_characters_random_2026',
           RESTOPASS_MASTER_SECRET: 'prod_master_secret_with_at_least_32_characters_random_2026!',
           RESTOPASS_SUPERADMIN_PASSWORD: 'a_long_unique_superadmin_password_2026',
-          RESTOPASS_BOSS_PASSWORD: 'a_long_unique_restaurant_boss_password_2026',
+          RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS: JSON.stringify({
+            RW01: { username: 'manager@rw01.test', password: 'unique_rw01_restaurant_admin_password_2026' },
+          }),
           RESTOPASS_STAFF_DEFAULT_PIN: '1234',
         } as unknown as NodeJS.ProcessEnv),
       /6-8 digits/
+    );
+
+    assert.throws(
+      () =>
+        validateProductionSecrets({
+          NODE_ENV: 'production',
+          SESSION_SECRET: 'prod_session_secret_with_at_least_32_characters_random_2026',
+          RESTOPASS_MASTER_SECRET: 'prod_master_secret_with_at_least_32_characters_random_2026!',
+          RESTOPASS_SUPERADMIN_PASSWORD: 'a_long_unique_superadmin_password_2026',
+          RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS: JSON.stringify({
+            RW01: { username: 'manager@rw01.test', password: 'same_shared_password_for_both_tenants_2026' },
+            RW02: { username: 'manager@rw02.test', password: 'same_shared_password_for_both_tenants_2026' },
+          }),
+        } as unknown as NodeJS.ProcessEnv),
+      /must be unique across tenants/
     );
 
     // Strong 32+ char secrets in production succeed
@@ -470,7 +505,9 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
       SESSION_SECRET: strongSession,
       RESTOPASS_MASTER_SECRET: strongMaster,
       RESTOPASS_SUPERADMIN_PASSWORD: 'a_long_unique_superadmin_password_2026',
-      RESTOPASS_BOSS_PASSWORD: 'a_long_unique_restaurant_boss_password_2026',
+      RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS: JSON.stringify({
+        RW01: { username: 'manager@rw01.test', password: 'unique_rw01_restaurant_admin_password_2026' },
+      }),
     } as unknown as NodeJS.ProcessEnv);
     assert.equal(valid.sessionSecret, strongSession);
     assert.equal(valid.masterSecret, strongMaster);
