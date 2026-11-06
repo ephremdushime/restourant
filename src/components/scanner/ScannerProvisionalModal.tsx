@@ -133,8 +133,8 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
         return;
       }
     }
-    if (!trimmedPaymentRef) {
-      setError('Please enter the Mobile Money SMS transaction reference or receipt code.');
+    if (paymentMethod !== 'cash' && !trimmedPaymentRef) {
+      setError('Please enter the payment transaction reference.');
       return;
     }
     if (!staffName.trim()) {
@@ -184,7 +184,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
           platesRequested: effectivePlates,
           amountRwf: effectiveAmount,
           paymentMethod,
-          paymentReference: trimmedPaymentRef.toUpperCase(),
+          paymentReference: trimmedPaymentRef.toUpperCase() || `CASH-${Date.now()}`,
           registeredByStaffId: currentStation?.assignedStaffUserId || 'reception_staff',
           registeredByStaffName: staffName.trim(),
           stationId: currentStation?.id || 'sp_1',
