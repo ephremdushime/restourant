@@ -423,7 +423,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
           <div className="p-4 rounded-2xl bg-slate-950 border border-amber-500/50">
             <div className="text-xs text-slate-300 uppercase font-mono font-semibold">Monthly Access Fee</div>
             <div className="text-2xl font-black text-emerald-400 font-mono">
-              {subSettings.priceRwf.toLocaleString()} RWF <span className="text-sm font-normal text-slate-300">/ month</span>
+              {restoStore.getStudentSubscriptionPrice(customer.restaurantCode).toLocaleString()} RWF <span className="text-sm font-normal text-slate-300">/ month</span>
             </div>
           </div>
           <p className="text-sm text-slate-200 leading-relaxed">
@@ -702,7 +702,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                 </div>
                 <div>
                   <div className="text-sm font-bold text-white flex items-center gap-2">
-                    <span>Student Digital Pass (500 RWF/mo)</span>
+                    <span>Student Digital Pass ({restoStore.getStudentSubscriptionPrice(customer.restaurantCode).toLocaleString()} RWF/mo)</span>
                     <span
                       className={`text-xs px-2 py-0.5 rounded font-mono font-bold uppercase ${
                         customerSub?.status === 'active'
