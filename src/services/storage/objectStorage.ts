@@ -81,6 +81,12 @@ export async function uploadPatronPhoto(
   mimeType: string,
   filenameHint = 'patron'
 ): Promise<UploadResult> {
+  // Cloud uploads are disabled until the app can deliver patron photos through
+  // tenant-authorized, authenticated reads. Never fall back to public /uploads.
+  if ((process.env.RESTOPASS_DEPLOYMENT_MODE || 'standalone').toLowerCase() === 'cloud') {
+    throw new Error('Patron photo uploads are disabled in cloud mode until private, authenticated photo delivery is implemented.');
+  }
+
   const allowedMimes: Record<string, string> = {
     'image/jpeg': 'jpg',
     'image/png': 'png',
