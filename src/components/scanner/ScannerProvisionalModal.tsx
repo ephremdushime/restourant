@@ -268,10 +268,11 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
         );
       }
 
-      const qrToken = restoStore.getCustomerCardQr(selectedCustomer);
+      const updatedCustomer = restoStore.getState().customers.find((c) => c.id === selectedCustomer.id) || selectedCustomer;
+      const qrToken = restoStore.getCustomerCardQr(updatedCustomer);
       setPaymentReference('');
       setSuccessResult({
-        customer: selectedCustomer,
+        customer: updatedCustomer,
         plates: effectivePlates,
         amount: effectiveAmount,
         ref: reference || 'CASH',
