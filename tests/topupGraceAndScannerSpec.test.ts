@@ -198,13 +198,24 @@ describe('Part 1: Top-Up, Approval-Linked Ledger, and Grace-Meal Accounting Scen
     const newCustomer = reg.customer;
     const cardToken = generateCardToken(newCustomer.restaurantCode, newCustomer.memberNo, newCustomer.cardVersion);
 
-    // Consume the four-meal onboarding allowance (interleaving with helperCustomer)
-    for (let i = 1; i <= 4; i++) {
+    // Consume three meals, then age the oldest scan beyond the 120-minute serving limit
+    // before using the fourth onboarding grace meal.
+    for (let i = 1; i <= 3; i++) {
       const scan = restoStore.processScan(cardToken);
       assert.equal(scan.outcome, 'ACCEPTED');
       assert.equal(scan.isGraceMeal, true);
       restoStore.processScan(helperToken);
     }
+    const priorGraceScans = restoStore.getState().scanEvents.filter(
+      (event) => event.customerId === newCustomer.id && event.isGracePlate && event.platesDeducted > 0
+    );
+    assert.equal(priorGraceScans.length, 3);
+    priorGraceScans[priorGraceScans.length - 1].timestamp =
+      new Date(restoStore.getGuardedTime('RW01') - 121 * 60 * 1000).toISOString();
+    restoStore.processScan(helperToken);
+    const fourthGrace = restoStore.processScan(cardToken);
+    assert.equal(fourthGrace.outcome, 'ACCEPTED');
+    assert.equal(fourthGrace.isGraceMeal, true);
 
     assert.equal(reg.approval.gracePlatesConsumed, 4);
 
