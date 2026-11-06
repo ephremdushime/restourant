@@ -1042,7 +1042,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                     setCompError('A mandatory reason is required by platform policy.');
                     return;
                   }
-                  const result = restoStore.grantComplimentarySubscription({
+                  const result = await restoStore.activateComplimentarySubscription({
                     customerId: compCustomerId,
                     reason: compReason.trim(),
                     durationDays: Number(compDays) || 30,
