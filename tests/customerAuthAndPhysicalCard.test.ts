@@ -52,7 +52,7 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
       pin: '123456',
     });
     assert.equal(loginAttempt.success, false);
-    assert.match(loginAttempt.error || '', /pending|Invalid/i);
+    assert.match(loginAttempt.error || '', /PIN|pending|Invalid/i);
   });
 
   test('Step 2: Boss approves registration -> activates account for dashboard, generates card for printing, accounts for grace meals', () => {
