@@ -1391,7 +1391,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
                   {overviewPendingList.map((appr) => {
                     const cust = state.customers.find((c) => c.id === appr.customerId);
-                    const graceMeals = appr.gracePlatesConsumed || cust?.gracePlatesConsumed || 0;
+                    const graceMeals = typeof appr.gracePlatesConsumed === 'number' ? appr.gracePlatesConsumed : (cust?.gracePlatesConsumed || 0);
                     const isCopied = copiedOverviewRef === appr.id;
 
                     return (
