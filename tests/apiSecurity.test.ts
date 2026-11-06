@@ -199,8 +199,15 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     assert.equal(verifyStationUserCredentials('LegacyStaffPassword#2026', stationUser), true);
     assert.equal(verifyStationUserCredentials('incorrect', stationUser), false);
 
-    stationUser.status = 'blocked';
+    // A credential reset arriving as a new plaintext PIN must replace the
+    // previous hash before the state is persisted.
+    stationUser.pin = '987654';
+    normalizeStationUserCredentials({ stationUsers: [stationUser] });
+    assert.equal(verifyStationUserCredentials('987654', stationUser), true);
     assert.equal(verifyStationUserCredentials('654321', stationUser), false);
+
+    stationUser.status = 'blocked';
+    assert.equal(verifyStationUserCredentials('987654', stationUser), false);
 
     stationUser.status = 'active';
     stationUser.authType = 'pin8';
