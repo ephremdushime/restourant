@@ -53,7 +53,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
   const customer = restoStore.getCurrentCustomer();
 
-  // Student Subscription & MoMo State (500 RWF/mo, 72h Grace, MoMo Checkout)
+  // Customer digital access entitlement and renewal state
   const subSettings = restoStore.getStudentSubscriptionSettings();
   const customerSub = customer ? restoStore.getCustomerSubscription(customer.id) : null;
   const dashboardEntitlement = customer
@@ -1387,17 +1387,9 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             )}
 
             {transferRequiresSub && (
-              <button
-                type="button"
-                onClick={() => {
-                  setTransferModalOpen(false);
-                  setSubModalOpen(true);
-                }}
-                className="w-full py-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-md"
-              >
-                <Smartphone className="w-4 h-4" />
-                <span>Subscribe to Digital Pass (500 RWF / mo)</span>
-              </button>
+              <div className="p-3 rounded-xl bg-amber-950/70 border border-amber-600 text-amber-100 text-xs">
+                Digital transfers require active dashboard access. Visit reception to pay the monthly fee; Super Admin must verify and activate your access before transfers resume.
+              </div>
             )}
 
             <button
@@ -1412,8 +1404,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
         </div>
       )}
 
-      {/* STUDENT DIGITAL SUBSCRIPTION MODAL */}
-            {/* SECURITY PIN SETUP MODAL */}
+      {/* SECURITY PIN SETUP MODAL */}
       <PinSetupModal
         customer={customer}
         isOpen={showPinSetupModal}
