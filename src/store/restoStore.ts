@@ -7435,7 +7435,7 @@ export class RestoStore {
     cust.pinHash = pinHash;
     cust.hasCustomPin = true;
     cust.pinSetAt = new Date().toISOString();
-    cust.activationStatus = 'active';
+    cust.activationStatus = cust.registrationStatus === 'pending_boss_approval' ? 'partial_active' : 'active';
     cust.failedLoginAttempts = 0;
     cust.lockedUntil = null;
     cust.lastLoginAt = new Date().toISOString();
