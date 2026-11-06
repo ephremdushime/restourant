@@ -2,6 +2,7 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { isPostgresConfigured, getPostgresPool } from '../src/services/db/postgresAdapter';
 import {
   isRedisConfigured,
@@ -169,22 +170,26 @@ describe('Production Scalability & Cloud Infrastructure Verification (50,000 DAU
 
     it('parses base64 Data URLs and validates payload', async () => {
       const validDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
-      const uploadResult = await uploadBase64Photo(validDataUrl, 'base64-patron');
-
-      assert.ok(uploadResult.url.includes('base64-patron-'));
-      assert.ok(uploadResult.sizeBytes > 0);
-
-      // Cleanup
-      if (uploadResult.storageType === 'local') {
-        const localPath = path.resolve(process.cwd(), `public${uploadResult.url}`);
-        try { fs.unlinkSync(localPath); } catch {}
+      const previousDir = process.env.RESTOPASS_PRIVATE_UPLOAD_DIR;
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'restopass-scale-photo-'));
+      process.env.RESTOPASS_PRIVATE_UPLOAD_DIR = tempDir;
+      try {
+        const uploadResult = await uploadBase64Photo(validDataUrl, 'RW01');
+        assert.equal(uploadResult.url, '');
+        assert.match(uploadResult.key, /^patron-photos\/RW01\/[a-f0-9-]{36}\.png$/);
+        assert.ok(uploadResult.sizeBytes > 0);
+        assert.ok(fs.existsSync(path.join(tempDir, 'RW01', uploadResult.key.split('/').pop()!)));
+      } finally {
+        if (previousDir === undefined) delete process.env.RESTOPASS_PRIVATE_UPLOAD_DIR;
+        else process.env.RESTOPASS_PRIVATE_UPLOAD_DIR = previousDir;
+        fs.rmSync(tempDir, { recursive: true, force: true });
       }
     });
 
     it('rejects malformed base64 data URLs', async () => {
       await assert.rejects(
-        () => uploadBase64Photo('not-a-valid-data-url'),
-        /Invalid base64 data URL format/
+        () => uploadBase64Photo('not-a-valid-data-url', 'RW01'),
+        /Invalid photo data URL/
       );
     });
 
@@ -195,13 +200,12 @@ describe('Production Scalability & Cloud Infrastructure Verification (50,000 DAU
       process.env.S3_ENDPOINT = 'https://nyc3.digitaloceanspaces.com';
       process.env.S3_ACCESS_KEY_ID = 'TEST_KEY_ID';
       process.env.S3_SECRET_ACCESS_KEY = 'TEST_SECRET_KEY';
-      process.env.S3_PUBLIC_URL_PREFIX = 'https://cdn.restopass.com';
 
       try {
         const config = getObjectStorageConfig();
         assert.ok(config);
         assert.equal(config?.bucket, 'restopass-photos');
-        assert.equal(config?.publicUrlPrefix, 'https://cdn.restopass.com');
+        assert.equal('publicUrlPrefix' in (config || {}), false);
         assert.equal(isObjectStorageConfigured(), true);
       } finally {
         process.env = origEnv;
@@ -236,24 +240,58 @@ describe('Production Scalability & Cloud Infrastructure Verification (50,000 DAU
         restaurantCode: 'RW01',
       });
 
-      const sampleDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
-      const response = await fetchTestRoute(
-        app,
-        'POST',
-        '/api/upload/photo',
-        { photoBase64: sampleDataUrl, filenameHint: 'patron-api-test' },
-        { Authorization: `Bearer ${staffToken}` }
-      );
+      const previousState = getServerDbState();
+      const previousDir = process.env.RESTOPASS_PRIVATE_UPLOAD_DIR;
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'restopass-photo-route-'));
+      process.env.RESTOPASS_PRIVATE_UPLOAD_DIR = tempDir;
+      setServerDbState({
+        restaurants: [{ code: 'RW01', name: 'Test Restaurant' }],
+        customers: [{ id: 'cust_photo_test', restaurantCode: 'RW01', photoUrl: '/placeholder.png' }],
+        pendingApprovals: [],
+      });
+      try {
+        const sampleDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGGAWjR9awAAAABJRU5ErkJggg==';
+        const response = await fetchTestRoute(
+          app,
+          'POST',
+          '/api/upload/photo',
+          { customerId: 'cust_photo_test', photoBase64: sampleDataUrl },
+          { Authorization: `Bearer ${staffToken}` }
+        );
 
-      assert.equal(response.status, 200);
-      assert.equal(response.body.success, true);
-      assert.ok(response.body.url);
-      assert.ok(response.body.key);
+        assert.equal(response.status, 201);
+        assert.equal(response.body.success, true);
+        assert.equal(response.body.photoUrl, '/api/customers/cust_photo_test/photo');
+        assert.equal(response.body.key, undefined);
+        const storedCustomer = getServerDbState().customers.find((item: any) => item.id === 'cust_photo_test');
+        assert.match(storedCustomer.photoStorageKey, /^patron-photos\/RW01\//);
 
-      // Clean up test file if stored locally
-      if (response.body.storageType === 'local') {
-        const localPath = path.resolve(process.cwd(), `public${response.body.url}`);
-        try { fs.unlinkSync(localPath); } catch {}
+        const ownTenantRead = await fetchTestRoute(
+          app,
+          'GET',
+          '/api/customers/cust_photo_test/photo',
+          {},
+          { Authorization: `Bearer ${staffToken}` }
+        );
+        assert.equal(ownTenantRead.status, 200);
+        assert.ok(Buffer.isBuffer(ownTenantRead.body));
+
+        const otherTenantToken = createSessionToken({
+          userId: 'staff_rw02', username: 'cashier2', role: 'stand_staff', restaurantCode: 'RW02',
+        });
+        const deniedRead = await fetchTestRoute(
+          app,
+          'GET',
+          '/api/customers/cust_photo_test/photo',
+          {},
+          { Authorization: `Bearer ${otherTenantToken}` }
+        );
+        assert.equal(deniedRead.status, 404);
+      } finally {
+        setServerDbState(previousState);
+        if (previousDir === undefined) delete process.env.RESTOPASS_PRIVATE_UPLOAD_DIR;
+        else process.env.RESTOPASS_PRIVATE_UPLOAD_DIR = previousDir;
+        fs.rmSync(tempDir, { recursive: true, force: true });
       }
     });
   });
@@ -299,6 +337,11 @@ async function fetchTestRoute(
         return this;
       },
       setHeader() { return this; },
+      set() { return this; },
+      send(data: any) {
+        resolve({ status: statusCode, body: data });
+        return this;
+      },
       end() {
         resolve({ status: statusCode, body: null });
       },
