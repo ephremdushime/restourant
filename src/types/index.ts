@@ -565,7 +565,7 @@ export interface CustomerSubscription {
   currentPeriodEnd?: string;
   gracePeriodEnd?: string;
   cancelAtPeriodEnd?: boolean;
-  paymentMethod?: 'mtn_momo' | 'airtel_money' | 'complimentary';
+  paymentMethod?: 'mtn_momo' | 'airtel_money' | 'cash' | 'bank_transfer' | 'complimentary';
   lastPaymentRef?: string;
   complimentaryReason?: string;
   complimentaryGrantedBy?: string;
@@ -580,7 +580,7 @@ export interface StudentSubscriptionPayment {
   memberNo: string;
   restaurantCode: string;
   internalReference: string;
-  provider: 'mtn_momo' | 'airtel_money';
+  provider: 'mtn_momo' | 'airtel_money' | 'cash' | 'bank_transfer';
   phoneNumber: string;
   providerTransactionId?: string;
   amountRwf: number;
