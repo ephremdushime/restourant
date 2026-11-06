@@ -146,8 +146,10 @@ export async function revokeSessionToken(tokenDigest: string, ttlSeconds: number
   const safeTtl = Math.max(1, Math.min(Math.floor(ttlSeconds), 24 * 60 * 60));
   const client = getRedisClient();
   if (isRedisConfigured()) {
-    if (!client || client.status !== 'ready') return false;
+    if (!client) return false;
     try {
+      if (client.status !== 'ready') await client.ping();
+      if (client.status !== 'ready') return false;
       return (await client.set(`revoked_session:${tokenDigest}`, '1', 'EX', safeTtl)) === 'OK';
     } catch (err: any) {
       console.error('[Redis Session Revocation] Failed to persist revocation:', err?.message || err);
@@ -161,8 +163,10 @@ export async function revokeSessionToken(tokenDigest: string, ttlSeconds: number
 export async function isSessionTokenRevoked(tokenDigest: string): Promise<{ revoked: boolean; available: boolean }> {
   const client = getRedisClient();
   if (isRedisConfigured()) {
-    if (!client || client.status !== 'ready') return { revoked: false, available: false };
+    if (!client) return { revoked: false, available: false };
     try {
+      if (client.status !== 'ready') await client.ping();
+      if (client.status !== 'ready') return { revoked: false, available: false };
       return { revoked: (await client.exists(`revoked_session:${tokenDigest}`)) === 1, available: true };
     } catch (err: any) {
       console.error('[Redis Session Revocation] Lookup failed:', err?.message || err);
