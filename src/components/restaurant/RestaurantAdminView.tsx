@@ -745,7 +745,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
     if (success) {
       setManageCustomer(null);
       setDeleteCustomerConfirmOpen(false);
-      setActionToast(`Permanently deleted customer account #${cust.memberNo} (${cust.name}). All badges and credentials revoked.`);
+      setActionToast(`Removed customer account #${cust.memberNo} (${cust.name}) from active rosters. Credentials revoked; transaction history retained.`);
       setTimeout(() => setActionToast(null), 4000);
     }
   };
@@ -5485,11 +5485,10 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
           <div className="bg-slate-900 border border-rose-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
             <div className="flex items-center gap-3 text-rose-400">
               <AlertTriangle className="w-6 h-6 shrink-0" />
-              <h3 className="text-base font-bold text-white">Permanently Delete Member?</h3>
+              <h3 className="text-base font-bold text-white">Remove Member Account?</h3>
             </div>
             <p className="text-xs text-slate-300 leading-relaxed">
-              Are you sure you want to delete member <strong>{manageCustomer.name} (#{manageCustomer.memberNo})</strong>?
-              This action will revoke physical card V{manageCustomer.cardVersion}, digital passes, and remove their account from active cafeteria rosters.
+              Are you sure you want to remove <strong>{manageCustomer.name} (#{manageCustomer.memberNo})</strong> from active cafeteria rosters? Their card and digital access will be revoked. Transaction and audit history will be retained.
             </p>
             <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
               <button
