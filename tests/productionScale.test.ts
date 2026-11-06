@@ -152,6 +152,21 @@ describe('Production Scalability & Cloud Infrastructure Verification (50,000 DAU
       }
     });
 
+    it('refuses patron photo uploads in cloud mode until private delivery is implemented', async () => {
+      const previousMode = process.env.RESTOPASS_DEPLOYMENT_MODE;
+      process.env.RESTOPASS_DEPLOYMENT_MODE = 'cloud';
+      try {
+        const sampleBuffer = Buffer.from('photo-data');
+        await assert.rejects(
+          () => uploadPatronPhoto(sampleBuffer, 'image/png', 'cloud-patron'),
+          /disabled in cloud mode/
+        );
+      } finally {
+        if (previousMode === undefined) delete process.env.RESTOPASS_DEPLOYMENT_MODE;
+        else process.env.RESTOPASS_DEPLOYMENT_MODE = previousMode;
+      }
+    });
+
     it('parses base64 Data URLs and validates payload', async () => {
       const validDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
       const uploadResult = await uploadBase64Photo(validDataUrl, 'base64-patron');
