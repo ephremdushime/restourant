@@ -336,7 +336,7 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
 
   test('redacts PINs, password hashes, recovery codes and replay state from every client payload', () => {
     const payload = sanitizeSensitiveState({
-      customers: [{ id: 'c1', name: 'Test', pinHash: 'hash', pinSalt: 'salt', idHash: 'identity-hash', onboardingToken: 'secret' }],
+      customers: [{ id: 'c1', name: 'Test', pinHash: 'hash', pinSalt: 'salt', idHash: 'identity-hash', onboardingToken: 'secret', photoStorageKey: 'private-object-key' }],
       stationUsers: [{ id: 's1', username: 'cashier', pin: '123456', passwordHash: 'hash' }],
       pinRecoveryRequests: [{ id: 'r1', status: 'pending', recoveryCode: '123456' }],
       activationCodes: [{ id: 'a1', activationCode: 'ABCDEF' }],
@@ -348,6 +348,7 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     assert.equal(payload.customers[0].pinSalt, undefined);
     assert.equal(payload.customers[0].idHash, undefined);
     assert.equal(payload.customers[0].onboardingToken, undefined);
+    assert.equal(payload.customers[0].photoStorageKey, undefined);
     assert.equal(payload.stationUsers[0].pin, undefined);
     assert.equal(payload.stationUsers[0].passwordHash, undefined);
     assert.equal(payload.pinRecoveryRequests[0].recoveryCode, undefined);
