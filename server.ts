@@ -1608,7 +1608,7 @@ app.post(
 );
 
 // POST /api/customer/activation/complete: Customer privately sets their 6+ digit PIN
-app.post('/api/customer/activation/complete', authRateLimiter, (req, res) => {
+app.post('/api/customer/activation/complete', authRateLimiter, async (req, res) => {
   const { phoneOrMember, activationCode, newPin } = req.body;
   const cleanIdentifier = (phoneOrMember || '').trim();
   const cleanPin = (newPin || '').trim();
