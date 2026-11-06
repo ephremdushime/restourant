@@ -5676,6 +5676,9 @@ export class RestoStore {
       activationStatus: 'partial_active',
       registrationStatus: 'pending_boss_approval',
       receptionPaymentStatus: 'confirmed',
+      receptionPaymentConfirmedAt: now,
+      receptionPaymentConfirmedBy: data.registeredByStaffName,
+      receptionPaymentReference: data.paymentReference,
       gracePlatesAllowed: 4,
       cardReadyForPrint: false,
       failedLoginAttempts: 0,
@@ -5733,7 +5736,7 @@ export class RestoStore {
       actorRole: 'reception',
       actorName: staffName,
       action: 'PROVISIONAL_CUSTOMER_REGISTERED',
-      details: `Provisionally registered #${memberNo} (${newCustomer.name}). MoMo/Payment Ref: "${approval.paymentReference}" (${(approval.amountRwf || 0).toLocaleString()} RWF for ${data.platesRequested} plates). Awaiting boss Mobile Money confirmation. Grace plates allowed: 3.`,
+      details: `Provisionally registered #${memberNo} (${newCustomer.name}). MoMo/Payment Ref: "${approval.paymentReference}" (${(approval.amountRwf || 0).toLocaleString()} RWF for ${data.platesRequested} plates). Reception payment confirmed. Awaiting boss registration approval. Grace plates allowed: 4.`,
     });
 
     // Notify Restaurant Boss
@@ -5744,7 +5747,7 @@ export class RestoStore {
       senderName: `${staffName} (${approval.stationName})`,
       type: 'system_broadcast',
       title: `Pending Approval: New Customer #${memberNo}`,
-      message: `${newCustomer.name} provisionally registered with ${approval.paymentMethod.toUpperCase()} ref ${approval.paymentReference} (${(approval.amountRwf || 0).toLocaleString()} RWF). Please verify payment on Mobile Money.`,
+      message: `${newCustomer.name} provisionally registered with ${approval.paymentMethod.toUpperCase()} ref ${approval.paymentReference} (${(approval.amountRwf || 0).toLocaleString()} RWF). Reception has confirmed payment. Please review and approve the customer registration.`,
       priority: 'important',
       actionTab: 'approvals',
     });
