@@ -83,15 +83,46 @@ function validateProductionSecrets(env: NodeJS.ProcessEnv = process.env): {
       );
     }
 
-    const requiredAdminPasswords = [
-      ['RESTOPASS_SUPERADMIN_PASSWORD', env.RESTOPASS_SUPERADMIN_PASSWORD],
-      ['RESTOPASS_BOSS_PASSWORD', env.RESTOPASS_BOSS_PASSWORD],
-    ] as const;
-    for (const [name, value] of requiredAdminPasswords) {
-      const secret = value?.trim() || '';
-      if (secret.length < 16 || FORBIDDEN_PLACEHOLDERS.some((p) => secret.toUpperCase().includes(p))) {
-        throw new Error(`[FATAL SECURITY ERROR] ${name} must be configured with at least 16 non-placeholder characters in production.`);
+    const superAdminPassword = env.RESTOPASS_SUPERADMIN_PASSWORD?.trim() || '';
+    if (superAdminPassword.length < 16 || FORBIDDEN_PLACEHOLDERS.some((p) => superAdminPassword.toUpperCase().includes(p))) {
+      throw new Error('[FATAL SECURITY ERROR] RESTOPASS_SUPERADMIN_PASSWORD must be configured with at least 16 non-placeholder characters in production.');
+    }
+
+    // Production restaurant administrators must have unique tenant-scoped
+    // identities. A single global boss password is explicitly rejected.
+    if (env.RESTOPASS_BOSS_PASSWORD || env.BOSS_PASSWORD) {
+      throw new Error('[FATAL SECURITY ERROR] Shared RESTOPASS_BOSS_PASSWORD is not accepted. Configure RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS instead.');
+    }
+    const rawRestaurantAdminAccounts = env.RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS?.trim() || '';
+    let restaurantAdminAccounts: any;
+    try {
+      restaurantAdminAccounts = JSON.parse(rawRestaurantAdminAccounts);
+    } catch {
+      throw new Error('[FATAL SECURITY ERROR] RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS must be valid JSON keyed by restaurant code.');
+    }
+    if (!restaurantAdminAccounts || typeof restaurantAdminAccounts !== 'object' || Array.isArray(restaurantAdminAccounts)) {
+      throw new Error('[FATAL SECURITY ERROR] RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS must be a non-empty JSON object keyed by restaurant code.');
+    }
+    const accountEntries = Object.entries(restaurantAdminAccounts);
+    if (accountEntries.length === 0 || accountEntries.length > 100) {
+      throw new Error('[FATAL SECURITY ERROR] Configure between 1 and 100 tenant-specific restaurant administrator accounts.');
+    }
+    const seenAdminUsernames = new Set<string>();
+    const seenAdminPasswords = new Set<string>();
+    for (const [restaurantCode, value] of accountEntries) {
+      const account: any = value;
+      const username = typeof account?.username === 'string' ? account.username.trim().toLowerCase() : '';
+      const password = typeof account?.password === 'string' ? account.password : '';
+      if (!/^[A-Z0-9_-]{1,32}$/.test(restaurantCode) || username.length < 3 || username.length > 128 ||
+          password.length < 16 || password.length > 1024 ||
+          FORBIDDEN_PLACEHOLDERS.some((p) => password.toUpperCase().includes(p))) {
+        throw new Error(`[FATAL SECURITY ERROR] Invalid tenant-specific restaurant administrator credentials for ${restaurantCode}.`);
       }
+      if (seenAdminUsernames.has(username) || seenAdminPasswords.has(password)) {
+        throw new Error('[FATAL SECURITY ERROR] Restaurant administrator usernames and passwords must be unique across tenants.');
+      }
+      seenAdminUsernames.add(username);
+      seenAdminPasswords.add(password);
     }
 
     const staffPin = env.RESTOPASS_STAFF_DEFAULT_PIN?.trim();
@@ -726,7 +757,7 @@ function resolveRestaurantAdminAccount(
     if (!account || typeof account !== 'object' || Array.isArray(account)) return null;
     const username = typeof account.username === 'string' ? account.username.trim() : '';
     const password = typeof account.password === 'string' ? account.password : '';
-    if (username.length < 3 || username.length > 128 || password.length < 12 || password.length > 1024) return null;
+    if (username.length < 3 || username.length > 128 || password.length < 16 || password.length > 1024) return null;
     return { username, password };
   } catch {
     return null;
