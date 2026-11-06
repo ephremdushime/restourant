@@ -2391,6 +2391,41 @@ function checkServerStudentEntitlement(
     };
   }
 
+  const lifecycleCustomer = (serverDbState?.customers || []).find((c: any) => c.id === customerId);
+  const lifecycleSub = (serverDbState?.customerSubscriptions || []).find((sub: any) => sub.customerId === customerId);
+  const now = Date.now();
+  if (lifecycleCustomer?.customerAccessStatus === 'complimentary') {
+    const freeEnd = new Date(lifecycleCustomer.freeAccessExpiresAt || lifecycleSub?.currentPeriodEnd || 0).getTime();
+    if (!freeEnd || now > freeEnd) {
+      lifecycleCustomer.customerAccessStatus = 'payment_required';
+      if (lifecycleSub) lifecycleSub.status = 'expired';
+    }
+  }
+  if (lifecycleCustomer?.customerAccessStatus === 'active' && lifecycleSub?.status === 'active') {
+    const paidEnd = new Date(lifecycleSub.currentPeriodEnd || 0).getTime();
+    const graceEnd = new Date(lifecycleSub.gracePeriodEnd || paidEnd + (settings?.graceDays || 3) * 86400000).getTime();
+    if (graceEnd && now > graceEnd) {
+      lifecycleSub.status = 'expired';
+      lifecycleCustomer.customerAccessStatus = 'payment_required';
+    } else if (paidEnd && now > paidEnd) {
+      lifecycleSub.status = 'grace_period';
+    }
+  }
+  if (lifecycleCustomer?.customerAccessStatus === 'pending_super_admin_activation' ||
+      lifecycleCustomer?.customerAccessStatus === 'payment_required' ||
+      lifecycleCustomer?.customerAccessStatus === 'expired') {
+    return {
+      allowed: false,
+      feature,
+      status: lifecycleCustomer.customerAccessStatus,
+      inGracePeriod: false,
+      enforcementEnabled: true,
+      reason: lifecycleCustomer.customerAccessStatus === 'pending_super_admin_activation'
+        ? 'Super Admin must activate the complimentary month before digital dashboard access begins.'
+        : 'Your dashboard access period has expired. Pay the monthly access fee to continue.',
+    };
+  }
+
   if (!settings?.enabled) {
     return {
       allowed: true,
