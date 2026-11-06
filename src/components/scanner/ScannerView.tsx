@@ -4,6 +4,7 @@ import { restoStore } from '../../store/restoStore';
 import { translations } from '../../services/i18n';
 import { sound } from '../../services/audioService';
 import { BatteryIndicator } from '../common/BatteryIndicator';
+import { PrivatePhoto } from '../common/PrivatePhoto';
 import { ScannerProvisionalModal } from './ScannerProvisionalModal';
 import { CardPrintStudio } from '../restaurant/CardPrintStudio';
 import {
@@ -876,7 +877,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
               {/* Member Card Profile */}
               <div className="flex items-center gap-4 bg-black/35 p-3.5 rounded-2xl border border-white/15">
-                <img
+                <PrivatePhoto
                   src={activeScan.event.customerPhoto}
                   alt={activeScan.event.customerName}
                   className="w-16 h-16 rounded-xl object-cover border border-white/30 shadow-md shrink-0"
