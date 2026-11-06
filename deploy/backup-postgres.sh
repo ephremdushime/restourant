@@ -26,6 +26,7 @@ if ! [[ "$BACKUP_ENCRYPTION_KEY" =~ ^[A-Fa-f0-9]{64}$ ]]; then
   exit 1
 fi
 export RESTOPASS_BACKUP_ENCRYPTION_KEY="$BACKUP_ENCRYPTION_KEY"
+HMAC_KEY="$(printf 'RESTOPASS_BACKUP_HMAC:%s' "$BACKUP_ENCRYPTION_KEY" | sha256sum | awk '{print $1}')"
 
 mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR"
@@ -55,11 +56,14 @@ mv "$temporary_file" "$backup_file"
 chmod 600 "$backup_file"
 sha256sum "$backup_file" > "$backup_file.sha256"
 chmod 600 "$backup_file.sha256"
+openssl dgst -sha256 -hmac "$HMAC_KEY" "$backup_file" | awk '{print $NF}' > "$backup_file.hmac"
+chmod 600 "$backup_file.hmac"
 
-find "$BACKUP_DIR" -type f \( -name 'restopass_*.dump.enc' -o -name 'restopass_*.dump.enc.sha256' \) \
+find "$BACKUP_DIR" -type f \( -name 'restopass_*.dump.enc' -o -name 'restopass_*.dump.enc.sha256' -o -name 'restopass_*.dump.enc.hmac' \) \
   -mtime +"$RETENTION_DAYS" -delete
 
 echo "Backup completed: $backup_file"
 echo "Checksum: $backup_file.sha256"
+echo "Authentication tag: $backup_file.hmac"
 echo "Retention: $RETENTION_DAYS days"
 echo "Backup is encrypted at rest. Copy it and its checksum to a separate off-server location."
