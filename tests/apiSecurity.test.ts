@@ -194,8 +194,8 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     normalizeStationUserCredentials({ stationUsers: [stationUser] });
 
     assert.equal(stationUser.pin, undefined);
-    assert.ok(stationUser.pinHash.startsWith('scrypt$16384$8$1
-    assert.ok(stationUser.passwordHash.startsWith('scrypt$16384$8$1
+    assert.ok(stationUser.pinHash.startsWith('scrypt$16384$8$1$'));
+    assert.ok(stationUser.passwordHash.startsWith('scrypt$16384$8$1$'));
     assert.equal(verifyStationUserCredentials('654321', stationUser), true);
     assert.equal(verifyStationUserCredentials('LegacyStaffPassword#2026', stationUser), true);
     assert.equal(verifyStationUserCredentials('incorrect', stationUser), false);
