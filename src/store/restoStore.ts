@@ -7011,7 +7011,7 @@ export class RestoStore {
     this.pushStateToServer();
     this.notify();
 
-    const providerName = params.provider === 'mtn_momo' ? 'MTN Mobile Money (*182#)' : 'Airtel Money (*500#)';
+    const providerName = params.provider === 'mtn_momo' ? 'MTN Mobile Money (*182#)' : params.provider === 'airtel_money' ? 'Airtel Money (*500#)' : params.provider === 'cash' ? 'cash at reception' : 'bank transfer';
     return {
       success: true,
       payment,
@@ -7091,7 +7091,7 @@ export class RestoStore {
       actorRole: 'customer',
       actorName: payment.memberNo,
       action: 'STUDENT_SUBSCRIPTION_ACTIVATED',
-      details: `Activated student subscription for #${payment.memberNo} via ${payment.provider.toUpperCase()} (Ref: ${payment.internalReference}, Amount: 500 RWF). Valid until ${new Date(periodEndMs).toLocaleDateString()}`,
+      details: `Activated student subscription for #${payment.memberNo} via ${payment.provider.toUpperCase()} (Ref: ${payment.internalReference}, Amount: ${verifiedPrice.toLocaleString()} RWF). Valid until ${new Date(periodEndMs).toLocaleDateString()}`,
     });
 
     this.sendNotification({
@@ -7101,7 +7101,7 @@ export class RestoStore {
       senderName: 'RestoPass Subscription Authority',
       type: 'system_broadcast',
       title: 'Student Digital Pass Active! 🌟',
-      message: 'Your 500 RWF monthly digital subscription is active! Digital plate transfers and online pass features are unlocked for 30 days.',
+      message: 'Your ${verifiedPrice.toLocaleString()} RWF monthly digital subscription is active! Digital plate transfers and online pass features are unlocked for 30 days.',
       priority: 'important',
       actionTab: 'my_card',
     });
