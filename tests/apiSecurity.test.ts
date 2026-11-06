@@ -554,6 +554,20 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
       /must be unique across tenants/
     );
 
+    assert.throws(
+      () => validateProductionSecrets({
+        NODE_ENV: 'production',
+        SESSION_SECRET: 'prod_session_secret_with_at_least_32_characters_random_2026',
+        RESTOPASS_MASTER_SECRET: 'prod_master_secret_with_at_least_32_characters_random_2026!',
+        RESTOPASS_SUPERADMIN_PASSWORD: 'a_long_unique_superadmin_password_2026',
+        RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS: JSON.stringify({
+          RW01: { username: 'manager@rw01.test', password: 'unique_rw01_restaurant_admin_password_2026' },
+        }),
+        S3_PUBLIC_URL_PREFIX: 'https://public.example.test',
+      } as unknown as NodeJS.ProcessEnv),
+      /Public patron-photo URL prefixes/
+    );
+
     // Strong 32+ char secrets in production succeed
     const strongSession = 'prod_session_secret_with_at_least_32_characters_random_2026';
     const strongMaster = 'prod_master_secret_with_at_least_32_characters_random_2026!';
