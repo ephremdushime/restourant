@@ -959,7 +959,7 @@ app.post('/api/public/customer/registration', apiRateLimiter, async (req, res) =
 
   const normalizePhone = (value: string) => value.replace(/[^0-9]/g, '').replace(/^250/, '0');
   const phoneKey = normalizePhone(phone);
-  const normalizedId = idNumber.replace(/[\\s-]/g, '').toUpperCase();
+  const normalizedId = idNumber.replace(/[\s-]/g, '').toUpperCase();
   const idHash = crypto.createHash('sha256').update(`ID_SALT_RESTOPASS_RWANDA:${idType}:${normalizedId}`).digest('hex');
   const customers = serverDbState.customers || [];
   const duplicate = customers.find((c: any) =>
@@ -1662,7 +1662,19 @@ app.post('/api/customer/activation/complete', authRateLimiter, (req, res) => {
     actReq.usedAt = new Date().toISOString();
   }
 
-  queueDbSave(serverDbState);
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    cust.pinHash = '';
+    cust.hasCustomPin = false;
+    cust.pinSetAt = undefined;
+    cust.activationStatus = cust.registrationStatus === 'pending_boss_approval' ? 'partial_active' : 'ready_for_activation';
+    cust.cardReadyForPrint = cust.registrationStatus === 'approved';
+    if (actReq) {
+      actReq.used = false;
+      actReq.usedAt = undefined;
+    }
+    return res.status(503).json({ success: false, error: 'PIN setup could not be saved. Please retry.' });
+  }
 
   const token = createSessionToken({
     userId: cust.id,
