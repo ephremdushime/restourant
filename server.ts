@@ -3192,7 +3192,7 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
   const scopedState = scopeStateForUser(serverDbState, user);
   return res.json({
     success: true,
-    serverState: scopedState,
+    serverState: sanitizeSensitiveState(scopedState),
     serverTime: new Date().toISOString(),
   });
 });
