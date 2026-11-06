@@ -100,10 +100,10 @@ try {
     if (f.startsWith('db.tmp.')) {
       try {
         fs.unlinkSync(path.join(DATA_DIR, f));
-      } catch {}
+      } catch { }
     }
   }
-} catch {}
+} catch { }
 
 let serverDbState: any = null;
 
@@ -213,10 +213,10 @@ function atomicSaveDb(state: any): boolean {
 
     // 2. Create rolling backup if primary exists
     // Only load local JSON state in non-production offline mode when PostgreSQL is not configured (Workstream A)
-if (!isPostgresConfigured() && process.env.NODE_ENV !== 'production' && fs.existsSync(DB_FILE)) {
+    if (!isPostgresConfigured() && process.env.NODE_ENV !== 'production' && fs.existsSync(DB_FILE)) {
       try {
         fs.copyFileSync(DB_FILE, DB_BACKUP_FILE);
-      } catch {}
+      } catch { }
     }
 
     // 3. Atomic rename with Windows fallback and retry
@@ -229,18 +229,18 @@ if (!isPostgresConfigured() && process.env.NODE_ENV !== 'production' && fs.exist
       } catch {
         try {
           fs.copyFileSync(tempFile, DB_FILE);
-          try { fs.unlinkSync(tempFile); } catch {}
+          try { fs.unlinkSync(tempFile); } catch { }
           saved = true;
           break;
         } catch {
           const end = Date.now() + 15;
-          while (Date.now() < end) {}
+          while (Date.now() < end) { }
         }
       }
     }
     if (!saved) {
-      try { fs.writeFileSync(DB_FILE, serialized, 'utf-8'); } catch {}
-      try { fs.unlinkSync(tempFile); } catch {}
+      try { fs.writeFileSync(DB_FILE, serialized, 'utf-8'); } catch { }
+      try { fs.unlinkSync(tempFile); } catch { }
     }
     return true;
   } catch (err) {
@@ -594,7 +594,7 @@ function requireAuth(allowedRoles?: string[]) {
           [session.userId, session.restaurantCode]
         );
         if (admin.rows[0]?.status !== 'active' ||
-            Number(admin.rows[0]?.session_version || 1) !== Number(session.sessionVersion || 1)) {
+          Number(admin.rows[0]?.session_version || 1) !== Number(session.sessionVersion || 1)) {
           return res.status(401).json({ success: false, error: 'Administrator account is inactive or no longer exists.' });
         }
       } catch (error) {
@@ -613,7 +613,7 @@ function requireAuth(allowedRoles?: string[]) {
         item.status === 'active' && item.isPaired
       );
       if (!staff || !station ||
-          Number(staff.sessionVersion || 1) !== Number(session.sessionVersion || 1)) {
+        Number(staff.sessionVersion || 1) !== Number(session.sessionVersion || 1)) {
         return res.status(401).json({ success: false, error: 'Staff account, credentials or assigned station changed. Sign in again.' });
       }
     }
@@ -642,9 +642,9 @@ function requireAuth(allowedRoles?: string[]) {
           const row = entitlement.rows[0];
           const paidUntilMs = row?.valid_until ? new Date(row.valid_until).getTime() : 0;
           const graceEndsAtMs = paidUntilMs + 72 * 60 * 60 * 1000;
-          if (!row || !row.subscription_status || ['pending_payment','suspended','expired'].includes(row.status) ||
-              ['pending_payment','restricted','cancelled'].includes(row.subscription_status) ||
-              !Number.isFinite(paidUntilMs) || Date.now() >= graceEndsAtMs) {
+          if (!row || !row.subscription_status || ['pending_payment', 'suspended', 'expired'].includes(row.status) ||
+            ['pending_payment', 'restricted', 'cancelled'].includes(row.subscription_status) ||
+            !Number.isFinite(paidUntilMs) || Date.now() >= graceEndsAtMs) {
             return res.status(402).json({
               success: false,
               code: 'RESTAURANT_SUBSCRIPTION_RESTRICTED',
@@ -972,9 +972,9 @@ app.post('/api/admin/restaurant-admins', apiRateLimiter, requireAuth(['super_adm
   const displayName = typeof req.body?.displayName === 'string' ? req.body.displayName.trim() : '';
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
   if (!/^[A-Z0-9_-]{2,32}$/.test(restaurantCode) ||
-      !/^[a-zA-Z0-9._-]{3,64}$/.test(username) ||
-      displayName.length < 2 || displayName.length > 120 ||
-      password.length < 16 || password.length > 128) {
+    !/^[a-zA-Z0-9._-]{3,64}$/.test(username) ||
+    displayName.length < 2 || displayName.length > 120 ||
+    password.length < 16 || password.length > 128) {
     return res.status(400).json({ success: false, error: 'Provide a valid restaurant code, username, display name and password of 16–128 characters.' });
   }
   const pool = getPostgresPool();
@@ -1002,7 +1002,7 @@ app.post('/api/admin/restaurant-admins', apiRateLimiter, requireAuth(['super_adm
     return res.status(201).json({ success: true, administrator: inserted.rows[0] });
   } catch (error: any) {
     if (client) {
-      try { await client.query('ROLLBACK'); } catch {}
+      try { await client.query('ROLLBACK'); } catch { }
     }
     if (error?.code === '23505') return res.status(409).json({ success: false, error: 'That username is already registered for this restaurant.' });
     console.error('[Restaurant Admin Provisioning] Failed:', error);
@@ -1017,8 +1017,8 @@ app.patch('/api/admin/restaurant-admins/:id', apiRateLimiter, requireAuth(['supe
   const status = req.body?.status;
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
   if (!id || (status !== undefined && !['active', 'blocked'].includes(status)) ||
-      (password && (password.length < 16 || password.length > 128)) ||
-      (status === undefined && !password)) {
+    (password && (password.length < 16 || password.length > 128)) ||
+    (status === undefined && !password)) {
     return res.status(400).json({ success: false, error: 'Provide status active/blocked and/or a new password of at least 16 characters.' });
   }
   const pool = getPostgresPool();
@@ -1216,14 +1216,14 @@ app.get('/api/customer/auth/session', apiRateLimiter, requireAuth(['customer']),
     user: req.user,
     customer: cust
       ? {
-          id: cust.id,
-          name: cust.name,
-          phone: cust.phone,
-          memberNo: cust.memberNo,
-          restaurantCode: cust.restaurantCode,
-          activationStatus: cust.activationStatus,
-          cardStatus: cust.cardStatus,
-        }
+        id: cust.id,
+        name: cust.name,
+        phone: cust.phone,
+        memberNo: cust.memberNo,
+        restaurantCode: cust.restaurantCode,
+        activationStatus: cust.activationStatus,
+        cardStatus: cust.cardStatus,
+      }
       : null,
   });
 });
@@ -1768,7 +1768,7 @@ app.delete(
         const parsed = new URL(customer.photoUrl, 'https://restopass.invalid');
         const qKey = parsed.searchParams.get('key');
         if (qKey) normalizedKey = qKey;
-      } catch {}
+      } catch { }
       if (!normalizedKey) {
         const decodedUrl = decodeURIComponent(customer.photoUrl);
         const idx = decodedUrl.indexOf('patron-photos/');
@@ -2268,7 +2268,7 @@ app.post(
         await client.query(
           'INSERT INTO audit_logs (id,restaurant_code,user_id,action,data) VALUES ($1,$2,$3,$4,$5)',
           ['aud_' + crypto.randomUUID(), restaurantCode, user.userId, 'SUPERVISOR_OVERRIDE_CONSUMED',
-            JSON.stringify({ overrideId: supervisorOverride.id, scanId, customerId: customerRow.id, stationId: requestedStationId, approvedBy: supervisorOverride.approved_by_user_id })]
+          JSON.stringify({ overrideId: supervisorOverride.id, scanId, customerId: customerRow.id, stationId: requestedStationId, approvedBy: supervisorOverride.approved_by_user_id })]
         );
       }
       await client.query('COMMIT');
@@ -2289,7 +2289,7 @@ app.post(
       if (Array.isArray(serverDbState?.scanEvents)) serverDbState.scanEvents.unshift(event);
       return res.json(response);
     } catch (error: any) {
-      try { await client.query('ROLLBACK'); } catch {}
+      try { await client.query('ROLLBACK'); } catch { }
       if (claimedRedisTokenKey) {
         await releaseTokenScan(claimedRedisTokenKey);
       }
@@ -2305,63 +2305,65 @@ app.post(
 
 // Two-person supervisor override for a serving-window limit. Approval is one-time,
 // customer/station-bound, short-lived and consumed inside the scan transaction.
-app.post('/api/scans/supervisor-overrides', apiRateLimiter, requireAuth(['stand_staff','restaurant_admin']), async (req,res) => {
-  if (process.env.RESTOPASS_SUPERVISOR_OVERRIDES_ENABLED !== 'true') return res.status(503).json({success:false,code:'SUPERVISOR_OVERRIDES_DISABLED',error:'Supervisor overrides are disabled for this deployment.'});
-  const user=req.user!;
-  const customerId=typeof req.body?.customerId==='string'?req.body.customerId.trim():'';
-  const stationId=typeof req.body?.stationId==='string'?req.body.stationId.trim():'';
-  const reason=typeof req.body?.reason==='string'?req.body.reason.trim():'';
-  const idempotencyKey=typeof req.body?.idempotencyKey==='string'?req.body.idempotencyKey.trim():'';
-  if(!customerId||!stationId||reason.length<12||reason.length>500||!/^[A-Za-z0-9:_-]{12,128}$/.test(idempotencyKey))
-    return res.status(400).json({success:false,error:'Customer, station, detailed reason and idempotency key are required.'});
-  if(user.role==='stand_staff'&&(!user.stationId||user.stationId!==stationId))
-    return res.status(403).json({success:false,error:'Operator is not assigned to this station.'});
-  const pool=getPostgresPool(); if(!pool||!isPostgresConfigured()) return res.status(503).json({success:false,error:'Supervisor overrides require PostgreSQL.'});
-  const client=await pool.connect();
+app.post('/api/scans/supervisor-overrides', apiRateLimiter, requireAuth(['stand_staff', 'restaurant_admin']), async (req, res) => {
+  if (process.env.RESTOPASS_SUPERVISOR_OVERRIDES_ENABLED !== 'true') return res.status(503).json({ success: false, code: 'SUPERVISOR_OVERRIDES_DISABLED', error: 'Supervisor overrides are disabled for this deployment.' });
+  const user = req.user!;
+  const customerId = typeof req.body?.customerId === 'string' ? req.body.customerId.trim() : '';
+  const stationId = typeof req.body?.stationId === 'string' ? req.body.stationId.trim() : '';
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  const idempotencyKey = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
+  if (!customerId || !stationId || reason.length < 12 || reason.length > 500 || !/^[A-Za-z0-9:_-]{12,128}$/.test(idempotencyKey))
+    return res.status(400).json({ success: false, error: 'Customer, station, detailed reason and idempotency key are required.' });
+  if (user.role === 'stand_staff' && (!user.stationId || user.stationId !== stationId))
+    return res.status(403).json({ success: false, error: 'Operator is not assigned to this station.' });
+  const pool = getPostgresPool(); if (!pool || !isPostgresConfigured()) return res.status(503).json({ success: false, error: 'Supervisor overrides require PostgreSQL.' });
+  const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const station=(serverDbState?.scanPoints||[]).find((p:any)=>p.id===stationId&&p.restaurantCode===user.restaurantCode&&p.status==='active'&&p.isPaired);
-    if(!station){await client.query('ROLLBACK');return res.status(403).json({success:false,error:'Station is not active and paired.'});}
-    const customer=await client.query('SELECT id FROM customers WHERE id=$1 AND restaurant_code=$2 AND card_status=\'active\' FOR UPDATE',[customerId,user.restaurantCode]);
-    if(!customer.rows[0]){await client.query('ROLLBACK');return res.status(404).json({success:false,error:'Active customer not found.'});}
-    const prior=await client.query('SELECT id,data,status FROM scan_supervisor_overrides WHERE restaurant_code=$1 AND idempotency_key=$2 FOR UPDATE',[user.restaurantCode,idempotencyKey]);
-    if(prior.rows[0]){
-      const d=prior.rows[0].data;
-      if(d.customerId!==customerId||d.stationId!==stationId||d.reason!==reason){await client.query('ROLLBACK');return res.status(409).json({success:false,error:'Idempotency key belongs to a different override request.'});}
-      await client.query('COMMIT');return res.json({success:true,override:d,idempotent:true});
+    const station = (serverDbState?.scanPoints || []).find((p: any) => p.id === stationId && p.restaurantCode === user.restaurantCode && p.status === 'active' && p.isPaired);
+    if (!station) { await client.query('ROLLBACK'); return res.status(403).json({ success: false, error: 'Station is not active and paired.' }); }
+    const customer = await client.query('SELECT id FROM customers WHERE id=$1 AND restaurant_code=$2 AND card_status=\'active\' FOR UPDATE', [customerId, user.restaurantCode]);
+    if (!customer.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Active customer not found.' }); }
+    const prior = await client.query('SELECT id,data,status FROM scan_supervisor_overrides WHERE restaurant_code=$1 AND idempotency_key=$2 FOR UPDATE', [user.restaurantCode, idempotencyKey]);
+    if (prior.rows[0]) {
+      const d = prior.rows[0].data;
+      if (d.customerId !== customerId || d.stationId !== stationId || d.reason !== reason) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Idempotency key belongs to a different override request.' }); }
+      await client.query('COMMIT'); return res.json({ success: true, override: d, idempotent: true });
     }
-    const id='sov_'+crypto.randomUUID(), now=new Date();
-    const data={id,restaurantCode:user.restaurantCode,customerId,stationId,reason,status:'pending',
-      requestedBy:{userId:user.userId,username:user.username,role:user.role},idempotencyKey,createdAt:now.toISOString()};
+    const id = 'sov_' + crypto.randomUUID(), now = new Date();
+    const data = {
+      id, restaurantCode: user.restaurantCode, customerId, stationId, reason, status: 'pending',
+      requestedBy: { userId: user.userId, username: user.username, role: user.role }, idempotencyKey, createdAt: now.toISOString()
+    };
     await client.query("INSERT INTO scan_supervisor_overrides (id,restaurant_code,customer_id,station_id,status,requested_by_user_id,idempotency_key,data,expires_at) VALUES ($1,$2,$3,$4,'pending',$5,$6,$7,NOW()+INTERVAL '30 minutes')",
-      [id,user.restaurantCode,customerId,stationId,user.userId,idempotencyKey,JSON.stringify(data)]);
+      [id, user.restaurantCode, customerId, stationId, user.userId, idempotencyKey, JSON.stringify(data)]);
     await client.query('INSERT INTO audit_logs (id,restaurant_code,user_id,action,data) VALUES ($1,$2,$3,$4,$5)',
-      ['aud_'+crypto.randomUUID(),user.restaurantCode,user.userId,'SUPERVISOR_OVERRIDE_REQUESTED',JSON.stringify({overrideId:id,customerId,stationId,reason})]);
-    await client.query('COMMIT');return res.status(201).json({success:true,override:data});
-  } catch(e:any){try{await client.query('ROLLBACK')}catch{};if(e?.code==='23505')return res.status(409).json({success:false,error:'Override request already exists.'});console.error('[Override Request]',e);return res.status(503).json({success:false,error:'Override request was not saved.'});}
-  finally{client.release();}
+      ['aud_' + crypto.randomUUID(), user.restaurantCode, user.userId, 'SUPERVISOR_OVERRIDE_REQUESTED', JSON.stringify({ overrideId: id, customerId, stationId, reason })]);
+    await client.query('COMMIT'); return res.status(201).json({ success: true, override: data });
+  } catch (e: any) { try { await client.query('ROLLBACK') } catch { }; if (e?.code === '23505') return res.status(409).json({ success: false, error: 'Override request already exists.' }); console.error('[Override Request]', e); return res.status(503).json({ success: false, error: 'Override request was not saved.' }); }
+  finally { client.release(); }
 });
 
-app.post('/api/scans/supervisor-overrides/:overrideId/approve',apiRateLimiter,requireAuth(['super_admin']),async(req,res)=>{
-  if (process.env.RESTOPASS_SUPERVISOR_OVERRIDES_ENABLED !== 'true') return res.status(503).json({success:false,code:'SUPERVISOR_OVERRIDES_DISABLED',error:'Supervisor overrides are disabled for this deployment.'});
-  const actor=req.user!,reason=typeof req.body?.approvalReason==='string'?req.body.approvalReason.trim():'';
-  if(reason.length<12||reason.length>500)return res.status(400).json({success:false,error:'A detailed approval reason is required.'});
-  const pool=getPostgresPool();if(!pool||!isPostgresConfigured())return res.status(503).json({success:false,error:'Supervisor approval requires PostgreSQL.'});
-  const client=await pool.connect();
-  try{
+app.post('/api/scans/supervisor-overrides/:overrideId/approve', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
+  if (process.env.RESTOPASS_SUPERVISOR_OVERRIDES_ENABLED !== 'true') return res.status(503).json({ success: false, code: 'SUPERVISOR_OVERRIDES_DISABLED', error: 'Supervisor overrides are disabled for this deployment.' });
+  const actor = req.user!, reason = typeof req.body?.approvalReason === 'string' ? req.body.approvalReason.trim() : '';
+  if (reason.length < 12 || reason.length > 500) return res.status(400).json({ success: false, error: 'A detailed approval reason is required.' });
+  const pool = getPostgresPool(); if (!pool || !isPostgresConfigured()) return res.status(503).json({ success: false, error: 'Supervisor approval requires PostgreSQL.' });
+  const client = await pool.connect();
+  try {
     await client.query('BEGIN');
-    const found=await client.query('SELECT * FROM scan_supervisor_overrides WHERE id=$1 FOR UPDATE',[req.params.overrideId]);
-    const row=found.rows[0];
-    if(!row){await client.query('ROLLBACK');return res.status(404).json({success:false,error:'Override request not found.'});}
-    if(row.status!=='pending'||new Date(row.expires_at).getTime()<=Date.now()){await client.query('ROLLBACK');return res.status(409).json({success:false,error:'Override request is no longer pending or has expired.'});}
-    if(row.requested_by_user_id===actor.userId){await client.query('ROLLBACK');return res.status(403).json({success:false,error:'Requester cannot approve their own override.'});}
-    const data={...row.data,status:'approved',approvedBy:{userId:actor.userId,username:actor.username},approvalReason:reason,approvedAt:new Date().toISOString()};
-    await client.query("UPDATE scan_supervisor_overrides SET status='approved',approved_by_user_id=$2,data=$3 WHERE id=$1",[row.id,actor.userId,JSON.stringify(data)]);
+    const found = await client.query('SELECT * FROM scan_supervisor_overrides WHERE id=$1 FOR UPDATE', [req.params.overrideId]);
+    const row = found.rows[0];
+    if (!row) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Override request not found.' }); }
+    if (row.status !== 'pending' || new Date(row.expires_at).getTime() <= Date.now()) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Override request is no longer pending or has expired.' }); }
+    if (row.requested_by_user_id === actor.userId) { await client.query('ROLLBACK'); return res.status(403).json({ success: false, error: 'Requester cannot approve their own override.' }); }
+    const data = { ...row.data, status: 'approved', approvedBy: { userId: actor.userId, username: actor.username }, approvalReason: reason, approvedAt: new Date().toISOString() };
+    await client.query("UPDATE scan_supervisor_overrides SET status='approved',approved_by_user_id=$2,data=$3 WHERE id=$1", [row.id, actor.userId, JSON.stringify(data)]);
     await client.query('INSERT INTO audit_logs (id,restaurant_code,user_id,action,data) VALUES ($1,$2,$3,$4,$5)',
-      ['aud_'+crypto.randomUUID(),row.restaurant_code,actor.userId,'SUPERVISOR_OVERRIDE_APPROVED',JSON.stringify({overrideId:row.id,requesterId:row.requested_by_user_id,customerId:row.customer_id,stationId:row.station_id,reason})]);
-    await client.query('COMMIT');return res.json({success:true,override:data});
-  }catch(e){try{await client.query('ROLLBACK')}catch{};console.error('[Override Approval]',e);return res.status(503).json({success:false,error:'Override approval was not committed.'});}
-  finally{client.release();}
+      ['aud_' + crypto.randomUUID(), row.restaurant_code, actor.userId, 'SUPERVISOR_OVERRIDE_APPROVED', JSON.stringify({ overrideId: row.id, requesterId: row.requested_by_user_id, customerId: row.customer_id, stationId: row.station_id, reason })]);
+    await client.query('COMMIT'); return res.json({ success: true, override: data });
+  } catch (e) { try { await client.query('ROLLBACK') } catch { }; console.error('[Override Approval]', e); return res.status(503).json({ success: false, error: 'Override approval was not committed.' }); }
+  finally { client.release(); }
 });
 
 
@@ -2393,9 +2395,11 @@ app.post('/api/scans/:scanId/second-plate', scanRateLimiter, requireAuth(['stand
       const cutoff = checkpoint.rows[0]?.cutoff_timestamp || new Date(0);
       const delta = customerId ? await client.query('SELECT COALESCE(SUM(plates_delta),0)::int AS delta FROM ledger_entries WHERE customer_id=$1 AND timestamp>$2', [customerId, cutoff]) : { rows: [{ delta: 0 }] };
       await client.query('COMMIT');
-      return res.json({ success: true, idempotent: true, scanEvent: eventRow.rows[0]?.data || null,
+      return res.json({
+        success: true, idempotent: true, scanEvent: eventRow.rows[0]?.data || null,
         ledgerEntry: prior.rows[0].data,
-        balanceAfter: Number(checkpoint.rows[0]?.balance || 0) + Number(delta.rows[0]?.delta || 0) });
+        balanceAfter: Number(checkpoint.rows[0]?.balance || 0) + Number(delta.rows[0]?.delta || 0)
+      });
     }
     const found = await client.query('SELECT data,status,customer_id,station_id FROM scan_events WHERE id=$1 AND restaurant_code=$2 FOR UPDATE', [scanId, user.restaurantCode]);
     const row = found.rows[0];
@@ -2431,7 +2435,7 @@ app.post('/api/scans/:scanId/second-plate', scanRateLimiter, requireAuth(['stand
     const windowMinutes = Math.max(1, Number(terms.servingWindowMinutes || 120));
     const plateLimit = Math.max(1, Number(terms.plateLimitPerWindow || 3));
     const recent = await client.query(`SELECT data FROM scan_events WHERE customer_id=$1 AND restaurant_code=$2 AND created_at >= NOW() - ($3 * INTERVAL '1 minute') FOR UPDATE`, [row.customer_id, user.restaurantCode, windowMinutes]);
-    const served = recent.rows.reduce((sum: number, r: any) => sum + (['approved','warning_confirmed'].includes(r.data?.status) ? Number(r.data?.platesDeducted || 0) : 0), 0);
+    const served = recent.rows.reduce((sum: number, r: any) => sum + (['approved', 'warning_confirmed'].includes(r.data?.status) ? Number(r.data?.platesDeducted || 0) : 0), 0);
     if (served + 1 > plateLimit) {
       await client.query('ROLLBACK');
       return res.status(409).json({ success: false, error: 'The second plate would exceed the serving-window limit.' });
@@ -2458,7 +2462,7 @@ app.post('/api/scans/:scanId/second-plate', scanRateLimiter, requireAuth(['stand
     await client.query(
       'INSERT INTO audit_logs (id,restaurant_code,user_id,action,data) VALUES ($1,$2,$3,$4,$5)',
       ['aud_' + crypto.randomUUID(), user.restaurantCode, user.userId, 'SECOND_PLATE_AUTHORIZED',
-        JSON.stringify({ scanId, customerId: row.customer_id, stationId: row.station_id, actorRole: user.role, timestamp: now.toISOString() })]
+      JSON.stringify({ scanId, customerId: row.customer_id, stationId: row.station_id, actorRole: user.role, timestamp: now.toISOString() })]
     );
     await client.query('COMMIT');
     if (Array.isArray(serverDbState?.ledgerEntries)) serverDbState.ledgerEntries.push(ledgerEntry);
@@ -2468,7 +2472,7 @@ app.post('/api/scans/:scanId/second-plate', scanRateLimiter, requireAuth(['stand
     }
     return res.json({ success: true, scanEvent: event, ledgerEntry, balanceAfter: balance - 1 });
   } catch (error) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try { await client.query('ROLLBACK'); } catch { }
     console.error('[Second Plate] Transaction failed:', error);
     return res.status(503).json({ success: false, error: 'Second plate was not committed. Retry with the same idempotency key.' });
   } finally { client.release(); }
@@ -2480,8 +2484,8 @@ app.post('/api/scans/:scanId/photo-check', scanRateLimiter, requireAuth(['stand_
   const result = req.body?.result;
   const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
   const idempotencyKey = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
-  if (!/^scan_[A-Za-z0-9_-]{8,64}$/.test(scanId) || !['matched','rejected'].includes(result) ||
-      !/^[A-Za-z0-9:_-]{12,128}$/.test(idempotencyKey) || reason.length > 300) {
+  if (!/^scan_[A-Za-z0-9_-]{8,64}$/.test(scanId) || !['matched', 'rejected'].includes(result) ||
+    !/^[A-Za-z0-9:_-]{12,128}$/.test(idempotencyKey) || reason.length > 300) {
     return res.status(400).json({ success: false, error: 'A valid photo-check result and idempotency key are required.' });
   }
   const pool = getPostgresPool();
@@ -2510,11 +2514,13 @@ app.post('/api/scans/:scanId/photo-check', scanRateLimiter, requireAuth(['stand_
         ? await client.query("SELECT data FROM ledger_entries WHERE idempotency_key=$1", ['photo-reject:' + idempotencyKey])
         : { rows: [] };
       await client.query('COMMIT');
-      return res.json({ success: true, idempotent: true, scanEvent: event, ledgerEntry: ledgerResult.rows[0]?.data || null,
-        balanceAfter: Number(checkpoint.rows[0]?.balance || 0) + Number(delta.rows[0]?.delta || 0), reversed: result === 'rejected' });
+      return res.json({
+        success: true, idempotent: true, scanEvent: event, ledgerEntry: ledgerResult.rows[0]?.data || null,
+        balanceAfter: Number(checkpoint.rows[0]?.balance || 0) + Number(delta.rows[0]?.delta || 0), reversed: result === 'rejected'
+      });
     }
     if (!event.photoCheckRequired || event.photoCheckResult !== 'none' ||
-        !['approved','warning_confirmed'].includes(row.status) || event.isGracePlate) {
+      !['approved', 'warning_confirmed'].includes(row.status) || event.isGracePlate) {
       await client.query('ROLLBACK');
       return res.status(409).json({ success: false, error: 'This scan is not awaiting an eligible photo check.' });
     }
@@ -2559,8 +2565,8 @@ app.post('/api/scans/:scanId/photo-check', scanRateLimiter, requireAuth(['stand_
     await client.query(
       'INSERT INTO audit_logs (id,restaurant_code,user_id,action,data) VALUES ($1,$2,$3,$4,$5)',
       ['aud_' + crypto.randomUUID(), user.restaurantCode, user.userId,
-        result === 'matched' ? 'PHOTO_CHECK_MATCHED' : 'PHOTO_CHECK_REJECTED',
-        JSON.stringify({ scanId, customerId: row.customer_id, result, reason, actorRole: user.role, timestamp: now.toISOString() })]
+      result === 'matched' ? 'PHOTO_CHECK_MATCHED' : 'PHOTO_CHECK_REJECTED',
+      JSON.stringify({ scanId, customerId: row.customer_id, result, reason, actorRole: user.role, timestamp: now.toISOString() })]
     );
     const balanceCheckpoint = await client.query('SELECT balance,cutoff_timestamp FROM balance_checkpoints WHERE customer_id=$1 ORDER BY cutoff_timestamp DESC LIMIT 1', [row.customer_id]);
     const balanceCutoff = balanceCheckpoint.rows[0]?.cutoff_timestamp || new Date(0);
@@ -2574,7 +2580,7 @@ app.post('/api/scans/:scanId/photo-check', scanRateLimiter, requireAuth(['stand_
     }
     return res.json({ success: true, scanEvent: event, ledgerEntry: reversalForCache, balanceAfter, reversed: result === 'rejected' });
   } catch (error) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try { await client.query('ROLLBACK'); } catch { }
     console.error('[Photo Check] Transaction failed:', error);
     return res.status(503).json({ success: false, error: 'Photo check was not committed.' });
   } finally { client.release(); }
@@ -2586,7 +2592,7 @@ async function writeApprovalAudit(client: any, restaurantCode: string, user: Use
   await client.query(
     'INSERT INTO audit_logs (id, restaurant_code, user_id, action, data) VALUES ($1,$2,$3,$4,$5)',
     ['aud_' + crypto.randomUUID(), restaurantCode, user.userId, action,
-      JSON.stringify({ actorRole: user.role, actorName: user.username, details, timestamp: new Date().toISOString() })]
+    JSON.stringify({ actorRole: user.role, actorName: user.username, details, timestamp: new Date().toISOString() })]
   );
 }
 
@@ -2613,10 +2619,10 @@ app.post('/api/approvals/registration', apiRateLimiter, requireAuth(['stand_staf
   const reference = typeof b.paymentReference === 'string' ? b.paymentReference.trim() : '';
   const stationId = typeof b.stationId === 'string' ? b.stationId.trim() : '';
   if (name.length < 2 || name.length > 120 || phone.length < 7 || phone.length > 32 ||
-      idNumber.length < 3 || idNumber.length > 128 || !Number.isSafeInteger(plates) || plates < 1 || plates > 10000 ||
-      !Number.isSafeInteger(amount) || amount < 1 || amount > 10000000 ||
-      !['cash', 'momo', 'mtn_momo', 'airtel_money', 'bank_transfer'].includes(b.paymentMethod) ||
-      reference.length < 4 || reference.length > 128 || !stationId) {
+    idNumber.length < 3 || idNumber.length > 128 || !Number.isSafeInteger(plates) || plates < 1 || plates > 10000 ||
+    !Number.isSafeInteger(amount) || amount < 1 || amount > 10000000 ||
+    !['cash', 'momo', 'mtn_momo', 'airtel_money', 'bank_transfer'].includes(b.paymentMethod) ||
+    reference.length < 4 || reference.length > 128 || !stationId) {
     return res.status(400).json({ success: false, error: 'Valid customer identity, station, plate quantity, amount, payment method and reference are required.' });
   }
   if (user.role === 'stand_staff' && (!user.stationId || user.stationId !== stationId)) {
@@ -2707,7 +2713,7 @@ app.post('/api/approvals/registration', apiRateLimiter, requireAuth(['stand_staf
     updateApprovalCache(customer, approval);
     return res.status(201).json({ success: true, customer, approval });
   } catch (error) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try { await client.query('ROLLBACK'); } catch { }
     console.error('[Approval Registration] Transaction failed:', error);
     return res.status(503).json({ success: false, error: 'Registration was not committed. Retry after checking the approval queue.' });
   } finally { client.release(); }
@@ -2792,9 +2798,9 @@ app.post('/api/approvals/topup', apiRateLimiter, requireAuth(['stand_staff', 're
   const reference = typeof b.paymentReference === 'string' ? b.paymentReference.trim() : '';
   const stationId = typeof b.stationId === 'string' ? b.stationId.trim() : '';
   if (!customerId || !Number.isSafeInteger(plates) || plates < 1 || plates > 10000 ||
-      !Number.isSafeInteger(amount) || amount < 1 || amount > 10000000 ||
-      !['cash', 'momo', 'mtn_momo', 'airtel_money', 'bank_transfer'].includes(b.paymentMethod) ||
-      reference.length < 4 || reference.length > 128 || !stationId) {
+    !Number.isSafeInteger(amount) || amount < 1 || amount > 10000000 ||
+    !['cash', 'momo', 'mtn_momo', 'airtel_money', 'bank_transfer'].includes(b.paymentMethod) ||
+    reference.length < 4 || reference.length > 128 || !stationId) {
     return res.status(400).json({ success: false, error: 'Valid customer, station, quantity, amount, payment method and reference are required.' });
   }
   if (user.role === 'stand_staff' && (!user.stationId || user.stationId !== stationId)) {
@@ -2848,7 +2854,7 @@ app.post('/api/approvals/topup', apiRateLimiter, requireAuth(['stand_staff', 're
     updateApprovalCache(customer, approval);
     return res.status(201).json({ success: true, customer, approval });
   } catch (error) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try { await client.query('ROLLBACK'); } catch { }
     console.error('[Pending Top-up] Transaction failed:', error);
     return res.status(503).json({ success: false, error: 'Pending top-up was not committed.' });
   } finally { client.release(); }
@@ -2893,7 +2899,7 @@ app.post('/api/approvals/:approvalId/approve', apiRateLimiter, requireAuth(['res
     }
     return res.json({ success: true, customer: sanitizeCustomerForResponse(committed.customer), approval: committed.approval, payment: committed.payment, ledgerEntries: [committed.purchase, ...(committed.graceEntry ? [committed.graceEntry] : [])] });
   } catch (error: any) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try { await client.query('ROLLBACK'); } catch { }
     if (error?.message === 'APPROVAL_ALREADY_CREDITED') return res.status(409).json({ success: false, error: 'Approval was already credited.' });
     console.error('[Approval Commit] Transaction failed:', error);
     return res.status(503).json({ success: false, error: 'Approval was not committed; retry after checking the approval queue.' });
@@ -2915,7 +2921,7 @@ app.post('/api/approvals/:approvalId/cosign', apiRateLimiter, requireAuth(['supe
     if (!result.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Approval not found.' }); }
     const approval = result.rows[0].data;
     if (approval.status !== 'pending' || Number(approval.platesRequested) <= 120 ||
-        !approval.bossApprovedAt || approval.coSignStatus !== 'pending_super_admin') {
+      !approval.bossApprovedAt || approval.coSignStatus !== 'pending_super_admin') {
       await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Request is not awaiting a valid high-value co-signature.' });
     }
     if (approval.bossApprovedByUserId === user.userId) {
@@ -2935,7 +2941,7 @@ app.post('/api/approvals/:approvalId/cosign', apiRateLimiter, requireAuth(['supe
     }
     return res.json({ success: true, customer: sanitizeCustomerForResponse(committed.customer), approval: committed.approval, payment: committed.payment, ledgerEntries: [committed.purchase, ...(committed.graceEntry ? [committed.graceEntry] : [])] });
   } catch (error: any) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try { await client.query('ROLLBACK'); } catch { }
     if (error?.message === 'APPROVAL_ALREADY_CREDITED') return res.status(409).json({ success: false, error: 'Approval was already credited.' });
     console.error('[Approval Co-sign] Transaction failed:', error);
     return res.status(503).json({ success: false, error: 'Co-signature was not committed.' });
@@ -2976,7 +2982,7 @@ app.post('/api/approvals/:approvalId/reject', apiRateLimiter, requireAuth(['rest
     updateApprovalCache(customer, approval);
     return res.json({ success: true, customer: sanitizeCustomerForResponse(customer), approval });
   } catch (error) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try { await client.query('ROLLBACK'); } catch { }
     console.error('[Approval Reject] Transaction failed:', error);
     return res.status(503).json({ success: false, error: 'Rejection was not committed.' });
   } finally { client.release(); }
@@ -2997,8 +3003,8 @@ app.post('/api/customer/transfers', apiRateLimiter, requireAuth(['customer']), a
   const plates = Number(req.body?.plates);
   const idempotencyKey = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(recipientMemberNo) ||
-      !Number.isSafeInteger(plates) || plates < 1 || plates > 20 ||
-      !/^[A-Za-z0-9:_-]{12,128}$/.test(idempotencyKey)) {
+    !Number.isSafeInteger(plates) || plates < 1 || plates > 20 ||
+    !/^[A-Za-z0-9:_-]{12,128}$/.test(idempotencyKey)) {
     return res.status(400).json({ success: false, error: 'Provide a valid recipient member number, 1–20 plates and a unique idempotency key.' });
   }
   if (!checkServerStudentEntitlement(user.userId, 'digital_plate_transfer').allowed) {
@@ -3079,25 +3085,27 @@ app.post('/api/customer/transfers', apiRateLimiter, requireAuth(['customer']), a
     };
     await client.query(
       'INSERT INTO transfers (id,restaurant_code,sender_customer_id,recipient_customer_id,plates,idempotency_key,data,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
-      [transferId,user.restaurantCode,user.userId,recipient.id,plates,idempotencyKey,JSON.stringify(transfer),now]
+      [transferId, user.restaurantCode, user.userId, recipient.id, plates, idempotencyKey, JSON.stringify(transfer), now]
     );
     for (const entry of [senderEntry, recipientEntry]) {
       await client.query(
         'INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
-        [entry.id,user.restaurantCode,entry.customerId,entry.type,entry.platesDelta,entry.idempotencyKey,now,JSON.stringify(entry)]
+        [entry.id, user.restaurantCode, entry.customerId, entry.type, entry.platesDelta, entry.idempotencyKey, now, JSON.stringify(entry)]
       );
     }
     await client.query(
       'INSERT INTO audit_logs (id,restaurant_code,user_id,action,data) VALUES ($1,$2,$3,$4,$5)',
-      ['aud_' + crypto.randomUUID(),user.restaurantCode,user.userId,'CUSTOMER_PLATE_TRANSFER',JSON.stringify({
-        transferId,recipientCustomerId:recipient.id,plates,idempotencyKey,createdAt:now.toISOString()
+      ['aud_' + crypto.randomUUID(), user.restaurantCode, user.userId, 'CUSTOMER_PLATE_TRANSFER', JSON.stringify({
+        transferId, recipientCustomerId: recipient.id, plates, idempotencyKey, createdAt: now.toISOString()
       })]
     );
     await client.query('COMMIT');
-    return res.status(201).json({ success: true, transfer, senderBalanceAfter: senderBalance - plates,
-      recipientBalanceAfter: (balances.get(recipient.id) || 0) + plates });
+    return res.status(201).json({
+      success: true, transfer, senderBalanceAfter: senderBalance - plates,
+      recipientBalanceAfter: (balances.get(recipient.id) || 0) + plates
+    });
   } catch (error: any) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try { await client.query('ROLLBACK'); } catch { }
     if (error?.code === '23505') return res.status(409).json({ success: false, error: 'This transfer was already processed.' });
     console.error('[Customer Transfer] failed:', error);
     return res.status(503).json({ success: false, error: 'Transfer was not committed. Retry with the same idempotency key.' });
@@ -3117,8 +3125,8 @@ app.post('/api/financial-exceptions', apiRateLimiter, requireAuth(['restaurant_a
   const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
   const idempotencyKey = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
   if (!['scan_reversal', 'transfer_reversal', 'cash_refund'].includes(type) ||
-      !sourceId || sourceId.length > 64 || reason.length < 12 || reason.length > 500 ||
-      !/^[A-Za-z0-9:_-]{12,128}$/.test(idempotencyKey)) {
+    !sourceId || sourceId.length > 64 || reason.length < 12 || reason.length > 500 ||
+    !/^[A-Za-z0-9:_-]{12,128}$/.test(idempotencyKey)) {
     return res.status(400).json({ success: false, error: 'A supported exception type, source ID, detailed reason and unique idempotency key are required.' });
   }
   const pool = getPostgresPool();
@@ -3148,7 +3156,7 @@ app.post('/api/financial-exceptions', apiRateLimiter, requireAuth(['restaurant_a
       );
       const event = source.rows[0]?.data;
       if (!event || !['approved', 'warning_confirmed'].includes(source.rows[0].status) ||
-          event.isGracePlate || Number(event.platesDeducted) !== 1) {
+        event.isGracePlate || Number(event.platesDeducted) !== 1) {
         await client.query('ROLLBACK');
         return res.status(409).json({ success: false, error: 'Only a committed, paid, single-plate scan can be reversed.' });
       }
@@ -3173,7 +3181,7 @@ app.post('/api/financial-exceptions', apiRateLimiter, requireAuth(['restaurant_a
       );
       const payment = source.rows[0]?.data;
       if (!payment || !source.rows[0].customer_id || !['cash', 'bank_transfer'].includes(payment.paymentMethod) ||
-          payment.refundStatus === 'refunded' || Number(payment.amountRwf) < 1 || Number(payment.platesAdded) < 1) {
+        payment.refundStatus === 'refunded' || Number(payment.amountRwf) < 1 || Number(payment.platesAdded) < 1) {
         await client.query('ROLLBACK');
         return res.status(409).json({ success: false, error: 'Only an unreversed cash or bank-transfer top-up can enter this manual refund workflow. Mobile-money refunds require a verified provider refund integration.' });
       }
@@ -3200,9 +3208,11 @@ app.post('/api/financial-exceptions', apiRateLimiter, requireAuth(['restaurant_a
       snapshot = { paymentId: sourceId, customerId, purchaseLedgerId: purchase.rows[0].id, plates: Number(payment.platesAdded), amountRwf: Number(payment.amountRwf), paymentMethod: payment.paymentMethod };
     }
     const id = 'fex_' + crypto.randomUUID();
-    const exception = { id, restaurantCode: user.restaurantCode, type, sourceId, reason,
+    const exception = {
+      id, restaurantCode: user.restaurantCode, type, sourceId, reason,
       status: 'pending', requestedBy: { userId: user.userId, username: user.username, role: user.role },
-      snapshot, idempotencyKey, createdAt: new Date().toISOString() };
+      snapshot, idempotencyKey, createdAt: new Date().toISOString()
+    };
     await client.query(
       'INSERT INTO financial_exception_requests (id,restaurant_code,exception_type,source_id,customer_id,status,idempotency_key,requested_by_user_id,data) VALUES ($1,$2,$3,$4,$5,\'pending\',$6,$7,$8)',
       [id, user.restaurantCode, type, sourceId, customerId, idempotencyKey, user.userId, JSON.stringify(exception)]
@@ -3211,7 +3221,7 @@ app.post('/api/financial-exceptions', apiRateLimiter, requireAuth(['restaurant_a
     await client.query('COMMIT');
     return res.status(201).json({ success: true, exception });
   } catch (error) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try { await client.query('ROLLBACK'); } catch { }
     if ((error as any)?.code === '23505') return res.status(409).json({ success: false, error: 'An exception for this source transaction is already pending or has been approved.' });
     console.error('[Financial Exception Request] failed:', error);
     return res.status(503).json({ success: false, error: 'Financial exception request was not saved.' });
@@ -3249,9 +3259,11 @@ app.post('/api/financial-exceptions/:exceptionId/approve', apiRateLimiter, requi
     const now = new Date();
     const addLedger = async (customerId: string, type: string, delta: number, suffix: string, reference: string, reversalOfId?: string) => {
       const id = 'led_' + crypto.randomUUID();
-      const ledger = { id, customerId, restaurantCode: row.restaurant_code, type, platesDelta: delta,
+      const ledger = {
+        id, customerId, restaurantCode: row.restaurant_code, type, platesDelta: delta,
         timestamp: now.toISOString(), staffId: actor.userId, reason, reference,
-        reversalOfId: reversalOfId || undefined, idempotencyKey: 'fex:' + exception.id + ':' + suffix };
+        reversalOfId: reversalOfId || undefined, idempotencyKey: 'fex:' + exception.id + ':' + suffix
+      };
       await client.query(
         'INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
         [id, row.restaurant_code, customerId, type, delta, ledger.idempotencyKey, now, JSON.stringify(ledger)]
@@ -3302,7 +3314,7 @@ app.post('/api/financial-exceptions/:exceptionId/approve', apiRateLimiter, requi
     await client.query('COMMIT');
     return res.json({ success: true, exception });
   } catch (error) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try { await client.query('ROLLBACK'); } catch { }
     console.error('[Financial Exception Approval] failed:', error);
     return res.status(503).json({ success: false, error: 'Financial exception was not approved or posted.' });
   } finally { client.release(); }
@@ -3329,7 +3341,7 @@ app.post('/api/financial-exceptions/:exceptionId/reject', apiRateLimiter, requir
     await client.query('COMMIT');
     return res.json({ success: true, exception });
   } catch (error) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try { await client.query('ROLLBACK'); } catch { }
     console.error('[Financial Exception Rejection] failed:', error);
     return res.status(503).json({ success: false, error: 'Financial exception rejection was not committed.' });
   } finally { client.release(); }
@@ -3366,8 +3378,8 @@ app.post(
     const packageId = typeof req.body?.packageId === 'string' ? req.body.packageId : undefined;
     const allowedMethods = ['cash', 'mtn_momo', 'airtel_money', 'bank_transfer'];
     if (!customerId || !Number.isSafeInteger(plates) || plates < 1 || plates > 120 ||
-        !Number.isSafeInteger(amountRwf) || amountRwf < 1 || amountRwf > 10000000 ||
-        !allowedMethods.includes(paymentMethod) || reference.length < 4 || reference.length > 128) {
+      !Number.isSafeInteger(amountRwf) || amountRwf < 1 || amountRwf > 10000000 ||
+      !allowedMethods.includes(paymentMethod) || reference.length < 4 || reference.length > 128) {
       return res.status(400).json({ success: false, error: 'Valid customer, 1–120 plates, amount, payment method and payment reference are required. Top-ups above 120 plates require the approval workflow.' });
     }
     const pool = getPostgresPool();
@@ -3447,7 +3459,7 @@ app.post(
       if (Array.isArray(serverDbState?.payments)) serverDbState.payments.unshift(payment);
       return res.json({ success: true, ledgerEntry, payment, idempotent: false });
     } catch (error) {
-      try { await client.query('ROLLBACK'); } catch {}
+      try { await client.query('ROLLBACK'); } catch { }
       console.error('[Atomic Top-up] Transaction failed:', error);
       return res.status(503).json({ success: false, error: 'Top-up could not be committed. Retry with the same payment reference.' });
     } finally {
@@ -3483,24 +3495,28 @@ function getSaasMtnConfig() {
   if (configuredEnvironment !== 'sandbox' && configuredEnvironment !== 'production') return null;
   const environment = configuredEnvironment;
   if (process.env.RESTOPASS_SAAS_MTN_ENABLED !== 'true' ||
-      (environment === 'sandbox' && process.env.NODE_ENV === 'production' && process.env.RESTOPASS_SAAS_MTN_SANDBOX_APPROVED !== 'true') ||
-      (environment === 'production' && (process.env.NODE_ENV !== 'production' || process.env.RESTOPASS_SAAS_MTN_PRODUCTION_APPROVED !== 'true'))) return null;
+    (environment === 'sandbox' && process.env.NODE_ENV === 'production' && process.env.RESTOPASS_SAAS_MTN_SANDBOX_APPROVED !== 'true') ||
+    (environment === 'production' && (process.env.NODE_ENV !== 'production' || process.env.RESTOPASS_SAAS_MTN_PRODUCTION_APPROVED !== 'true'))) return null;
   const apiUser = process.env.MTN_MOMO_COLLECTION_API_USER || '';
   const apiKey = process.env.MTN_MOMO_COLLECTION_API_KEY || '';
   const subscriptionKey = process.env.MTN_MOMO_COLLECTION_SUBSCRIPTION_KEY || '';
   const targetEnvironment = environment === 'production' ? (process.env.MTN_MOMO_PRODUCTION_TARGET || '') : 'sandbox';
   if (!apiUser || !apiKey || !subscriptionKey || !targetEnvironment) return null;
-  return { environment, targetEnvironment,
+  return {
+    environment, targetEnvironment,
     baseUrl: environment === 'production' ? 'https://momodeveloper.mtn.com' : 'https://sandbox.momodeveloper.mtn.com',
-    apiUser, apiKey, subscriptionKey };
+    apiUser, apiKey, subscriptionKey
+  };
 }
 
 async function getSaasMtnAccessToken(config: NonNullable<ReturnType<typeof getSaasMtnConfig>>): Promise<string> {
   const credentials = Buffer.from(config.apiUser + ':' + config.apiKey).toString('base64');
-  const response = await fetch(config.baseUrl + '/collection/token/', { method: 'POST', headers: {
-    Authorization: 'Basic ' + credentials, 'Ocp-Apim-Subscription-Key': config.subscriptionKey,
-    'X-Target-Environment': config.targetEnvironment,
-  }, signal: AbortSignal.timeout(10000) });
+  const response = await fetch(config.baseUrl + '/collection/token/', {
+    method: 'POST', headers: {
+      Authorization: 'Basic ' + credentials, 'Ocp-Apim-Subscription-Key': config.subscriptionKey,
+      'X-Target-Environment': config.targetEnvironment,
+    }, signal: AbortSignal.timeout(10000)
+  });
   if (!response.ok) throw new Error('MTN token request failed: HTTP ' + response.status);
   const body: any = await response.json();
   if (typeof body.access_token !== 'string' || !body.access_token) throw new Error('MTN access token missing');
@@ -3522,84 +3538,84 @@ async function ensureRestaurantSaasSubscription(client: any, restaurantCode: str
   return { restaurant, subscription: subscription.rows[0] };
 }
 
-app.get('/api/restaurant-saas/subscription', apiRateLimiter, requireAuth(['restaurant_admin','super_admin']), async (req,res) => {
+app.get('/api/restaurant-saas/subscription', apiRateLimiter, requireAuth(['restaurant_admin', 'super_admin']), async (req, res) => {
   const actor = req.user!;
   const code = actor.role === 'super_admin' ? String(req.query.restaurantCode || '') : actor.restaurantCode;
-  if (!code) return res.status(400).json({success:false,error:'restaurantCode is required.'});
+  if (!code) return res.status(400).json({ success: false, error: 'restaurantCode is required.' });
   const pool = getPostgresPool();
-  if (!pool) return res.status(503).json({success:false,error:'SaaS billing requires PostgreSQL.'});
+  if (!pool) return res.status(503).json({ success: false, error: 'SaaS billing requires PostgreSQL.' });
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const ensured = await ensureRestaurantSaasSubscription(client, code);
-    if (!ensured) { await client.query('ROLLBACK'); return res.status(404).json({success:false,error:'Restaurant not found.'}); }
+    if (!ensured) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Restaurant not found.' }); }
     const subscription = ensured.subscription;
     const periodEndMs = subscription.current_period_end ? new Date(subscription.current_period_end).getTime() : NaN;
     const nowMs = Date.now();
     const computedStatus = subscription.status === 'cancelled' ? 'cancelled'
       : !Number.isFinite(periodEndMs) ? 'pending_payment'
-      : nowMs < periodEndMs ? 'active'
-      : nowMs < periodEndMs + 72 * 60 * 60 * 1000 ? 'grace_period' : 'restricted';
+        : nowMs < periodEndMs ? 'active'
+          : nowMs < periodEndMs + 72 * 60 * 60 * 1000 ? 'grace_period' : 'restricted';
     if (subscription.status !== computedStatus) {
-      const updated = await client.query('UPDATE restaurant_subscriptions SET status=$2,updated_at=NOW() WHERE restaurant_code=$1 AND status<>$2 RETURNING *',[code,computedStatus]);
+      const updated = await client.query('UPDATE restaurant_subscriptions SET status=$2,updated_at=NOW() WHERE restaurant_code=$1 AND status<>$2 RETURNING *', [code, computedStatus]);
       if (updated.rowCount) {
         await client.query("INSERT INTO restaurant_subscription_audit_logs (id,restaurant_code,actor_type,action,data) VALUES ($1,$2,'system','SUBSCRIPTION_STATUS_CHANGED',$3)",
-          ['rsa_'+crypto.randomUUID(),code,JSON.stringify({from:subscription.status,to:computedStatus,observedAt:new Date(nowMs).toISOString()})]);
+          ['rsa_' + crypto.randomUUID(), code, JSON.stringify({ from: subscription.status, to: computedStatus, observedAt: new Date(nowMs).toISOString() })]);
       }
       subscription.status = updated.rows[0]?.status || computedStatus;
     }
-    const payments = await client.query('SELECT id,internal_reference,amount_rwf,currency,status,provider_status,created_at,verified_at,entitlement_applied_at FROM restaurant_subscription_payments WHERE restaurant_code=$1 ORDER BY created_at DESC LIMIT 20',[code]);
+    const payments = await client.query('SELECT id,internal_reference,amount_rwf,currency,status,provider_status,created_at,verified_at,entitlement_applied_at FROM restaurant_subscription_payments WHERE restaurant_code=$1 ORDER BY created_at DESC LIMIT 20', [code]);
     await client.query('COMMIT');
-    return res.json({success:true,subscription,payments:payments.rows});
-  } catch (error) { try { await client.query('ROLLBACK'); } catch {} console.error('[SaaS subscription read]',error); return res.status(503).json({success:false,error:'Subscription details unavailable.'}); }
+    return res.json({ success: true, subscription, payments: payments.rows });
+  } catch (error) { try { await client.query('ROLLBACK'); } catch { } console.error('[SaaS subscription read]', error); return res.status(503).json({ success: false, error: 'Subscription details unavailable.' }); }
   finally { client.release(); }
 });
 
-app.post('/api/restaurant-saas/subscription/price', apiRateLimiter, requireAuth(['super_admin']), async (req,res) => {
+app.post('/api/restaurant-saas/subscription/price', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
   const code = typeof req.body?.restaurantCode === 'string' ? req.body.restaurantCode.trim().toUpperCase() : '';
   const amount = Number(req.body?.amountRwf);
   if (!/^[A-Z0-9_-]{2,32}$/.test(code) || !Number.isSafeInteger(amount) || amount < 1 || amount > 100000000)
-    return res.status(400).json({success:false,error:'Valid restaurant code and positive RWF amount required.'});
+    return res.status(400).json({ success: false, error: 'Valid restaurant code and positive RWF amount required.' });
   const pool = getPostgresPool();
-  if (!pool) return res.status(503).json({success:false,error:'SaaS pricing requires PostgreSQL.'});
+  if (!pool) return res.status(503).json({ success: false, error: 'SaaS pricing requires PostgreSQL.' });
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const ensured = await ensureRestaurantSaasSubscription(client,code);
-    if (!ensured) { await client.query('ROLLBACK'); return res.status(404).json({success:false,error:'Restaurant not found.'}); }
-    const updatedRestaurant = {...ensured.restaurant,saasSubscriptionPriceRwf:amount};
-    await client.query('UPDATE restaurants SET data=$2,updated_at=NOW() WHERE code=$1',[code,JSON.stringify(updatedRestaurant)]);
-    const updated = await client.query('UPDATE restaurant_subscriptions SET price_rwf=$2,updated_at=NOW() WHERE restaurant_code=$1 RETURNING *',[code,amount]);
+    const ensured = await ensureRestaurantSaasSubscription(client, code);
+    if (!ensured) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Restaurant not found.' }); }
+    const updatedRestaurant = { ...ensured.restaurant, saasSubscriptionPriceRwf: amount };
+    await client.query('UPDATE restaurants SET data=$2,updated_at=NOW() WHERE code=$1', [code, JSON.stringify(updatedRestaurant)]);
+    const updated = await client.query('UPDATE restaurant_subscriptions SET price_rwf=$2,updated_at=NOW() WHERE restaurant_code=$1 RETURNING *', [code, amount]);
     await client.query("INSERT INTO restaurant_subscription_audit_logs (id,restaurant_code,actor_type,actor_id,action,data) VALUES ($1,$2,'super_admin',$3,'SAAS_PRICE_UPDATED',$4)",
-      ['rsa_'+crypto.randomUUID(),code,req.user!.userId,JSON.stringify({amountRwf:amount,currency:'RWF'})]);
+      ['rsa_' + crypto.randomUUID(), code, req.user!.userId, JSON.stringify({ amountRwf: amount, currency: 'RWF' })]);
     await client.query('COMMIT');
-    return res.json({success:true,subscription:updated.rows[0]});
-  } catch(error) { try{await client.query('ROLLBACK')}catch{}; console.error('[SaaS price]',error); return res.status(503).json({success:false,error:'Price update failed.'}); }
+    return res.json({ success: true, subscription: updated.rows[0] });
+  } catch (error) { try { await client.query('ROLLBACK') } catch { }; console.error('[SaaS price]', error); return res.status(503).json({ success: false, error: 'Price update failed.' }); }
   finally { client.release(); }
 });
 
-app.post('/api/restaurant-saas/payment/initiate', apiRateLimiter, requireAuth(['restaurant_admin']), async (req,res) => {
+app.post('/api/restaurant-saas/payment/initiate', apiRateLimiter, requireAuth(['restaurant_admin']), async (req, res) => {
   const payer = normalizeSaasPayer(req.body?.payerMsisdn);
   const idempotencyKey = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
   if (!/^2507[89]\d{7}$/.test(payer) || !/^[A-Za-z0-9._:-]{12,128}$/.test(idempotencyKey))
-    return res.status(400).json({success:false,error:'Valid Rwanda MTN number and unique idempotency key required.'});
+    return res.status(400).json({ success: false, error: 'Valid Rwanda MTN number and unique idempotency key required.' });
   const config = getSaasMtnConfig();
-  if (!config) return res.status(503).json({success:false,error:'MTN collection disabled pending merchant credentials and approval.'});
+  if (!config) return res.status(503).json({ success: false, error: 'MTN collection disabled pending merchant credentials and approval.' });
   const pool = getPostgresPool();
-  if (!pool) return res.status(503).json({success:false,error:'Payment requires PostgreSQL.'});
+  if (!pool) return res.status(503).json({ success: false, error: 'Payment requires PostgreSQL.' });
   const client = await pool.connect();
-  const paymentId = 'rsp_'+crypto.randomUUID();
-  const reference = 'RPS-'+crypto.randomUUID();
+  const paymentId = 'rsp_' + crypto.randomUUID();
+  const reference = 'RPS-' + crypto.randomUUID();
   try {
     await client.query('BEGIN');
-    const ensured = await ensureRestaurantSaasSubscription(client,req.user!.restaurantCode);
-    if (!ensured) { await client.query('ROLLBACK'); return res.status(404).json({success:false,error:'Restaurant not found.'}); }
+    const ensured = await ensureRestaurantSaasSubscription(client, req.user!.restaurantCode);
+    if (!ensured) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Restaurant not found.' }); }
     const amount = Number(ensured.subscription.price_rwf);
-    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({restaurantCode:req.user!.restaurantCode,payer,amount,currency:'RWF'})).digest('hex');
-    const prior = await client.query('SELECT * FROM restaurant_subscription_payments WHERE idempotency_key=$1 FOR UPDATE',[idempotencyKey]);
+    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ restaurantCode: req.user!.restaurantCode, payer, amount, currency: 'RWF' })).digest('hex');
+    const prior = await client.query('SELECT * FROM restaurant_subscription_payments WHERE idempotency_key=$1 FOR UPDATE', [idempotencyKey]);
     if (prior.rows[0]) {
-      if (prior.rows[0].request_fingerprint !== fingerprint) { await client.query('ROLLBACK'); return res.status(409).json({success:false,error:'Idempotency key reused with different details.'}); }
-      await client.query('COMMIT'); return res.json({success:true,payment:prior.rows[0],reused:true});
+      if (prior.rows[0].request_fingerprint !== fingerprint) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Idempotency key reused with different details.' }); }
+      await client.query('COMMIT'); return res.json({ success: true, payment: prior.rows[0], reused: true });
     }
     const pending = await client.query(
       "SELECT * FROM restaurant_subscription_payments WHERE restaurant_code=$1 AND status IN ('created','provider_pending','review_required') ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
@@ -3607,51 +3623,57 @@ app.post('/api/restaurant-saas/payment/initiate', apiRateLimiter, requireAuth(['
     );
     if (pending.rows[0]) {
       await client.query('COMMIT');
-      return res.status(202).json({success:true,payment:pending.rows[0],reused:true,message:'An earlier MTN payment is unresolved or requires manual reconciliation. Do not start another payment until it is resolved.'});
+      return res.status(202).json({ success: true, payment: pending.rows[0], reused: true, message: 'An earlier MTN payment is unresolved or requires manual reconciliation. Do not start another payment until it is resolved.' });
     }
     await client.query("INSERT INTO restaurant_subscription_payments (id,restaurant_code,provider,provider_environment,internal_reference,payer_msisdn,amount_rwf,currency,status,idempotency_key,request_fingerprint) VALUES ($1,$2,'mtn_momo',$3,$4,$5,$6,'RWF','created',$7,$8)",
-      [paymentId,req.user!.restaurantCode,config.environment,reference,payer,amount,idempotencyKey,fingerprint]);
+      [paymentId, req.user!.restaurantCode, config.environment, reference, payer, amount, idempotencyKey, fingerprint]);
     await client.query("INSERT INTO restaurant_subscription_audit_logs (id,restaurant_code,actor_type,actor_id,action,payment_id,data) VALUES ($1,$2,'restaurant_admin',$3,'SAAS_PAYMENT_INITIATED',$4,$5)",
-      ['rsa_'+crypto.randomUUID(),req.user!.restaurantCode,req.user!.userId,paymentId,JSON.stringify({amountRwf:amount,currency:'RWF',provider:'mtn_momo',environment:config.environment})]);
+      ['rsa_' + crypto.randomUUID(), req.user!.restaurantCode, req.user!.userId, paymentId, JSON.stringify({ amountRwf: amount, currency: 'RWF', provider: 'mtn_momo', environment: config.environment })]);
     await client.query('COMMIT');
     const token = await getSaasMtnAccessToken(config);
-    const response = await fetch(config.baseUrl+'/collection/v1_0/requesttopay',{method:'POST',headers:{
-      Authorization:'Bearer '+token,'X-Reference-Id':reference.replace(/^RPS-/,''),'X-Target-Environment':config.targetEnvironment,
-      'Ocp-Apim-Subscription-Key':config.subscriptionKey,'Content-Type':'application/json'
-    },body:JSON.stringify({amount:String(amount),currency:'RWF',externalId:reference,payer:{partyIdType:'MSISDN',partyId:payer},
-      payerMessage:'RestoPass restaurant software subscription',payeeNote:'RestoPass SaaS access - 30 days'}),signal:AbortSignal.timeout(10000)});
+    const response = await fetch(config.baseUrl + '/collection/v1_0/requesttopay', {
+      method: 'POST', headers: {
+        Authorization: 'Bearer ' + token, 'X-Reference-Id': reference.replace(/^RPS-/, ''), 'X-Target-Environment': config.targetEnvironment,
+        'Ocp-Apim-Subscription-Key': config.subscriptionKey, 'Content-Type': 'application/json'
+      }, body: JSON.stringify({
+        amount: String(amount), currency: 'RWF', externalId: reference, payer: { partyIdType: 'MSISDN', partyId: payer },
+        payerMessage: 'RestoPass restaurant software subscription', payeeNote: 'RestoPass SaaS access - 30 days'
+      }), signal: AbortSignal.timeout(10000)
+    });
     if (response.status !== 202) {
-      await pool.query("UPDATE restaurant_subscription_payments SET status='failed',provider_status=$2,updated_at=NOW() WHERE id=$1 AND status='created'",[paymentId,'REQUEST_REJECTED_HTTP_'+response.status]);
-      return res.status(502).json({success:false,error:'MTN did not accept the request. No subscription time was granted.'});
+      await pool.query("UPDATE restaurant_subscription_payments SET status='failed',provider_status=$2,updated_at=NOW() WHERE id=$1 AND status='created'", [paymentId, 'REQUEST_REJECTED_HTTP_' + response.status]);
+      return res.status(502).json({ success: false, error: 'MTN did not accept the request. No subscription time was granted.' });
     }
-    await pool.query("UPDATE restaurant_subscription_payments SET status='provider_pending',provider_status='PENDING',updated_at=NOW() WHERE id=$1",[paymentId]);
-    return res.status(202).json({success:true,status:'provider_pending',paymentId,message:'Approve the MTN MoMo prompt. Access activates only after independent status verification.'});
-  } catch(error) { try{await client.query('ROLLBACK')}catch{}; console.error('[SaaS payment initiation]',error); return res.status(503).json({success:false,error:'Payment request unavailable. Check payment history before retrying.'}); }
+    await pool.query("UPDATE restaurant_subscription_payments SET status='provider_pending',provider_status='PENDING',updated_at=NOW() WHERE id=$1", [paymentId]);
+    return res.status(202).json({ success: true, status: 'provider_pending', paymentId, message: 'Approve the MTN MoMo prompt. Access activates only after independent status verification.' });
+  } catch (error) { try { await client.query('ROLLBACK') } catch { }; console.error('[SaaS payment initiation]', error); return res.status(503).json({ success: false, error: 'Payment request unavailable. Check payment history before retrying.' }); }
   finally { client.release(); }
 });
 
-app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requireAuth(['restaurant_admin','super_admin']), async (req,res) => {
+app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requireAuth(['restaurant_admin', 'super_admin']), async (req, res) => {
   const actor = req.user!;
   const pool = getPostgresPool();
-  if (!pool) return res.status(503).json({success:false,error:'Verification requires PostgreSQL.'});
+  if (!pool) return res.status(503).json({ success: false, error: 'Verification requires PostgreSQL.' });
   const config = getSaasMtnConfig();
-  if (!config) return res.status(503).json({success:false,error:'MTN verification is disabled pending merchant credentials and approval.'});
+  if (!config) return res.status(503).json({ success: false, error: 'MTN verification is disabled pending merchant credentials and approval.' });
   const client = await pool.connect();
   try {
-    const found = await client.query('SELECT * FROM restaurant_subscription_payments WHERE id=$1',[req.params.paymentId]);
+    const found = await client.query('SELECT * FROM restaurant_subscription_payments WHERE id=$1', [req.params.paymentId]);
     const payment = found.rows[0];
-    if (!payment) return res.status(404).json({success:false,error:'Payment attempt not found.'});
-    if (actor.role !== 'super_admin' && payment.restaurant_code !== actor.restaurantCode) return res.status(403).json({success:false,error:'Payment belongs to another restaurant.'});
-    if (payment.provider_environment !== config.environment) return res.status(409).json({success:false,error:'Payment environment mismatch.'});
-    if (payment.entitlement_applied_at) return res.json({success:true,status:'successful',alreadyApplied:true});
-    if (payment.status === 'review_required') return res.json({success:true,status:'review_required',message:'MTN reported a successful transfer with mismatched payment details. No access was granted; manual reconciliation is required.'});
+    if (!payment) return res.status(404).json({ success: false, error: 'Payment attempt not found.' });
+    if (actor.role !== 'super_admin' && payment.restaurant_code !== actor.restaurantCode) return res.status(403).json({ success: false, error: 'Payment belongs to another restaurant.' });
+    if (payment.provider_environment !== config.environment) return res.status(409).json({ success: false, error: 'Payment environment mismatch.' });
+    if (payment.entitlement_applied_at) return res.json({ success: true, status: 'successful', alreadyApplied: true });
+    if (payment.status === 'review_required') return res.json({ success: true, status: 'review_required', message: 'MTN reported a successful transfer with mismatched payment details. No access was granted; manual reconciliation is required.' });
     const token = await getSaasMtnAccessToken(config);
-    const lookup = payment.internal_reference.replace(/^RPS-/,'');
-    const response = await fetch(config.baseUrl+'/collection/v1_0/requesttopay/'+encodeURIComponent(lookup),{method:'GET',headers:{
-      Authorization:'Bearer '+token,'X-Target-Environment':config.targetEnvironment,'Ocp-Apim-Subscription-Key':config.subscriptionKey
-    },signal:AbortSignal.timeout(10000)});
-    if (!response.ok) return res.status(502).json({success:false,error:'MTN status unavailable; no entitlement changed.'});
-    const provider:any = await response.json();
+    const lookup = payment.internal_reference.replace(/^RPS-/, '');
+    const response = await fetch(config.baseUrl + '/collection/v1_0/requesttopay/' + encodeURIComponent(lookup), {
+      method: 'GET', headers: {
+        Authorization: 'Bearer ' + token, 'X-Target-Environment': config.targetEnvironment, 'Ocp-Apim-Subscription-Key': config.subscriptionKey
+      }, signal: AbortSignal.timeout(10000)
+    });
+    if (!response.ok) return res.status(502).json({ success: false, error: 'MTN status unavailable; no entitlement changed.' });
+    const provider: any = await response.json();
     const verified = validateSaasPaymentMatch({
       providerStatus: provider?.status,
       providerAmount: provider?.amount,
@@ -3667,64 +3689,68 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
     if (!verified) {
       const providerSaysSuccessful = provider?.status === 'SUCCESSFUL';
       const status = providerSaysSuccessful ? 'review_required'
-        : ['FAILED','REJECTED','TIMEOUT','EXPIRED'].includes(provider?.status) ? 'failed' : 'provider_pending';
+        : ['FAILED', 'REJECTED', 'TIMEOUT', 'EXPIRED'].includes(provider?.status) ? 'failed' : 'provider_pending';
       await pool.query("UPDATE restaurant_subscription_payments SET status=$2,provider_status=$3,provider_transaction_id=CASE WHEN $2='review_required' THEN $4 ELSE provider_transaction_id END,updated_at=NOW() WHERE id=$1 AND entitlement_applied_at IS NULL",
-        [payment.id,status,String(provider?.status||'UNKNOWN').slice(0,64),
-          status === 'review_required' && typeof provider?.financialTransactionId === 'string' ? provider.financialTransactionId : null]);
+        [payment.id, status, String(provider?.status || 'UNKNOWN').slice(0, 64),
+        status === 'review_required' && typeof provider?.financialTransactionId === 'string' ? provider.financialTransactionId : null]);
       if (status === 'review_required') {
         await pool.query("INSERT INTO restaurant_subscription_audit_logs (id,restaurant_code,actor_type,action,payment_id,data) VALUES ($1,$2,'system','SAAS_PAYMENT_REVIEW_REQUIRED',$3,$4)",
-          ['rsa_'+crypto.randomUUID(),payment.restaurant_code,payment.id,JSON.stringify({
-            providerStatus:String(provider?.status||'UNKNOWN'),
-            amountMatched:Number(provider?.amount)===Number(payment.amount_rwf),
-            currencyMatched:provider?.currency==='RWF',
-            referenceMatched:provider?.externalId===payment.internal_reference,
-            payerMatched:normalizeSaasPayer(provider?.payer?.partyId)===normalizeSaasPayer(payment.payer_msisdn),
-            transactionIdPresent:typeof provider?.financialTransactionId==='string'&&provider.financialTransactionId.length>0,
+          ['rsa_' + crypto.randomUUID(), payment.restaurant_code, payment.id, JSON.stringify({
+            providerStatus: String(provider?.status || 'UNKNOWN'),
+            amountMatched: Number(provider?.amount) === Number(payment.amount_rwf),
+            currencyMatched: provider?.currency === 'RWF',
+            referenceMatched: provider?.externalId === payment.internal_reference,
+            payerMatched: normalizeSaasPayer(provider?.payer?.partyId) === normalizeSaasPayer(payment.payer_msisdn),
+            transactionIdPresent: typeof provider?.financialTransactionId === 'string' && provider.financialTransactionId.length > 0,
           })]);
       }
-      return res.json({success:true,status,message:status==='review_required'
-        ? 'MTN reports a successful transfer, but one or more payment details do not match. Access was not activated; this payment requires manual reconciliation.'
-        : 'MTN status has not met every entitlement verification condition.'});
+      return res.json({
+        success: true, status, message: status === 'review_required'
+          ? 'MTN reports a successful transfer, but one or more payment details do not match. Access was not activated; this payment requires manual reconciliation.'
+          : 'MTN status has not met every entitlement verification condition.'
+      });
     }
     await client.query('BEGIN');
-    const locked = await client.query('SELECT * FROM restaurant_subscription_payments WHERE id=$1 FOR UPDATE',[payment.id]);
+    const locked = await client.query('SELECT * FROM restaurant_subscription_payments WHERE id=$1 FOR UPDATE', [payment.id]);
     const pay = locked.rows[0];
-    if (pay.entitlement_applied_at) { await client.query('COMMIT'); return res.json({success:true,status:'successful',alreadyApplied:true}); }
-    const restaurantResult = await client.query('SELECT code,data FROM restaurants WHERE code=$1 FOR UPDATE',[pay.restaurant_code]);
-    if (!restaurantResult.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({success:false,error:'Restaurant not found.'}); }
-    const subResult = await client.query('SELECT * FROM restaurant_subscriptions WHERE restaurant_code=$1 FOR UPDATE',[pay.restaurant_code]);
-    if (!subResult.rows[0]) { await client.query('ROLLBACK'); return res.status(409).json({success:false,error:'Subscription record missing.'}); }
+    if (pay.entitlement_applied_at) { await client.query('COMMIT'); return res.json({ success: true, status: 'successful', alreadyApplied: true }); }
+    const restaurantResult = await client.query('SELECT code,data FROM restaurants WHERE code=$1 FOR UPDATE', [pay.restaurant_code]);
+    if (!restaurantResult.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Restaurant not found.' }); }
+    const subResult = await client.query('SELECT * FROM restaurant_subscriptions WHERE restaurant_code=$1 FOR UPDATE', [pay.restaurant_code]);
+    if (!subResult.rows[0]) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Subscription record missing.' }); }
     const restaurant = restaurantResult.rows[0].data || {};
     const subscription = subResult.rows[0];
     const verifiedAt = new Date();
     const period = calculateRenewalPeriod(subscription.current_period_end, verifiedAt.toISOString());
     const end = period.periodEnd;
     const graceEnd = period.gracePeriodEnd;
-    const plan = (serverDbState?.plans||[]).find((item:any)=>item.id===restaurant.planId);
-    const oldLicense = (serverDbState?.licenses||[]).find((item:any)=>item.id===restaurant.currentLicenseId);
-    const maxScanPoints = Number(oldLicense?.maxScanPoints||plan?.terms?.maxScanPointsIncluded||1);
-    const licenseId = 'LIC-'+pay.restaurant_code+'-'+crypto.randomUUID().slice(0,8).toUpperCase();
-    const payload = {licenseId,restaurantCode:pay.restaurant_code,planId:restaurant.planId,maxScanPoints,validUntil:end,graceDays:3};
-    const signature = 'ed25519_'+serverHmac(MASTER_KEY,'LICENSE_SIGNATURE:'+JSON.stringify(payload)).slice(0,48);
-    const license = {id:licenseId,restaurantCode:pay.restaurant_code,planId:restaurant.planId,maxScanPoints,validUntil:end,graceDays:3,
-      featureFlags:oldLicense?.featureFlags||{spotChecksEnabled:true,multiStationEnabled:maxScanPoints>1,secondPlateAllowed:true,customerTransfersEnabled:true},
-      signature,issuedAt:verifiedAt.toISOString(),paidUntil:end};
-    await client.query('INSERT INTO licenses (id,restaurant_code,plan_id,valid_until,data) VALUES ($1,$2,$3,$4,$5)',[licenseId,pay.restaurant_code,restaurant.planId,end,JSON.stringify(license)]);
-    const updatedRestaurant = {...restaurant,status:'active',currentLicenseId:licenseId,highestTimeSeen:Date.now()};
-    await client.query('UPDATE restaurants SET status=$2,data=$3,updated_at=NOW() WHERE code=$1',[pay.restaurant_code,'active',JSON.stringify(updatedRestaurant)]);
+    const plan = (serverDbState?.plans || []).find((item: any) => item.id === restaurant.planId);
+    const oldLicense = (serverDbState?.licenses || []).find((item: any) => item.id === restaurant.currentLicenseId);
+    const maxScanPoints = Number(oldLicense?.maxScanPoints || plan?.terms?.maxScanPointsIncluded || 1);
+    const licenseId = 'LIC-' + pay.restaurant_code + '-' + crypto.randomUUID().slice(0, 8).toUpperCase();
+    const payload = { licenseId, restaurantCode: pay.restaurant_code, planId: restaurant.planId, maxScanPoints, validUntil: end, graceDays: 3 };
+    const signature = 'ed25519_' + serverHmac(MASTER_KEY, 'LICENSE_SIGNATURE:' + JSON.stringify(payload)).slice(0, 48);
+    const license = {
+      id: licenseId, restaurantCode: pay.restaurant_code, planId: restaurant.planId, maxScanPoints, validUntil: end, graceDays: 3,
+      featureFlags: oldLicense?.featureFlags || { spotChecksEnabled: true, multiStationEnabled: maxScanPoints > 1, secondPlateAllowed: true, customerTransfersEnabled: true },
+      signature, issuedAt: verifiedAt.toISOString(), paidUntil: end
+    };
+    await client.query('INSERT INTO licenses (id,restaurant_code,plan_id,valid_until,data) VALUES ($1,$2,$3,$4,$5)', [licenseId, pay.restaurant_code, restaurant.planId, end, JSON.stringify(license)]);
+    const updatedRestaurant = { ...restaurant, status: 'active', currentLicenseId: licenseId, highestTimeSeen: Date.now() };
+    await client.query('UPDATE restaurants SET status=$2,data=$3,updated_at=NOW() WHERE code=$1', [pay.restaurant_code, 'active', JSON.stringify(updatedRestaurant)]);
     await client.query("UPDATE restaurant_subscriptions SET status='active',current_period_start=$2,current_period_end=$3,grace_period_end=$4,last_payment_id=$5,updated_at=NOW() WHERE restaurant_code=$1",
-      [pay.restaurant_code,period.periodStart,end,graceEnd,pay.id]);
+      [pay.restaurant_code, period.periodStart, end, graceEnd, pay.id]);
     await client.query("UPDATE restaurant_subscription_payments SET status='successful',provider_transaction_id=$2,provider_status='SUCCESSFUL',verified_at=$3,entitlement_applied_at=$3,updated_at=NOW() WHERE id=$1",
-      [pay.id,provider.financialTransactionId,verifiedAt.toISOString()]);
+      [pay.id, provider.financialTransactionId, verifiedAt.toISOString()]);
     await client.query("INSERT INTO restaurant_subscription_audit_logs (id,restaurant_code,actor_type,actor_id,action,payment_id,data) VALUES ($1,$2,'mtn_momo',$3,'SAAS_PAYMENT_VERIFIED',$4,$5)",
-      ['rsa_'+crypto.randomUUID(),pay.restaurant_code,provider.financialTransactionId,pay.id,JSON.stringify({amountRwf:Number(pay.amount_rwf),currency:'RWF',periodStart:period.periodStart,periodEnd:end,licenseId})]);
+      ['rsa_' + crypto.randomUUID(), pay.restaurant_code, provider.financialTransactionId, pay.id, JSON.stringify({ amountRwf: Number(pay.amount_rwf), currency: 'RWF', periodStart: period.periodStart, periodEnd: end, licenseId })]);
     await client.query('COMMIT');
     if (serverDbState) {
-      serverDbState.restaurants=(serverDbState.restaurants||[]).map((item:any)=>item.code===pay.restaurant_code?updatedRestaurant:item);
-      serverDbState.licenses=[...(serverDbState.licenses||[]),license];
+      serverDbState.restaurants = (serverDbState.restaurants || []).map((item: any) => item.code === pay.restaurant_code ? updatedRestaurant : item);
+      serverDbState.licenses = [...(serverDbState.licenses || []), license];
     }
-    return res.json({success:true,status:'successful',subscription:{status:'active',currentPeriodStart:period.periodStart,currentPeriodEnd:end,gracePeriodEnd:graceEnd}});
-  } catch(error) { try{await client.query('ROLLBACK')}catch{}; console.error('[SaaS payment verification]',error); return res.status(503).json({success:false,error:'Verification or entitlement application failed. No success is assumed; retry or reconcile.'}); }
+    return res.json({ success: true, status: 'successful', subscription: { status: 'active', currentPeriodStart: period.periodStart, currentPeriodEnd: end, gracePeriodEnd: graceEnd } });
+  } catch (error) { try { await client.query('ROLLBACK') } catch { }; console.error('[SaaS payment verification]', error); return res.status(503).json({ success: false, error: 'Verification or entitlement application failed. No success is assumed; retry or reconcile.' }); }
   finally { client.release(); }
 });
 
@@ -4753,8 +4779,8 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
       const incomingApprovalsForGuard = user.role === 'customer'
         ? []
         : (fullState.pendingApprovals || []).filter((a: any) =>
-            a && a.id && (!allowedRestoCode || a.restaurantCode === allowedRestoCode)
-          );
+          a && a.id && (!allowedRestoCode || a.restaurantCode === allowedRestoCode)
+        );
       const attemptedApprovalMutation = incomingApprovalsForGuard.some((incoming: any) => {
         const previous: any = currentApprovalsById.get(incoming.id);
         return !previous || JSON.stringify({ ...previous, ...incoming }) !== JSON.stringify(previous);
@@ -4873,13 +4899,13 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
             if (previous) {
               const passwordChanged = suppliedPassword
                 ? (suppliedPassword.startsWith('scrypt$')
-                    ? suppliedPassword !== previous.passwordHash
-                    : !verifyServerStaffSecret(suppliedPassword, previous.passwordHash))
+                  ? suppliedPassword !== previous.passwordHash
+                  : !verifyServerStaffSecret(suppliedPassword, previous.passwordHash))
                 : false;
               const pinChanged = suppliedPin
                 ? (suppliedPin.startsWith('scrypt$')
-                    ? suppliedPin !== previous.pin
-                    : !verifyServerStaffSecret(suppliedPin, previous.pin))
+                  ? suppliedPin !== previous.pin
+                  : !verifyServerStaffSecret(suppliedPin, previous.pin))
                 : false;
               const assignmentChanged =
                 (incoming.stationId !== undefined && incoming.stationId !== previous.stationId) ||
@@ -5072,13 +5098,13 @@ async function startServer() {
 async function shutdownServer(): Promise<void> {
   try {
     await dbWriteQueue;
-  } catch {}
+  } catch { }
   try {
     await closePostgres();
-  } catch {}
+  } catch { }
   try {
     await closeRedis();
-  } catch {}
+  } catch { }
 }
 
 // Start only when directly executed (allows test imports without port binding)
