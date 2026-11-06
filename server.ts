@@ -3226,15 +3226,25 @@ async function startServer() {
   }
 
   if (isProduction || !viteLoaded) {
-    const staticDir = fs.existsSync(path.resolve(process.cwd(), 'dist'))
-      ? path.resolve(process.cwd(), 'dist')
-      : process.cwd();
-    app.use(express.static(staticDir));
+    const distDir = path.resolve(process.cwd(), 'dist');
+    const publicDir = path.resolve(process.cwd(), 'public');
+    if (isProduction && !fs.existsSync(path.join(distDir, 'index.html'))) {
+      throw new Error('[FATAL DEPLOYMENT ERROR] Production frontend bundle is missing. Refusing to serve the application working directory.');
+    }
+    const staticDir = fs.existsSync(path.join(distDir, 'index.html')) ? distDir : publicDir;
+    // Legacy public uploads must never become reachable through static hosting,
+    // including if a pre-hardening volume or build artifact still contains them.
+    app.use((req, res, next) => {
+      if (req.path === '/uploads' || req.path.startsWith('/uploads/')) {
+        return res.status(404).json({ success: false, error: 'Resource not found.' });
+      }
+      return next();
+    });
+    app.use(express.static(staticDir, { dotfiles: 'deny', index: false }));
     app.get('*', (_req, res) => {
-      const htmlFile = fs.existsSync(path.join(staticDir, 'index.html'))
-        ? path.join(staticDir, 'index.html')
-        : path.resolve(process.cwd(), 'index.html');
-      res.sendFile(htmlFile);
+      const htmlFile = path.resolve(process.cwd(), 'index.html');
+      if (fs.existsSync(htmlFile)) return res.sendFile(htmlFile);
+      return res.status(404).send('Application bundle not found.');
     });
   }
 
