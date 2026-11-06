@@ -12,6 +12,7 @@ import {
   normalizeStationUserCredentials,
   verifyServerCustomerPin,
   verifyStationUserCredentials,
+  isActiveStationSession,
   UserSession,
 } from '../server';
 import { restoStore } from '../src/store/restoStore';
@@ -213,6 +214,25 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     stationUser.authType = 'pin8';
     assert.equal(verifyStationUserCredentials('LegacyStaffPassword#2026', stationUser), false);
     assert.equal(verifyStationUserCredentials('654321', stationUser), true);
+  });
+
+  test('invalidates production staff sessions when the station account is blocked or deleted', () => {
+    const session: UserSession = {
+      userId: 'staff_cashier_RW01',
+      username: 'cashier_auth',
+      role: 'stand_staff',
+      restaurantCode: 'RW01',
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+    };
+    assert.equal(isActiveStationSession(session, {
+      stationUsers: [{ id: 's1', username: 'cashier_auth', restaurantCode: 'RW01', status: 'active' }],
+    }), true);
+    assert.equal(isActiveStationSession(session, {
+      stationUsers: [{ id: 's1', username: 'cashier_auth', restaurantCode: 'RW01', status: 'blocked' }],
+    }), false);
+    assert.equal(isActiveStationSession(session, { stationUsers: [] }), false);
+    assert.equal(isActiveStationSession({ ...session, role: 'customer' }, { stationUsers: [] }), true);
   });
 
   test('redacts PINs, password hashes, recovery codes and replay state from every client payload', () => {
