@@ -5885,6 +5885,11 @@ export class RestoStore {
     if (!customer.provisionalStatus) {
       customer.provisionalStatus = 'approved';
     }
+    // Existing approved-customer top-ups retain the legacy three-meal grace policy.
+    // The four-meal allowance is reserved for first-time registrations awaiting boss approval.
+    if (customer.registrationStatus === 'approved' || customer.provisionalStatus === 'approved') {
+      customer.gracePlatesAllowed = 3;
+    }
     const totalPendingGraceConsumed = this.state.pendingApprovals
       .filter((a) => a.customerId === customer.id && a.status === 'pending')
       .reduce((sum, a) => sum + (a.gracePlatesConsumed || 0), 0);
@@ -6766,11 +6771,11 @@ export class RestoStore {
         // The onboarding free month ends at 30 days; it has no additional grace period.
         sub.status = 'expired';
         sub.updatedAt = new Date().toISOString();
-        if (lifecycleCustomer?.customerAccessStatus === 'complimentary') lifecycleCustomer.customerAccessStatus = 'payment_required';
+        if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'complimentary') lifecycleCustomer.customerAccessStatus = 'payment_required';
       } else if (now > graceMs) {
         sub.status = 'expired';
         sub.updatedAt = new Date().toISOString();
-        if (lifecycleCustomer?.customerAccessStatus === 'active') lifecycleCustomer.customerAccessStatus = 'payment_required';
+        if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'active') lifecycleCustomer.customerAccessStatus = 'payment_required';
       } else if (now > endMs && sub.status === 'active') {
         sub.status = 'grace_period';
         sub.updatedAt = new Date().toISOString();
@@ -6802,9 +6807,11 @@ export class RestoStore {
     // This prevents a disabled legacy monetization flag from bypassing the one-month free entitlement.
     const lifecycleCustomer = this.state.customers.find((c) => c.id === customerId);
     const lifecycleSubscription = this.getCustomerSubscription(customerId);
-    if (lifecycleCustomer?.customerAccessStatus === 'pending_super_admin_activation' ||
-        lifecycleCustomer?.customerAccessStatus === 'payment_required' ||
-        lifecycleCustomer?.customerAccessStatus === 'expired') {
+    if (lifecycleCustomer?.registrationStatus && (
+        lifecycleCustomer.customerAccessStatus === 'pending_super_admin_activation' ||
+        lifecycleCustomer.customerAccessStatus === 'payment_required' ||
+        lifecycleCustomer.customerAccessStatus === 'expired'
+      )) {
       return {
         allowed: false,
         feature,
@@ -6816,7 +6823,7 @@ export class RestoStore {
           : 'Your complimentary or paid dashboard access has expired. Visit reception to pay the monthly access fee.',
       };
     }
-    if (lifecycleCustomer?.customerAccessStatus === 'active' && lifecycleSubscription?.status === 'expired') {
+    if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'active' && lifecycleSubscription?.status === 'expired') {
       lifecycleCustomer.customerAccessStatus = 'payment_required';
       return {
         allowed: false,
@@ -7046,8 +7053,10 @@ export class RestoStore {
 
     const paidCustomer = this.state.customers.find((c) => c.id === payment.customerId);
     if (paidCustomer) {
-      paidCustomer.customerAccessStatus = 'active';
-      paidCustomer.freeAccessExpiresAt = new Date(periodEndMs).toISOString();
+      if (paidCustomer.registrationStatus) {
+        paidCustomer.customerAccessStatus = 'active';
+        paidCustomer.freeAccessExpiresAt = new Date(periodEndMs).toISOString();
+      }
     }
 
     this.logAudit({
