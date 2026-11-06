@@ -2401,7 +2401,7 @@ function checkServerStudentEntitlement(
       if (lifecycleSub) lifecycleSub.status = 'expired';
     }
   }
-  if (lifecycleCustomer?.customerAccessStatus === 'active' && lifecycleSub?.status === 'active') {
+  if (lifecycleCustomer?.customerAccessStatus === 'active' && (lifecycleSub?.status === 'active' || lifecycleSub?.status === 'grace_period')) {
     const paidEnd = new Date(lifecycleSub.currentPeriodEnd || 0).getTime();
     const graceEnd = new Date(lifecycleSub.gracePeriodEnd || paidEnd + (settings?.graceDays || 3) * 86400000).getTime();
     if (graceEnd && now > graceEnd) {
