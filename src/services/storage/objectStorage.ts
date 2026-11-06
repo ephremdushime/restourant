@@ -4,7 +4,7 @@
  * Objects are never assigned public URLs. S3-compatible buckets must remain
  * private; local fallback is stored under data/private, outside the web root.
  */
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -146,6 +146,26 @@ export async function uploadPatronPhoto(
     await handle.close();
   }
   return { url: '', key, storageType: 'local', sizeBytes: buffer.length };
+}
+
+export async function deletePrivatePatronPhoto(
+  key: string,
+  storageType?: 's3' | 'local'
+): Promise<void> {
+  const parsed = validatePhotoKey(key);
+  const config = getObjectStorageConfig();
+  const s3 = getS3Client();
+  if (storageType === 's3' || (storageType !== 'local' && config && s3)) {
+    if (!config || !s3) throw new Error('S3 storage is not configured to remove this private photo.');
+    await s3.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }));
+    return;
+  }
+  const filePath = path.join(privatePhotoDirectory(), parsed.tenantCode, parsed.filename);
+  try {
+    await fs.promises.unlink(filePath);
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
 }
 
 export async function getPrivatePatronPhoto(key: string): Promise<StoredPhoto | null> {
