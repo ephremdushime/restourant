@@ -5748,7 +5748,7 @@ export class RestoStore {
     });
 
     this.scheduleSaveState();
-    this.pushStateToServer();
+    // The registration UI awaits this sync before attaching an optional private portrait.
     this.notify();
     return { customer: newCustomer, approval };
   }
