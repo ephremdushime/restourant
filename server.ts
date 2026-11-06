@@ -668,6 +668,9 @@ function requireAuth(allowedRoles?: string[]) {
     if (process.env.NODE_ENV === 'production' && !isActiveStationSession(session, serverDbState)) {
       return res.status(401).json({ success: false, error: 'Station account is blocked or no longer exists. Please contact the restaurant administrator.' });
     }
+    if (process.env.NODE_ENV === 'production' && !isActiveCustomerSession(session, serverDbState)) {
+      return res.status(401).json({ success: false, error: 'Customer account is no longer active. Please contact restaurant reception.' });
+    }
     if (process.env.NODE_ENV === 'production' &&
         session.role === 'restaurant_admin' &&
         !isCurrentRestaurantAdminSession(session)) {
@@ -1439,6 +1442,46 @@ function verifyStationUserCredentials(entered: string, stationUser: any): boolea
 }
 
 /** Existing production staff sessions are invalidated immediately when an account is blocked or deleted. */
+function normalizeCustomerPhoneForLookup(value: string): string {
+  const digits = String(value || '').replace(/[^0-9]/g, '');
+  if (digits.startsWith('250') && digits.length === 12) return digits.slice(3);
+  if (digits.startsWith('0') && digits.length === 10) return digits.slice(1);
+  return digits;
+}
+
+/**
+ * Customer login identifiers are tenant-scoped. A phone number may legitimately
+ * exist in more than one restaurant, so a global first-match lookup is unsafe.
+ */
+function findCustomerForLogin(state: any, identifier: string, restaurantCode: string): any | null {
+  const cleanIdentifier = typeof identifier === 'string' ? identifier.trim() : '';
+  const tenantCode = typeof restaurantCode === 'string' ? restaurantCode.trim().toUpperCase() : '';
+  if (!cleanIdentifier || !tenantCode) return null;
+
+  const normalizedPhone = normalizeCustomerPhoneForLookup(cleanIdentifier);
+  return (state?.customers || []).find((customer: any) => {
+    if (String(customer?.restaurantCode || '').trim().toUpperCase() !== tenantCode) return false;
+    return customer.memberNo === cleanIdentifier ||
+      customer.id === cleanIdentifier ||
+      (normalizedPhone.length >= 7 &&
+        normalizeCustomerPhoneForLookup(String(customer.phone || '')) === normalizedPhone);
+  }) || null;
+}
+
+/** Customer sessions stop working immediately after deletion, suspension or rejection. */
+function isActiveCustomerSession(session: UserSession, state: any): boolean {
+  if (session.role !== 'customer') return true;
+  const customer = (state?.customers || []).find(
+    (item: any) => item.id === session.userId && item.restaurantCode === session.restaurantCode
+  );
+  return Boolean(
+    customer &&
+    customer.activationStatus !== 'suspended' &&
+    customer.provisionalStatus !== 'rejected' &&
+    customer.registrationStatus !== 'rejected'
+  );
+}
+
 function isActiveStationSession(session: UserSession, state: any): boolean {
   if (session.role !== 'stand_staff') return true;
   const account = (state?.stationUsers || []).find(
@@ -1451,18 +1494,13 @@ function isActiveStationSession(session: UserSession, state: any): boolean {
 
 // POST /api/customer/auth/login: Authenticate phone number + 6+ digit PIN (Rate-limited, lockout, generic error)
 app.post('/api/customer/auth/login', authRateLimiter, async (req, res) => {
-  const { phone, pin, username } = req.body;
-  const cleanPhone = (phone || username || '').trim();
+  const { phone, pin, username, restaurantCode } = req.body;
+  const cleanIdentifier = (phone || username || '').trim();
   const cleanPin = (pin || '').trim();
 
-  const customers = serverDbState?.customers || [];
-  const cust = customers.find(
-    (c: any) =>
-      c.phone === cleanPhone ||
-      (c.phone && c.phone.replace(/\s+/g, '') === cleanPhone.replace(/\s+/g, '')) ||
-      c.memberNo === cleanPhone ||
-      c.id === cleanPhone
-  );
+  // Phone numbers and student/member identifiers are unique only within a
+  // restaurant. Never authenticate against the first global match.
+  const cust = findCustomerForLogin(serverDbState, cleanIdentifier, restaurantCode);
 
   // Generic error to prevent phone-number enumeration
   if (!cust) {
@@ -3939,6 +3977,8 @@ export {
   verifyServerCustomerPin,
   verifyStationUserCredentials,
   isActiveStationSession,
+  isActiveCustomerSession,
+  findCustomerForLogin,
   applySyncDeletionTombstones,
   canMergeTenantScopedRecord,
   resolveRestaurantAdminAccount,
