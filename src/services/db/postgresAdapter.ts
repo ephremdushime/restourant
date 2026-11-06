@@ -213,8 +213,34 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         restaurantSubscriptionPayments: settingsMap.get('restaurantSubscriptionPayments') || [],
         subscriptionPayments: settingsMap.get('subscriptionPayments') || [],
         activationCodes: settingsMap.get('activationCodes') || [],
+        deletionTombstones: settingsMap.get('deletionTombstones') || [],
         usedTokens: [],
       };
+
+      // Tombstones hide deleted operational records without erasing financial
+      // history. Reapply them on every database hydration so old rows cannot
+      // silently resurrect after a restart or restore.
+      const tombstoneCollections: Record<string, string> = {
+        customers: 'customers',
+        stationUsers: 'stationUsers',
+        branches: 'branches',
+        packages: 'packages',
+        menuItems: 'menuItems',
+        scanPoints: 'scanPoints',
+        cashierSessions: 'cashierSessions',
+      };
+      const deletedKeys = new Set(
+        (state.deletionTombstones as any[])
+          .filter((item) => item && tombstoneCollections[item.collection] && item.recordId && item.restaurantCode)
+          .map((item) => `${item.collection}:${item.restaurantCode}:${item.recordId}`)
+      );
+      for (const [collection, stateKey] of Object.entries(tombstoneCollections)) {
+        if (Array.isArray(state[stateKey])) {
+          state[stateKey] = state[stateKey].filter(
+            (item: any) => !deletedKeys.has(`${collection}:${item.restaurantCode}:${item.id}`)
+          );
+        }
+      }
 
       console.log(`[PostgreSQL Adapter] Hydrated state: ${state.restaurants.length} restaurants, ${state.customers.length} patrons, ${state.ledgerEntries.length} ledger entries.`);
       return state;
@@ -485,6 +511,9 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
       ['restaurantSubscriptionPayments', state.restaurantSubscriptionPayments],
       ['subscriptionPayments', state.subscriptionPayments],
       ['activationCodes', state.activationCodes],
+      // Durable soft-deletion markers prevent deleted operational records from
+      // being reintroduced by stale offline clients or database hydration.
+      ['deletionTombstones', state.deletionTombstones || []],
     ];
 
     for (const [key, val] of settingsToSave) {
