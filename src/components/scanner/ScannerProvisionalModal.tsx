@@ -102,115 +102,83 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
   const handleRegisterNewSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-
     const trimmedName = name.trim();
     const trimmedPhone = phone.trim();
     const trimmedRegNo = regNumber.trim();
     const trimmedNationalId = idNumber.trim();
     const trimmedInstitution = institution.trim();
-    const trimmedPaymentRef = paymentReference.trim();
+    const trimmedPaymentRef = paymentReference.trim().toUpperCase();
 
-    if (trimmedName.length < 2) {
-      setError('Please enter the customer full name (at least 2 characters).');
-      return;
-    }
-    if (!trimmedPhone || !isValidPhoneNumber(trimmedPhone)) {
-      setError('Please enter a valid phone number (e.g. +250 788 123 456 or 0788 123 456).');
-      return;
-    }
-    if (isStudent) {
-      if (!trimmedRegNo) {
-        setError('Please enter the Student Registration / ID Number.');
-        return;
-      }
-      if (!trimmedInstitution) {
-        setError('Please enter the student institution / university name.');
-        return;
-      }
-    } else {
-      if (!trimmedNationalId) {
-        setError('Please enter the National ID or Passport number.');
-        return;
-      }
-    }
-    if (paymentMethod !== 'cash' && !trimmedPaymentRef) {
-      setError('Please enter the payment transaction reference.');
-      return;
-    }
-    if (!staffName.trim()) {
-      setError('Please enter the reception or staff operator name.');
-      return;
-    }
+    if (trimmedName.length < 2) return setError('Please enter the customer full name (at least 2 characters).');
+    if (!trimmedPhone || !isValidPhoneNumber(trimmedPhone)) return setError('Please enter a valid phone number.');
+    if (isStudent && (!trimmedRegNo || !trimmedInstitution)) return setError('Enter the student registration number and institution.');
+    if (!isStudent && !trimmedNationalId) return setError('Enter the National ID or Passport number.');
+    if (paymentMethod !== 'cash' && !trimmedPaymentRef) return setError('Enter the payment transaction reference.');
+    if (!staffName.trim()) return setError('Enter the reception or staff operator name.');
+    if (isCustomPlates || !selectedPkg?.id) return setError('Choose a configured meal package for this registration.');
 
     const effectiveIdType = isStudent ? 'student_id' : 'national_id';
     const effectiveIdNumber = isStudent ? trimmedRegNo : trimmedNationalId;
-
-    // Prevent duplicate customer phone or ID in the same restaurant
-    const dupCheck = restoStore.checkDuplicateCustomerIdentity(
-      restoCode,
-      trimmedPhone,
-      effectiveIdType,
-      effectiveIdNumber,
-      isStudent ? trimmedRegNo : undefined
-    );
-    if (dupCheck.isDuplicate) {
-      setError(dupCheck.message || 'A customer with this phone number or ID is already registered.');
-      return;
-    }
+    const capturedPhoto = photoUrl.startsWith('data:') ? photoUrl : null;
 
     try {
-      const capturedPhoto = photoUrl.startsWith('data:') ? photoUrl : null;
-      const fallbackPhoto = '/src/assets/images/avatar_student_male_1790979380050.jpg';
-      const result = restoStore.registerProvisionalCustomer(
-        {
+      const registrationResponse = await fetch('/api/public/customer/registration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           restaurantCode: restoCode,
-          branchId: currentBranch?.id || 'br_rw01_main',
-          branchName: currentBranch?.name || 'Main Campus Dining Hall',
+          branchId: currentBranch?.id,
           name: trimmedName,
           phone: trimmedPhone,
-          photoUrl: capturedPhoto ? fallbackPhoto : photoUrl,
           idType: effectiveIdType,
           idNumber: effectiveIdNumber,
           isStudent,
-          studentProfile: isStudent
-            ? {
-                institution: trimmedInstitution,
-                programme: programme.trim(),
-                year,
-                registrationNumber: trimmedRegNo,
-              }
-            : undefined,
-          packageId: isCustomPlates ? undefined : selectedPkg?.id,
-          platesRequested: effectivePlates,
-          amountRwf: effectiveAmount,
-          paymentMethod,
-          paymentReference: trimmedPaymentRef.toUpperCase() || `CASH-${Date.now()}`,
-          registeredByStaffId: currentStation?.assignedStaffUserId || 'reception_staff',
-          registeredByStaffName: staffName.trim(),
-          stationId: currentStation?.id || 'sp_1',
-          stationName: currentStation?.name || 'Reception & Stand 1',
-        },
-        staffName.trim()
-      );
+          institution: trimmedInstitution,
+          programme: programme.trim() || 'Not provided',
+          year,
+          registrationNumber: trimmedRegNo,
+        }),
+      });
+      const registration = await registrationResponse.json();
+      if (!registrationResponse.ok || !registration.success || !registration.customer?.id) {
+        throw new Error(registration.error || 'Customer registration could not be saved.');
+      }
+
+      const paymentResult = await restoStore.confirmRegistrationPayment({
+        customerId: registration.customer.id,
+        packageId: selectedPkg.id,
+        platesRequested: effectivePlates,
+        amountRwf: effectiveAmount,
+        paymentMethod,
+        paymentReference: trimmedPaymentRef || `CASH-${Date.now()}`,
+        registeredByStaffId: currentStation?.assignedStaffUserId || 'reception_staff',
+        registeredByStaffName: staffName.trim(),
+        stationId: currentStation?.id || 'sp_1',
+        stationName: currentStation?.name || 'Reception & Stand 1',
+      });
+      if (!paymentResult.success) {
+        throw new Error(`Registration saved as #${registration.customer.memberNo}, but payment was not confirmed: ${paymentResult.error || 'Please find this customer and retry payment confirmation.'}`);
+      }
 
       if (capturedPhoto) {
-        await restoStore.pushStateToServer();
-        const photoResult = await restoStore.uploadCustomerPhoto(result.customer.id, capturedPhoto);
+        const photoResult = await restoStore.uploadCustomerPhoto(registration.customer.id, capturedPhoto);
         if (!photoResult.success) {
-          setError(`Registration was recorded, but the portrait was not saved: ${photoResult.error || 'Upload unavailable'}. You can retry it from the customer profile.`);
+          setError(`Payment was confirmed for #${registration.customer.memberNo}, but the portrait could not be saved. Retry the photo from the customer profile.`);
         }
       }
-      const qrToken = restoStore.getCustomerCardQr(result.customer);
-      resetNewCustomerFields();
+      const updatedCustomer = restoStore.getState().customers.find((c) => c.id === registration.customer.id);
+      if (!updatedCustomer) throw new Error('Payment was confirmed, but the customer record has not synchronized yet. Refresh the reception station.');
+      const qrToken = restoStore.getCustomerCardQr(updatedCustomer);
       setSuccessResult({
-        customer: result.customer,
+        customer: updatedCustomer,
         plates: effectivePlates,
         amount: effectiveAmount,
-        ref: trimmedPaymentRef.toUpperCase(),
+        ref: paymentResult.approval?.paymentReference || trimmedPaymentRef || 'CASH',
         qrToken,
       });
+      resetNewCustomerFields();
     } catch (err: any) {
-      setError(err?.message || 'Failed to submit provisional registration.');
+      setError(err?.message || 'Registration or payment confirmation failed. Check the customer record before retrying.');
     }
   };
 
@@ -854,7 +822,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                         className="w-full py-3 px-3.5 rounded-xl bg-slate-900 border-2 border-slate-700 text-white text-sm focus:border-emerald-400 outline-hidden"
                       >
                         <option value="mtn_momo">MTN Mobile Money (*182#)</option>
-                        <option value="airtel_money">Airtel Money (*500#)</option>
+                        
                         <option value="cash">Cash Received at Counter</option>
                         <option value="bank_transfer">Bank Transfer</option>
                       </select>
