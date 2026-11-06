@@ -11,7 +11,7 @@ import {
   insertLedgerEntryPostgres,
   commitPlateTransferPostgres,
 } from './src/services/db/postgresAdapter';
-import { recordTokenScan, isRedisConfigured, checkRedisReady, revokeSessionToken, isSessionTokenRevoked } from './src/services/cache/redisClient';
+import { recordTokenScan, isRedisConfigured, checkRedisReady, revokeSessionToken, isSessionTokenRevoked, consumeRateLimit } from './src/services/cache/redisClient';
 import { uploadBase64Photo, getPrivatePatronPhoto, deletePrivatePatronPhoto } from './src/services/storage/objectStorage';
 
 const app = express();
@@ -453,56 +453,32 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
 });
 
 // ----------------------------------------------------
-// In-Memory Rate Limiting (Finding 7)
+// Distributed Rate Limiting (Redis in cloud; memory in standalone)
 // ----------------------------------------------------
-interface RateLimitRecord {
-  count: number;
-  resetTime: number;
-}
-const rateLimitStores = new Map<string, Map<string, RateLimitRecord>>();
-
 function createRateLimiter(bucketName: string, maxRequests: number, windowMs: number) {
-  let store = rateLimitStores.get(bucketName);
-  if (!store) {
-    store = new Map<string, RateLimitRecord>();
-    rateLimitStores.set(bucketName, store);
-  }
-
-  return (req: Request, res: Response, next: NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    const now = Date.now();
-    let record = store!.get(ip);
+    const result = await consumeRateLimit(bucketName, ip, maxRequests, windowMs);
 
-    if (!record || now > record.resetTime) {
-      record = { count: 1, resetTime: now + windowMs };
-      store!.set(ip, record);
-    } else {
-      record.count++;
+    if (!result.available) {
+      // Cloud deployments must not silently fall back to per-process quotas.
+      return res.status(503).json({
+        success: false,
+        error: 'Security rate-limit service is temporarily unavailable. Retry shortly.',
+      });
     }
 
-    if (record.count > maxRequests) {
-      res.setHeader('Retry-After', Math.ceil((record.resetTime - now) / 1000).toString());
+    if (!result.allowed) {
+      res.setHeader('Retry-After', String(result.retryAfterSeconds));
       return res.status(429).json({
         success: false,
         error: 'Too many requests. Please slow down and try again later.',
       });
     }
 
-    next();
+    return next();
   };
 }
-
-// Periodic memory pruning to prevent unbound Map growth in high DAU production
-setInterval(() => {
-  const now = Date.now();
-  for (const store of rateLimitStores.values()) {
-    for (const [ip, record] of store.entries()) {
-      if (now > record.resetTime) {
-        store.delete(ip);
-      }
-    }
-  }
-}, 5 * 60 * 1000).unref();
 
 const authRateLimiter = createRateLimiter('auth', 20, 60 * 1000); // 20 attempts per minute
 const apiRateLimiter = createRateLimiter('api', 120, 60 * 1000); // 120 requests per minute
@@ -667,6 +643,14 @@ function requireAuth(allowedRoles?: string[]) {
 
     if (process.env.NODE_ENV === 'production' && !isActiveStationSession(session, serverDbState)) {
       return res.status(401).json({ success: false, error: 'Station account is blocked or no longer exists. Please contact the restaurant administrator.' });
+    }
+    if (process.env.NODE_ENV === 'production' && !isActiveCustomerSession(session, serverDbState)) {
+      return res.status(401).json({ success: false, error: 'Customer account is no longer active. Please contact restaurant reception.' });
+    }
+    if (process.env.NODE_ENV === 'production' &&
+        session.role === 'super_admin' &&
+        !isCurrentSuperAdminSession(session)) {
+      return res.status(401).json({ success: false, error: 'Super Admin credentials changed. Please sign in again.' });
     }
     if (process.env.NODE_ENV === 'production' &&
         session.role === 'restaurant_admin' &&
@@ -1117,6 +1101,24 @@ function verifyRestaurantAdminCredentials(
   return !isProduction && typeof password === 'string' && password.length >= 6;
 }
 
+function getSuperAdminAuthVersion(password: string): string {
+  return crypto.createHmac('sha256', MASTER_KEY)
+    .update(`RESTOPASS_SUPERADMIN_AUTH:${password}`)
+    .digest('hex');
+}
+
+/** Password rotation immediately invalidates existing production Super Admin sessions. */
+function isCurrentSuperAdminSession(
+  session: UserSession,
+  raw: NodeJS.ProcessEnv = process.env
+): boolean {
+  if (!session || session.role !== 'super_admin') return false;
+  const password = raw.RESTOPASS_SUPERADMIN_PASSWORD || raw.SUPERADMIN_PASSWORD;
+  if (!password) return raw.NODE_ENV !== 'production';
+  const expectedVersion = getSuperAdminAuthVersion(password);
+  return typeof session.authVersion === 'string' && timingSafeCompare(session.authVersion, expectedVersion);
+}
+
 function getRestaurantAdminAuthVersion(restaurantCode: string, account: { username: string; password: string }): string {
   return crypto.createHmac('sha256', MASTER_KEY)
     .update(`RESTOPASS_ADMIN_AUTH:${restaurantCode.trim().toUpperCase()}:${account.username.toLowerCase()}:${account.password}`)
@@ -1169,6 +1171,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       username: safeSuperUsername,
       role: 'super_admin',
       restaurantCode: 'ALL',
+      ...(configuredSuperAdminPassword ? { authVersion: getSuperAdminAuthVersion(configuredSuperAdminPassword) } : {}),
     });
     return res.json({
       success: true,
@@ -1262,6 +1265,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       role: 'stand_staff',
       restaurantCode,
       stationId: stationId || 'stand_1',
+      ...(matchingStaffUser ? { authVersion: getStationUserAuthVersion(matchingStaffUser) } : {}),
     });
     return res.json({
       success: true,
@@ -1278,13 +1282,8 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
 
   // 4. Customer Meal Pass Authentication
   if (role === 'customer') {
-    const customers = serverDbState?.customers || [];
-    const cust = customers.find(
-      (c: any) =>
-        c.memberNo === username ||
-        c.phone === username ||
-        c.id === username
-    );
+    const customerIdentifier = typeof username === 'string' ? username.trim() : '';
+    const cust = findCustomerForLogin(serverDbState, customerIdentifier, restaurantCode);
 
     // Use the dedicated customer-authentication error to avoid account enumeration.
     if (!cust) {
@@ -1325,6 +1324,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       username: cust.memberNo,
       role: 'customer',
       restaurantCode: cust.restaurantCode,
+      authVersion: getCustomerAuthVersion(cust),
     });
 
     return res.json({
@@ -1439,30 +1439,103 @@ function verifyStationUserCredentials(entered: string, stationUser: any): boolea
 }
 
 /** Existing production staff sessions are invalidated immediately when an account is blocked or deleted. */
-function isActiveStationSession(session: UserSession, state: any): boolean {
+function normalizeCustomerPhoneForLookup(value: string): string {
+  const digits = String(value || '').replace(/[^0-9]/g, '');
+  if (digits.startsWith('250') && digits.length === 12) return digits.slice(3);
+  if (digits.startsWith('0') && digits.length === 10) return digits.slice(1);
+  return digits;
+}
+
+/**
+ * Customer login identifiers are tenant-scoped. A phone number may legitimately
+ * exist in more than one restaurant, so a global first-match lookup is unsafe.
+ */
+function findCustomerForLogin(state: any, identifier: string, restaurantCode: string): any | null {
+  const cleanIdentifier = typeof identifier === 'string' ? identifier.trim() : '';
+  const tenantCode = typeof restaurantCode === 'string' ? restaurantCode.trim().toUpperCase() : '';
+  if (!cleanIdentifier || !tenantCode) return null;
+
+  const normalizedPhone = normalizeCustomerPhoneForLookup(cleanIdentifier);
+  return (state?.customers || []).find((customer: any) => {
+    if (String(customer?.restaurantCode || '').trim().toUpperCase() !== tenantCode) return false;
+    return customer.memberNo === cleanIdentifier ||
+      customer.id === cleanIdentifier ||
+      (normalizedPhone.length >= 7 &&
+        normalizeCustomerPhoneForLookup(String(customer.phone || '')) === normalizedPhone);
+  }) || null;
+}
+
+function getCustomerAuthVersion(customer: any): string {
+  return crypto.createHmac('sha256', MASTER_KEY)
+    .update([
+      'RESTOPASS_CUSTOMER_AUTH',
+      String(customer?.restaurantCode || '').trim().toUpperCase(),
+      String(customer?.id || ''),
+      String(customer?.pinHash || ''),
+    ].join(':'))
+    .digest('hex');
+}
+
+/** Customer sessions stop working after deletion, suspension, rejection or PIN rotation. */
+function isActiveCustomerSession(
+  session: UserSession,
+  state: any,
+  isProduction = process.env.NODE_ENV === 'production'
+): boolean {
+  if (session.role !== 'customer') return true;
+  const customer = (state?.customers || []).find(
+    (item: any) => item.id === session.userId && item.restaurantCode === session.restaurantCode
+  );
+  if (!customer ||
+      customer.activationStatus === 'suspended' ||
+      customer.provisionalStatus === 'rejected' ||
+      customer.registrationStatus === 'rejected') return false;
+  if (!isProduction) return true;
+  const expectedVersion = getCustomerAuthVersion(customer);
+  return typeof session.authVersion === 'string' && timingSafeCompare(session.authVersion, expectedVersion);
+}
+
+function getStationUserAuthVersion(stationUser: any): string {
+  return crypto.createHmac('sha256', MASTER_KEY)
+    .update([
+      'RESTOPASS_STATION_AUTH',
+      String(stationUser?.restaurantCode || '').trim().toUpperCase(),
+      String(stationUser?.id || '').trim(),
+      String(stationUser?.username || '').trim().toLowerCase(),
+      String(stationUser?.authType || 'both'),
+      String(stationUser?.pinHash || ''),
+      String(stationUser?.passwordHash || ''),
+    ].join(':'))
+    .digest('hex');
+}
+
+function isActiveStationSession(
+  session: UserSession,
+  state: any,
+  isProduction = process.env.NODE_ENV === 'production'
+): boolean {
   if (session.role !== 'stand_staff') return true;
   const account = (state?.stationUsers || []).find(
     (item: any) =>
       item.restaurantCode === session.restaurantCode &&
       (item.username === session.username || item.id === session.username)
   );
-  return Boolean(account && account.status === 'active');
+  if (!account || account.status !== 'active') return false;
+  if (!isProduction) return true;
+  const expectedVersion = getStationUserAuthVersion(account);
+  return typeof session.authVersion === 'string' && timingSafeCompare(session.authVersion, expectedVersion);
 }
 
 // POST /api/customer/auth/login: Authenticate phone number + 6+ digit PIN (Rate-limited, lockout, generic error)
 app.post('/api/customer/auth/login', authRateLimiter, async (req, res) => {
-  const { phone, pin, username } = req.body;
-  const cleanPhone = (phone || username || '').trim();
-  const cleanPin = (pin || '').trim();
+  const { phone, pin, username, restaurantCode } = req.body;
+  const rawIdentifier = typeof phone === 'string' ? phone : (typeof username === 'string' ? username : '');
+  const cleanIdentifier = rawIdentifier.trim();
+  const cleanPin = typeof pin === 'string' ? pin.trim() : '';
 
-  const customers = serverDbState?.customers || [];
-  const cust = customers.find(
-    (c: any) =>
-      c.phone === cleanPhone ||
-      (c.phone && c.phone.replace(/\s+/g, '') === cleanPhone.replace(/\s+/g, '')) ||
-      c.memberNo === cleanPhone ||
-      c.id === cleanPhone
-  );
+  // Phone numbers and student/member identifiers are unique only within a
+  // restaurant. Never authenticate against the first global match.
+  const cust = findCustomerForLogin(serverDbState, cleanIdentifier, restaurantCode);
 
   // Generic error to prevent phone-number enumeration
   if (!cust) {
@@ -1538,6 +1611,7 @@ app.post('/api/customer/auth/login', authRateLimiter, async (req, res) => {
     username: cust.phone || cust.memberNo,
     role: 'customer',
     restaurantCode: cust.restaurantCode,
+    authVersion: getCustomerAuthVersion(cust),
   });
 
   return res.json({
@@ -3840,6 +3914,24 @@ async function startServer() {
     console.log('[Server Authority] Running in standalone local storage mode (Offline Reception Laptop compatible).');
   }
 
+  // A first standalone boot has no db.json yet. Initialize a clean, valid empty
+  // state so readiness is truthful and the first restaurant can be onboarded.
+  // Never replace an existing but unreadable database file with empty data.
+  if (!serverDbState) {
+    if (fs.existsSync(DB_FILE)) {
+      throw new Error('Local database file exists but could not be loaded or recovered from backup. Refusing to replace it with empty state.');
+    }
+    if (isPostgresConfigured() && isProduction) {
+      throw new Error('Production database authority did not load. Refusing to initialize standalone state.');
+    }
+    serverDbState = { restaurants: [], customers: [] };
+    ensureServerDbDefaults(serverDbState);
+    if (!atomicSaveDb(serverDbState)) {
+      throw new Error('Could not persist the initial empty standalone database state. Refusing to start unready.');
+    }
+    console.log('[Server Authority] Initialized a new empty standalone database.');
+  }
+
   // Hash legacy station credentials only after the authoritative state has loaded.
   // Persist the migration before the server begins accepting authentication requests.
   if (serverDbState && normalizeStationUserCredentials(serverDbState)) {
@@ -3939,6 +4031,12 @@ export {
   verifyServerCustomerPin,
   verifyStationUserCredentials,
   isActiveStationSession,
+  getStationUserAuthVersion,
+  isActiveCustomerSession,
+  getCustomerAuthVersion,
+  findCustomerForLogin,
+  getSuperAdminAuthVersion,
+  isCurrentSuperAdminSession,
   applySyncDeletionTombstones,
   canMergeTenantScopedRecord,
   resolveRestaurantAdminAccount,

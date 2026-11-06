@@ -13,6 +13,12 @@ import {
   verifyServerCustomerPin,
   verifyStationUserCredentials,
   isActiveStationSession,
+  getStationUserAuthVersion,
+  isActiveCustomerSession,
+  getCustomerAuthVersion,
+  findCustomerForLogin,
+  getSuperAdminAuthVersion,
+  isCurrentSuperAdminSession,
   applySyncDeletionTombstones,
   canMergeTenantScopedRecord,
   resolveRestaurantAdminAccount,
@@ -240,6 +246,161 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     }), false);
     assert.equal(isActiveStationSession(session, { stationUsers: [] }), false);
     assert.equal(isActiveStationSession({ ...session, role: 'customer' }, { stationUsers: [] }), true);
+  });
+
+  test('production scanner sessions are invalidated after station credential rotation', () => {
+    const stationUser = {
+      id: 'station_rw01_cashier',
+      username: 'cashier_rw01',
+      restaurantCode: 'RW01',
+      status: 'active',
+      authType: 'pin8',
+      pinHash: 'stored-pin-hash-v1',
+      passwordHash: '',
+    };
+    const session: UserSession = {
+      userId: 'staff_cashier_rw01',
+      username: 'cashier_rw01',
+      role: 'stand_staff',
+      restaurantCode: 'RW01',
+      authVersion: getStationUserAuthVersion(stationUser),
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+    };
+
+    assert.equal(isActiveStationSession(session, { stationUsers: [stationUser] }, true), true);
+    assert.equal(isActiveStationSession(session, {
+      stationUsers: [{ ...stationUser, pinHash: 'stored-pin-hash-v2' }],
+    }, true), false);
+    assert.equal(isActiveStationSession(session, {
+      stationUsers: [{ ...stationUser, status: 'blocked' }],
+    }, true), false);
+    assert.equal(isActiveStationSession({ ...session, authVersion: undefined }, {
+      stationUsers: [stationUser],
+    }, true), false);
+  });
+
+  test('restaurant administrators receive only their tenant records across operational and financial collections', () => {
+    const tenantKeys = [
+      'ledgerEntries', 'scanEvents', 'scanPoints', 'transfers', 'packages',
+      'menuItems', 'payments', 'branches', 'stationUsers', 'pendingApprovals',
+      'shifts', 'cashierSessions', 'auditLogs', 'expenses', 'licenses',
+      'customerSubscriptions', 'studentSubscriptionPayments', 'subscriptionPayments',
+      'activationRequests', 'pinRecoveryRequests', 'notifications',
+    ];
+    const state: any = {
+      restaurants: [{ code: 'RW01' }, { code: 'RW02' }],
+      customers: [
+        { id: 'tenant_customer_1', restaurantCode: 'RW01' },
+        { id: 'tenant_customer_2', restaurantCode: 'RW02' },
+      ],
+      checkpoints: [
+        { id: 'checkpoint_1', customerId: 'tenant_customer_1' },
+        { id: 'checkpoint_2', customerId: 'tenant_customer_2' },
+      ],
+      plans: [{ id: 'global_plan' }],
+      ...Object.fromEntries(tenantKeys.map((key) => [
+        key,
+        [
+          { id: `${key}_rw01`, restaurantCode: 'RW01' },
+          { id: `${key}_rw02`, restaurantCode: 'RW02' },
+        ],
+      ])),
+    };
+    const admin: UserSession = {
+      userId: 'boss_rw01',
+      username: 'boss@rw01.test',
+      role: 'restaurant_admin',
+      restaurantCode: 'RW01',
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+    };
+
+    const scoped = scopeStateForUser(state, admin);
+    assert.deepEqual(scoped.restaurants.map((item: any) => item.code), ['RW01']);
+    assert.deepEqual(scoped.checkpoints.map((item: any) => item.customerId), ['tenant_customer_1']);
+    assert.deepEqual(scoped.plans.map((item: any) => item.id), ['global_plan']);
+    for (const key of tenantKeys) {
+      assert.ok(
+        scoped[key].every((item: any) => !item.restaurantCode || item.restaurantCode === 'RW01'),
+        `Cross-tenant data leaked through ${key}`
+      );
+    }
+  });
+
+  test('customer login lookup requires restaurant context when phone numbers are reused across tenants', () => {
+    const state = {
+      customers: [
+        { id: 'customer_rw01', memberNo: '10001', restaurantCode: 'RW01', phone: '+250 788 123 456' },
+        { id: 'customer_rw02', memberNo: '20001', restaurantCode: 'RW02', phone: '0788-123-456' },
+      ],
+    };
+
+    assert.equal(findCustomerForLogin(state, '0788 123 456', 'RW01')?.id, 'customer_rw01');
+    assert.equal(findCustomerForLogin(state, '+250788123456', 'RW02')?.id, 'customer_rw02');
+    assert.equal(findCustomerForLogin(state, '20001', 'RW02')?.id, 'customer_rw02');
+    assert.equal(findCustomerForLogin(state, '0788 123 456', '') , null);
+    assert.equal(findCustomerForLogin(state, '0788 123 456', 'RW03'), null);
+  });
+
+  test('production customer sessions are invalidated after tenant mismatch, suspension, rejection, deletion or PIN rotation', () => {
+    const customerRecord = {
+      id: 'customer_session_1',
+      restaurantCode: 'RW01',
+      activationStatus: 'partial_active',
+      provisionalStatus: 'pending_approval',
+      registrationStatus: 'pending_boss_approval',
+      pinHash: 'customer-pin-hash-v1',
+    };
+    const session: UserSession = {
+      userId: 'customer_session_1',
+      username: '+250788123456',
+      role: 'customer',
+      restaurantCode: 'RW01',
+      authVersion: getCustomerAuthVersion(customerRecord),
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+    };
+    const activeState = { customers: [customerRecord] };
+
+    assert.equal(isActiveCustomerSession(session, activeState, true), true);
+    assert.equal(isActiveCustomerSession({ ...session, restaurantCode: 'RW02' }, activeState, true), false);
+    assert.equal(isActiveCustomerSession(session, { customers: [] }, true), false);
+    assert.equal(isActiveCustomerSession(session, {
+      customers: [{ ...customerRecord, activationStatus: 'suspended' }],
+    }, true), false);
+    assert.equal(isActiveCustomerSession(session, {
+      customers: [{ ...customerRecord, provisionalStatus: 'rejected' }],
+    }, true), false);
+    assert.equal(isActiveCustomerSession(session, {
+      customers: [{ ...customerRecord, pinHash: 'customer-pin-hash-v2' }],
+    }, true), false);
+    assert.equal(isActiveCustomerSession({ ...session, authVersion: undefined }, activeState, true), false);
+    assert.equal(isActiveCustomerSession({ ...session, role: 'restaurant_admin' }, { customers: [] }, true), true);
+  });
+
+  test('production Super Admin sessions are invalidated when the configured credential rotates', () => {
+    const configuredCredential = ['fixture', 'platform', 'credential', '2026'].join('_');
+    const session: UserSession = {
+      userId: 'super_admin_principal',
+      username: 'platform-admin',
+      role: 'super_admin',
+      restaurantCode: 'ALL',
+      authVersion: getSuperAdminAuthVersion(configuredCredential),
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+    };
+    const currentEnvironment = {
+      NODE_ENV: 'production',
+      RESTOPASS_SUPERADMIN_PASSWORD: configuredCredential,
+    } as NodeJS.ProcessEnv;
+
+    assert.equal(isCurrentSuperAdminSession(session, currentEnvironment), true);
+    assert.equal(isCurrentSuperAdminSession(session, {
+      ...currentEnvironment,
+      RESTOPASS_SUPERADMIN_PASSWORD: ['rotated', 'platform', 'credential', '2026'].join('_'),
+    }), false);
+    assert.equal(isCurrentSuperAdminSession({ ...session, authVersion: undefined }, currentEnvironment), false);
   });
 
   test('prevents tenant admins from reassigning records through ID collisions', () => {

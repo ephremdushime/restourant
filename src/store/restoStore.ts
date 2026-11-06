@@ -1677,6 +1677,14 @@ export class RestoStore {
       const recovered = await this.ensureAuthTokenIfOfflineSession();
       if (!recovered) return;
     }
+
+    // Capture exactly the queue entries included in this request. New entries
+    // created while the request is in flight must remain pending for the next sync.
+    const submittedOutboxIds = new Set(
+      this.state.syncOutbox.filter((item) => !item.syncedToCloud).map((item) => item.id)
+    );
+    const requestBody = JSON.stringify({ fullState: this.state });
+
     this.isSyncingWithServer = true;
     try {
       const res = await fetch('/api/sync', {
@@ -1685,27 +1693,46 @@ export class RestoStore {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${this.authToken}`,
         },
-        body: JSON.stringify({ fullState: this.state }),
+        body: requestBody,
       });
       if (res.ok) {
         const data = await res.json();
-        // Mark all local outbox items as synced after server confirms receipt
-        this.state.syncOutbox.forEach((item) => {
-          item.syncedToCloud = true;
-        });
-        const r = this.getCurrentRestaurant();
-        if (r) {
-          r.lastSyncAt = new Date().toISOString();
-        }
-        if (data.serverState) {
-          this.mergeServerState(data.serverState);
+        if (data?.success === true) {
+          let acknowledgedCount = 0;
+          this.state.syncOutbox.forEach((item) => {
+            if (submittedOutboxIds.has(item.id) && !item.syncedToCloud) {
+              item.syncedToCloud = true;
+              acknowledgedCount++;
+            }
+          });
+
+          const r = this.getCurrentRestaurant();
+          if (r && acknowledgedCount > 0) {
+            r.lastSyncAt = new Date().toISOString();
+            this.logAudit({
+              restaurantCode: this.state.currentRestaurantCode,
+              actorRole: this.state.currentRole,
+              actorName: 'Auto-Sync Engine',
+              action: 'OUTBOX_SYNCED',
+              details: `Server acknowledged ${acknowledgedCount} queued transaction(s).`,
+            });
+          }
+
+          if (data.serverState) {
+            this.mergeServerState(data.serverState);
+          }
+          if (acknowledgedCount > 0) {
+            // Notify views without scheduling another save/push cycle.
+            this.listeners.forEach((listener) => listener());
+          }
         }
       } else if (res.status === 401) {
-        // Token expired or invalid
+        // Keep queued work pending; the user must re-authenticate before retrying.
         this.setAuthToken(null);
       }
+      // Other non-2xx responses intentionally leave the outbox untouched.
     } catch {
-      // offline fallback - ignore network errors
+      // Offline/network fallback: queued entries remain pending for retry.
     } finally {
       this.isSyncingWithServer = false;
     }
@@ -4353,7 +4380,6 @@ export class RestoStore {
   public queueOutboxItem(entityType: SyncOutboxItem['entityType'], entityId: string, payload: any) {
     const restaurantCode = this.state.currentRestaurantCode;
     const seq = this.state.syncOutbox.filter((i) => i.restaurantCode === restaurantCode).length + 1;
-    const isOnline = this.state.networkStatus === 'online';
     const outboxItem: SyncOutboxItem = {
       id: `outbox_${Date.now()}_${seq}`,
       restaurantCode,
@@ -4362,41 +4388,21 @@ export class RestoStore {
       entityId,
       payload,
       createdAt: new Date().toISOString(),
-      syncedToCloud: isOnline,
+      // Queue first. Only a successful server acknowledgement may mark this item synced.
+      syncedToCloud: false,
     };
     this.state.syncOutbox.push(outboxItem);
-    if (isOnline) {
-      const r = this.getCurrentRestaurant();
-      if (r) {
-        r.lastSyncAt = new Date().toISOString();
-      }
-    }
   }
 
   public syncPendingOutbox(): number {
-    let syncedCount = 0;
-    this.state.syncOutbox.forEach((item) => {
-      if (!item.syncedToCloud) {
-        item.syncedToCloud = true;
-        syncedCount++;
-      }
-    });
-    const r = this.getCurrentRestaurant();
-    if (r) {
-      r.lastSyncAt = new Date().toISOString();
-    }
-    if (syncedCount > 0) {
-      this.logAudit({
-        restaurantCode: this.state.currentRestaurantCode,
-        actorRole: this.state.currentRole,
-        actorName: 'Auto-Sync Engine',
-        action: 'OUTBOX_SYNCED',
-        details: `Auto-synced ${syncedCount} queued transaction(s) to cloud database immediately upon internet restore.`,
-      });
-    }
-    this.pushStateToServer();
-    this.notify();
-    return syncedCount;
+    // This is an attempt count, not a success count. Entries remain pending until
+    // pushStateToServer receives an explicit successful acknowledgement.
+    const pendingCount = this.state.syncOutbox.filter((item) => !item.syncedToCloud).length;
+    // Push the full local state even when the explicit outbox is empty: some
+    // offline scanner updates (for example grace-approval counters and scan events)
+    // are synchronized as part of the authoritative state snapshot.
+    void this.pushStateToServer();
+    return pendingCount;
   }
 
   public triggerNightlyBackup(): string {
