@@ -299,8 +299,8 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
   });
 
   test('Step 7: Customer Dashboard 500 RWF Monetization Gating & Physical Card Fallback', () => {
-    const customer = restoStore.getState().customers[1];
-    assert.ok(customer);
+    const customer = restoStore.getState().customers.find((c) => !c.registrationStatus);
+    assert.ok(customer, 'Legacy customer fixture without new registration lifecycle is available');
 
     // Case A: Subscription disabled at launch -> Dashboard is completely accessible
     restoStore.updateStudentSubscriptionSettings({
@@ -609,7 +609,7 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     assert.ok(typeof pnl.grossProfitRwf === 'number');
     assert.ok(pnl.healthStatus === 'profitable' || pnl.healthStatus === 'balanced' || pnl.healthStatus === 'loss_warning');
 
-    // 4. Super Admin Toggles Customer Subscription OFF -> All features unlocked without payment
+    // 4. Legacy subscription toggle remains backward-compatible; new registrations still require explicit Super Admin free-month activation
     restoStore.updateStudentSubscriptionSettings({
       enabled: false,
     });
@@ -618,7 +618,16 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
 
     const testCust = restoStore.getState().customers.find((c) => c.id === highValApproval.customerId);
     assert.ok(testCust);
+    const beforeFreeMonth = restoStore.checkStudentEntitlement(testCust.id, 'digital_qr');
+    assert.equal(beforeFreeMonth.allowed, false, 'New registration remains gated until Super Admin activates the free month');
+    const freeMonth = restoStore.grantComplimentarySubscription({
+      customerId: testCust.id,
+      reason: 'New customer onboarding complimentary month',
+      durationDays: 30,
+      grantedBy: 'Ephrem (Founder & Super Admin)',
+    });
+    assert.equal(freeMonth.success, true);
     const phoneQrUnlocked = restoStore.getCustomerPhoneQr(testCust);
-    assert.ok(phoneQrUnlocked.token.length > 0, 'Digital phone QR works when monetization is toggled OFF');
+    assert.ok(phoneQrUnlocked.token.length > 0, 'Digital phone QR works after Super Admin activates the complimentary month');
   });
 });
