@@ -7112,6 +7112,38 @@ export class RestoStore {
     return { success: true, subscription: sub };
   }
 
+  public async activateComplimentarySubscription(params: {
+    customerId: string;
+    reason: string;
+    durationDays?: number;
+  }): Promise<{ success: boolean; subscription?: CustomerSubscription; error?: string }> {
+    if (typeof window === 'undefined' || !navigator.onLine || !this.authToken) {
+      return { success: false, error: 'Complimentary access activation requires an authenticated online Super Admin session.' };
+    }
+    if (!params.reason.trim()) return { success: false, error: 'A mandatory reason is required.' };
+    try {
+      const response = await fetch(`/api/admin/customers/${encodeURIComponent(params.customerId)}/entitlements`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.authToken}`,
+        },
+        body: JSON.stringify({
+          reason: params.reason.trim(),
+          durationDays: params.durationDays || 30,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        return { success: false, error: result.error || 'Complimentary access could not be activated.' };
+      }
+      await this.pullStateFromServer();
+      return { success: true, subscription: result.subscription as CustomerSubscription };
+    } catch {
+      return { success: false, error: 'Unable to reach RestoPass. No complimentary access was activated.' };
+    }
+  }
+
   public async activatePaidStudentSubscription(params: {
     customerId: string;
     paymentMethod: 'cash' | 'mtn_momo' | 'bank_transfer';
