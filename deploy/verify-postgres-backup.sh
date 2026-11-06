@@ -19,6 +19,10 @@ if [[ ! -f "$BACKUP_FILE.sha256" ]]; then
   echo "Backup checksum file is missing: $BACKUP_FILE.sha256" >&2
   exit 1
 fi
+if [[ ! -f "$BACKUP_FILE.hmac" ]]; then
+  echo "Backup authentication tag is missing: $BACKUP_FILE.hmac" >&2
+  exit 1
+fi
 
 BACKUP_ENCRYPTION_KEY="${RESTOPASS_BACKUP_ENCRYPTION_KEY:-}"
 if [[ -z "$BACKUP_ENCRYPTION_KEY" ]]; then
@@ -29,8 +33,15 @@ if ! [[ "$BACKUP_ENCRYPTION_KEY" =~ ^[A-Fa-f0-9]{64}$ ]]; then
   exit 1
 fi
 export RESTOPASS_BACKUP_ENCRYPTION_KEY="$BACKUP_ENCRYPTION_KEY"
+HMAC_KEY="$(printf 'RESTOPASS_BACKUP_HMAC:%s' "$BACKUP_ENCRYPTION_KEY" | sha256sum | awk '{print $1}')"
 
 (cd "$(dirname "$BACKUP_FILE")" && sha256sum -c "$(basename "$BACKUP_FILE").sha256")
+expected_hmac="$(tr -d '[:space:]' < "$BACKUP_FILE.hmac")"
+actual_hmac="$(openssl dgst -sha256 -hmac "$HMAC_KEY" "$BACKUP_FILE" | awk '{print $NF}')"
+if ! [[ "$expected_hmac" =~ ^[A-Fa-f0-9]{64}$ ]] || [[ "$actual_hmac" != "$expected_hmac" ]]; then
+  echo "Backup authentication failed: HMAC does not match." >&2
+  exit 1
+fi
 
 compose=(docker compose --project-directory "$ROOT_DIR" --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
 restore_db="restopass_restore_check_$$"
