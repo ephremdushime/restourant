@@ -1,5 +1,6 @@
 import React from 'react';
-import { Customer, LedgerEntry, Restaurant } from '../../types';
+import { Customer, Language, LedgerEntry, Restaurant } from '../../types';
+import { translations } from '../../services/i18n';
 import { CustomerPortalPage, CustomerProfileSubPage } from './CustomerPortalLayout';
 import {
   QrCode,
@@ -25,6 +26,8 @@ interface CustomerHomePageProps {
   balance: number;
   recentActivity: LedgerEntry[];
   unreadNotifCount: number;
+  graceInfo?: { allowed: number; consumed: number; remaining: number };
+  language?: Language;
   lowBalanceTitle: string;
   lowBalanceMessage: string;
   unlockCardLabel: string;
@@ -40,6 +43,8 @@ export const CustomerHomePage: React.FC<CustomerHomePageProps> = ({
   balance,
   recentActivity,
   unreadNotifCount,
+  graceInfo,
+  language,
   lowBalanceTitle,
   lowBalanceMessage,
   unlockCardLabel,
@@ -48,6 +53,8 @@ export const CustomerHomePage: React.FC<CustomerHomePageProps> = ({
   onOpenTransferModal,
   onToggleLockCard,
 }) => {
+  const t = translations[language || 'en'] || translations.en;
+
   const formatEntryLabel = (type: LedgerEntry['type']) => {
     switch (type) {
       case 'scan':
@@ -69,6 +76,11 @@ export const CustomerHomePage: React.FC<CustomerHomePageProps> = ({
     }
   };
 
+  const remainingGrace = graceInfo
+    ? graceInfo.remaining
+    : Math.max(0, customer.gracePlatesRemaining ?? (customer.gracePlatesAllowed || 4));
+  const allowedGrace = graceInfo ? graceInfo.allowed : (customer.gracePlatesAllowed || 4);
+
   return (
     <div className="space-y-5 animate-in fade-in duration-150">
       {/* Relevant Account Warnings Only When Applicable */}
@@ -79,15 +91,15 @@ export const CustomerHomePage: React.FC<CustomerHomePageProps> = ({
               <Clock className="w-5 h-5" />
             </div>
             <div>
-              <div className="text-sm font-bold text-white">Awaiting Boss Approval</div>
+              <div className="text-sm font-bold text-white">{t.customer.awaitingApproval || 'Awaiting Boss Approval'}</div>
               <p className="text-xs text-amber-100/90 mt-0.5">
                 Your registration is in the approval queue. You can already redeem provisional grace meals at the stand.
               </p>
             </div>
           </div>
           <div className="text-right shrink-0 font-mono">
-            <div className="text-lg font-black text-amber-300">{customer.gracePlatesRemaining ?? 3}</div>
-            <div className="text-[11px] text-amber-200">Grace Meals</div>
+            <div className="text-lg font-black text-amber-300">{remainingGrace} / {allowedGrace}</div>
+            <div className="text-[11px] text-amber-200">{t.customer.graceMeals || 'Grace Meals'}</div>
           </div>
         </div>
       )}
@@ -217,7 +229,7 @@ export const CustomerHomePage: React.FC<CustomerHomePageProps> = ({
           <div className="w-9 h-9 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center mb-2.5">
             <QrCode className="w-4 h-4" />
           </div>
-          <div className="text-sm font-bold text-white">My Card &amp; QR</div>
+          <div className="text-sm font-bold text-white">{t.customer.navMyCard || 'My Card & QR'}</div>
           <div className="text-xs text-slate-400 mt-0.5">Rotating &amp; backup QR</div>
         </button>
 
@@ -229,7 +241,7 @@ export const CustomerHomePage: React.FC<CustomerHomePageProps> = ({
           <div className="w-9 h-9 rounded-xl bg-sky-500/15 text-sky-400 flex items-center justify-center mb-2.5">
             <Send className="w-4 h-4" />
           </div>
-          <div className="text-sm font-bold text-white">Transfer Plates</div>
+          <div className="text-sm font-bold text-white">{t.customer.transferPlates || 'Transfer Plates'}</div>
           <div className="text-xs text-slate-400 mt-0.5">Send within {customer.restaurantCode}</div>
         </button>
 
@@ -248,7 +260,7 @@ export const CustomerHomePage: React.FC<CustomerHomePageProps> = ({
               </span>
             )}
           </div>
-          <div className="text-sm font-bold text-white">Notifications</div>
+          <div className="text-sm font-bold text-white">{t.customer.navNotifications || 'Notifications'}</div>
           <div className="text-xs text-slate-400 mt-0.5">Meal &amp; account alerts</div>
         </button>
 
@@ -260,7 +272,7 @@ export const CustomerHomePage: React.FC<CustomerHomePageProps> = ({
           <div className="w-9 h-9 rounded-xl bg-purple-500/15 text-purple-400 flex items-center justify-center mb-2.5">
             <Shield className="w-4 h-4" />
           </div>
-          <div className="text-sm font-bold text-white">Security &amp; PIN</div>
+          <div className="text-sm font-bold text-white">{t.customer.navSecurity || 'Security & PIN'}</div>
           <div className="text-xs text-slate-400 mt-0.5">
             {customer.hasCustomPin ? 'PIN active · Card controls' : 'Set 6-digit PIN'}
           </div>
@@ -272,21 +284,21 @@ export const CustomerHomePage: React.FC<CustomerHomePageProps> = ({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <History className="w-4 h-4 text-emerald-400" />
-            <h2 className="text-sm font-bold text-white uppercase tracking-wider">Recent Activity</h2>
+            <h2 className="text-sm font-bold text-white uppercase tracking-wider">{t.customer.recentActivityTitle || 'Recent Activity'}</h2>
           </div>
           <button
             type="button"
             onClick={() => onNavigatePage('activity')}
-            className="text-xs font-bold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 cursor-pointer"
+            className="text-xs font-bold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 rounded-lg px-1.5 py-0.5"
           >
-            <span>View all</span>
+            <span>{t.customer.viewAll || 'View all'}</span>
             <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>
 
         {recentActivity.length === 0 ? (
           <div className="py-6 text-center text-xs sm:text-sm text-slate-400">
-            No meal redemptions or top-ups recorded yet.
+            {t.customer.noActivityYet || 'No meal redemptions or top-ups recorded yet.'}
           </div>
         ) : (
           <div className="divide-y divide-slate-800">

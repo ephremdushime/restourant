@@ -1,5 +1,6 @@
 import React from 'react';
-import { Customer, LedgerEntry } from '../../types';
+import { Customer, Language, LedgerEntry } from '../../types';
+import { translations } from '../../services/i18n';
 import {
   History,
   Utensils,
@@ -16,6 +17,7 @@ interface CustomerActivityPageProps {
   entries: LedgerEntry[];
   activeFilter: CustomerActivityFilter;
   onChangeFilter: (filter: CustomerActivityFilter) => void;
+  language?: Language;
 }
 
 export const CustomerActivityPage: React.FC<CustomerActivityPageProps> = ({
@@ -24,12 +26,15 @@ export const CustomerActivityPage: React.FC<CustomerActivityPageProps> = ({
   entries,
   activeFilter,
   onChangeFilter,
+  language,
 }) => {
-  // Strictly enforce customer & tenant scoping on ledger records
+  const t = translations[language || 'en'] || translations.en;
+
+  // Strictly enforce customer & tenant scoping on ledger records (unscoped records rejected)
   const scopedEntries = entries.filter(
     (entry) =>
       entry.customerId === customer.id &&
-      (!entry.restaurantCode || entry.restaurantCode === customer.restaurantCode)
+      entry.restaurantCode === customer.restaurantCode
   );
 
   const filteredEntries = scopedEntries.filter((item) => {
@@ -50,9 +55,15 @@ export const CustomerActivityPage: React.FC<CustomerActivityPageProps> = ({
     return true;
   });
 
-  const mealsUsed = scopedEntries
-    .filter((e) => e.type === 'scan' || e.type === 'extra')
+  const grossMealScans = scopedEntries
+    .filter((e) => (e.type === 'scan' || e.type === 'extra') && e.platesDelta < 0)
     .reduce((sum, e) => sum + Math.abs(e.platesDelta), 0);
+
+  const mealReversals = scopedEntries
+    .filter((e) => e.type === 'undo' || (e.type === 'reversal' && e.platesDelta > 0))
+    .reduce((sum, e) => sum + e.platesDelta, 0);
+
+  const netMealsRedeemed = Math.max(0, grossMealScans - mealReversals);
 
   const platesPurchased = scopedEntries
     .filter((e) => e.type === 'purchase')
@@ -86,22 +97,27 @@ export const CustomerActivityPage: React.FC<CustomerActivityPageProps> = ({
       {/* Summary Metrics */}
       <div className="grid grid-cols-3 gap-3">
         <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4">
-          <div className="text-xs text-slate-400">Current Balance</div>
+          <div className="text-xs text-slate-400">{t.customer.currentBalance || 'Current Balance'}</div>
           <div className="text-xl sm:text-2xl font-black text-emerald-400 font-mono mt-1">
-            {balance} <span className="text-xs font-normal text-slate-400">plates</span>
+            {balance} <span className="text-xs font-normal text-slate-400">{t.customer.plates || 'plates'}</span>
           </div>
         </div>
         <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4">
-          <div className="text-xs text-slate-400">Top-Ups Credited</div>
+          <div className="text-xs text-slate-400">{t.customer.topupsCredited || 'Top-Ups Credited'}</div>
           <div className="text-xl sm:text-2xl font-black text-white font-mono mt-1">
-            +{platesPurchased} <span className="text-xs font-normal text-slate-400">plates</span>
+            +{platesPurchased} <span className="text-xs font-normal text-slate-400">{t.customer.plates || 'plates'}</span>
           </div>
         </div>
         <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4">
-          <div className="text-xs text-slate-400">Meals Redeemed</div>
+          <div className="text-xs text-slate-400">{t.customer.mealsRedeemedNet || 'Meals Redeemed (Net)'}</div>
           <div className="text-xl sm:text-2xl font-black text-slate-200 font-mono mt-1">
-            {mealsUsed} <span className="text-xs font-normal text-slate-400">plates</span>
+            {netMealsRedeemed} <span className="text-xs font-normal text-slate-400">{t.customer.plates || 'plates'}</span>
           </div>
+          {mealReversals > 0 && (
+            <div className="text-[10px] text-amber-300 font-mono mt-0.5">
+              ({mealReversals} reversed)
+            </div>
+          )}
         </div>
       </div>
 
@@ -130,7 +146,7 @@ export const CustomerActivityPage: React.FC<CustomerActivityPageProps> = ({
               key={f.id}
               type="button"
               onClick={() => onChangeFilter(f.id as CustomerActivityFilter)}
-              className={`flex-1 py-2 px-3 rounded-lg transition-colors cursor-pointer text-center whitespace-nowrap ${
+              className={`flex-1 py-2 px-3 rounded-lg transition-colors cursor-pointer text-center whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
                 activeFilter === f.id
                   ? 'bg-slate-800 text-white font-black shadow-xs'
                   : 'hover:text-white'

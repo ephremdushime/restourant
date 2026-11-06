@@ -5985,7 +5985,7 @@ function scopeStateForUser(state: any, user: UserSession): any {
     };
   }
 
-  // Customer: Restricted to only their own customer record & personal ledger
+  // Customer: Restricted to only their own customer record & personal ledger in their authenticated restaurant
   if (user.role === 'customer') {
     const rCode = user.restaurantCode;
     const custId = user.userId;
@@ -5993,13 +5993,13 @@ function scopeStateForUser(state: any, user: UserSession): any {
     return {
       currentRestaurantCode: rCode,
       restaurants: (state.restaurants || []).filter((r: any) => r.code === rCode),
-      customers: redactCustomers((state.customers || []).filter((c: any) => c.id === custId || c.memberNo === user.username)),
-      ledgerEntries: dashEnt.allowed ? (state.ledgerEntries || []).filter((l: any) => l.customerId === custId) : [],
+      customers: redactCustomers((state.customers || []).filter((c: any) => (c.id === custId || c.memberNo === user.username) && c.restaurantCode === rCode)),
+      ledgerEntries: dashEnt.allowed ? (state.ledgerEntries || []).filter((l: any) => l.customerId === custId && l.restaurantCode === rCode) : [],
       checkpoints: dashEnt.allowed ? checkpointList.filter((cp: any) => cp.customerId === custId) : [],
       menuItems: (state.menuItems || []).filter((m: any) => m.restaurantCode === rCode),
       packages: (state.packages || []).filter((p: any) => p.restaurantCode === rCode),
       notifications: dashEnt.allowed
-        ? (state.notifications || []).filter((n: any) => n.target === 'all' || n.target === custId || n.targetCustomerId === custId)
+        ? (state.notifications || []).filter((n: any) => n.restaurantCode === rCode && (n.target === 'all' || n.target === custId || n.targetCustomerId === custId))
         : [],
       studentSubscriptionSettings: state.studentSubscriptionSettings || {
         enabled: false,
@@ -6008,8 +6008,8 @@ function scopeStateForUser(state: any, user: UserSession): any {
         graceDays: 3,
         plateTransfersRequireSubscription: true,
       },
-      customerSubscriptions: (state.customerSubscriptions || []).filter((cs: any) => cs.customerId === custId),
-      studentSubscriptionPayments: (state.studentSubscriptionPayments || []).filter((sp: any) => sp.customerId === custId),
+      customerSubscriptions: (state.customerSubscriptions || []).filter((cs: any) => cs.customerId === custId && cs.restaurantCode === rCode),
+      studentSubscriptionPayments: (state.studentSubscriptionPayments || []).filter((sp: any) => sp.customerId === custId && sp.restaurantCode === rCode),
       customTranslations: state.customTranslations || {},
     };
   }

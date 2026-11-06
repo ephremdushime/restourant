@@ -32,7 +32,7 @@ export const CustomerSubscriptionPage: React.FC<CustomerSubscriptionPageProps> =
   const scopedPayments = paymentHistory.filter(
     (p) =>
       p.customerId === customer.id &&
-      (!p.restaurantCode || p.restaurantCode === customer.restaurantCode)
+      p.restaurantCode === customer.restaurantCode
   );
 
   const effectiveStatus = !subscriptionSettings.enabled

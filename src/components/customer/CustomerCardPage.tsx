@@ -1,5 +1,6 @@
 import React from 'react';
-import { Customer, Restaurant } from '../../types';
+import { Customer, Language, Restaurant } from '../../types';
+import { translations } from '../../services/i18n';
 import { QrCanvas } from '../common/QrCanvas';
 import {
   QrCode,
@@ -22,6 +23,7 @@ interface CustomerCardPageProps {
   onToggleLockCard: () => void;
   lockMyCardLabel: string;
   unlockMyCardLabel: string;
+  language?: Language;
 }
 
 export const CustomerCardPage: React.FC<CustomerCardPageProps> = ({
@@ -35,7 +37,9 @@ export const CustomerCardPage: React.FC<CustomerCardPageProps> = ({
   onToggleLockCard,
   lockMyCardLabel,
   unlockMyCardLabel,
+  language,
 }) => {
+  const t = translations[language || 'en'] || translations.en;
   return (
     <div className="space-y-5 animate-in fade-in duration-150">
       {/* Page Title & Card Status Header */}
@@ -75,24 +79,24 @@ export const CustomerCardPage: React.FC<CustomerCardPageProps> = ({
             <button
               type="button"
               onClick={() => onChangeQrPassType('dynamic')}
-              className={`px-3.5 py-2 rounded-lg font-bold transition-all cursor-pointer ${
+              className={`px-3.5 py-2 rounded-lg font-bold transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
                 qrPassType === 'dynamic'
                   ? 'bg-emerald-600 text-white shadow-xs'
                   : 'text-slate-300 hover:text-white'
               }`}
             >
-              Rotating Phone QR
+              {t.customer.rotatingPhoneQr || 'Rotating Phone QR'}
             </button>
             <button
               type="button"
               onClick={() => onChangeQrPassType('permanent')}
-              className={`px-3.5 py-2 rounded-lg font-bold transition-all cursor-pointer ${
+              className={`px-3.5 py-2 rounded-lg font-bold transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
                 qrPassType === 'permanent'
                   ? 'bg-emerald-600 text-white shadow-xs'
                   : 'text-slate-300 hover:text-white'
               }`}
             >
-              Card Backup QR
+              {t.customer.cardBackupQr || 'Card Backup QR'}
             </button>
           </div>
 
@@ -101,10 +105,10 @@ export const CustomerCardPage: React.FC<CustomerCardPageProps> = ({
               type="button"
               onClick={onForceRefresh}
               title="Force immediate QR refresh"
-              className="flex items-center gap-1.5 text-xs sm:text-sm font-mono text-emerald-300 bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-700/80 px-3 py-1.5 rounded-xl font-bold cursor-pointer transition-colors"
+              className="flex items-center gap-1.5 text-xs sm:text-sm font-mono text-emerald-300 bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-700/80 px-3 py-1.5 rounded-xl font-bold cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
             >
               <RefreshCw className="w-3.5 h-3.5" />
-              <span>Refresh</span>
+              <span>{t.customer.refreshQr || 'Refresh'}</span>
             </button>
           ) : (
             <span className="text-xs font-mono text-cyan-300 bg-cyan-950/80 border border-cyan-700/80 px-2.5 py-1 rounded-full font-bold">

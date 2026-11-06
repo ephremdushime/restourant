@@ -298,7 +298,10 @@ export default function App() {
     setSoundEnabled(next);
   };
 
-  const currentRestaurant = restoStore.getCurrentRestaurant();
+  const currentCustomer = state.currentRole === 'customer' ? restoStore.getCurrentCustomer() : undefined;
+  const currentRestaurant = currentCustomer
+    ? state.restaurants.find((r) => r.code === currentCustomer.restaurantCode)
+    : restoStore.getCurrentRestaurant();
 
   return (
     <div className={`min-h-screen ${state.theme === 'light' ? 'theme-light bg-slate-50 text-slate-900' : 'theme-dark bg-slate-950 text-slate-100'} flex flex-col font-sans selection:bg-emerald-500 selection:text-white transition-colors duration-200`}>
@@ -315,7 +318,7 @@ export default function App() {
         soundEnabled={soundEnabled}
         onToggleSound={handleToggleSound}
         restaurantName={currentRestaurant?.name || 'Kigali Campus Resto'}
-        restaurantCode={state.currentRestaurantCode}
+        restaurantCode={currentCustomer ? currentCustomer.restaurantCode : state.currentRestaurantCode}
         onOpenNotifications={() => setIsNotificationDrawerOpen(true)}
         activeTab={activeTab}
         onTabChange={handleTabChange}

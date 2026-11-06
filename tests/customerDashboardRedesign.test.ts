@@ -298,7 +298,258 @@ describe('Customer Dashboard Redesign & Security Preservation Protocol (Items 1â
     } finally {
       customer.customerAccessStatus = prevAccess;
     }
+  });
 
+  test('Priority 1 & Cross-Tenant Isolation: API and client enforce strict restaurant context without fallback', async () => {
+    // 1. Inspect CustomerView source to ensure fallback to getCurrentRestaurant is eliminated
+    const custView = readRepoFile('src/components/customer/CustomerView.tsx');
+    assert.doesNotMatch(custView, /currentRestaurant\s*=\s*\(customer\s*\?[^)]+\)\s*\|\|\s*restoStore\.getCurrentRestaurant/);
+    assert.match(custView, /Dining Facility Unavailable/);
+
+    // 2. Cross-tenant API isolation: customer in RW01 cannot access RW02 ledger or records
+    const serverState = getServerDbState();
+    ensureServerDbDefaults(serverState);
+    const rw01Cust = serverState.customers.find((c: any) => c.restaurantCode === 'RW01');
+    assert.ok(rw01Cust);
+
+    // Seed a dummy ledger entry for another restaurant
+    const foreignLedger = {
+      id: `led_foreign_${Date.now()}`,
+      customerId: rw01Cust.id,
+      restaurantCode: 'RW02',
+      type: 'scan',
+      platesDelta: -1,
+      timestamp: new Date().toISOString(),
+      scanPointId: 'sp_rw02',
+      staffId: 'staff_rw02',
+      reference: 'FOREIGN-LEDGER',
+      idempotencyKey: `idemp_foreign_${Date.now()}`,
+    };
+    serverState.ledgerEntries.push(foreignLedger);
+
+    const token = createSessionToken({
+      userId: rw01Cust.id,
+      username: rw01Cust.memberNo,
+      role: 'customer',
+      restaurantCode: 'RW01',
+    });
+
+    const stateRes = await fetchTestRoute('GET', '/api/state', undefined, {
+      Authorization: `Bearer ${token}`,
+    });
+    assert.equal(stateRes.status, 200);
+    const userLedgers = stateRes.body.state.ledgerEntries;
+    const hasForeign = userLedgers.some((l: any) => l.restaurantCode === 'RW02' || l.id === foreignLedger.id);
+    assert.equal(hasForeign, false, 'Customer from RW01 must never receive foreign restaurant ledger entries');
+
+    // Clean up
+    serverState.ledgerEntries = serverState.ledgerEntries.filter((l: any) => l.id !== foreignLedger.id);
+  });
+
+  test('Priority 2 & Authoritative Grace Meals: 4 grace meals allowed, 5th rejected, 60-4=56 reconciliation', () => {
+    restoStore.setRestaurantCode('RW01');
+    restoStore.setStation('sp_1');
+
+    const studentPhone = `+250 788 ${Math.floor(100000 + Math.random() * 899999)}`;
+    const studentReg = `REG-GRACE-${Date.now()}`;
+    const momoRef = `REF-GRACE-${Date.now()}`;
+
+    // 1. Register provisional student with 60 requested plates
+    const regRes = restoStore.registerProvisionalCustomer({
+      restaurantCode: 'RW01',
+      branchId: 'br_rw01_main',
+      branchName: 'Main Campus Dining Hall',
+      name: 'Grace Test Student',
+      phone: studentPhone,
+      photoUrl: '/src/assets/images/avatar_student_female_1790979387287.jpg',
+      idType: 'student_id',
+      idNumber: studentReg,
+      isStudent: true,
+      platesRequested: 60,
+      amountRwf: 72000,
+      paymentMethod: 'cash',
+      paymentReference: momoRef,
+      registeredByStaffId: 'self_portal',
+      registeredByStaffName: 'Grace Student (Self)',
+      stationId: 'sp_1',
+      stationName: 'Stand 1',
+    });
+
+    assert.ok(regRes.customer);
+    const custId = regRes.customer.id;
+
+    // Check initial grace info: 4 allowed, 0 consumed, 4 remaining
+    const graceInitial = restoStore.getCustomerGraceInfo(custId);
+    assert.equal(graceInitial.allowed, 4);
+    assert.equal(graceInitial.consumed, 0);
+    assert.equal(graceInitial.remaining, 4);
+
+    // Setup helper customer for scanner interleaving (anti double-tap guard)
+    let helper = restoStore.getState().customers.find((c) => c.restaurantCode === 'RW01' && c.id !== custId);
+    if (!helper) {
+      const hRes = restoStore.registerProvisionalCustomer({
+        restaurantCode: 'RW01',
+        name: 'Helper Patron',
+        phone: '+250 788 999111',
+        idType: 'student_id',
+        idNumber: 'STU-HELP-1',
+        isStudent: true,
+        platesRequested: 20,
+        amountRwf: 24000,
+        paymentMethod: 'cash',
+        paymentReference: `REF-HELP-${Date.now()}`,
+        registeredByStaffId: 'staff_1',
+        registeredByStaffName: 'Staff Helper',
+        stationId: 'sp_1',
+        stationName: 'Stand 1',
+      });
+      helper = hRes.customer;
+      const hAppr = restoStore.getState().pendingApprovals.find((a) => a.customerId === helper!.id);
+      if (hAppr) restoStore.approvePendingRequest(hAppr.id, 'Boss Helper');
+    }
+    const helperToken = generateCardToken('RW01', helper.memberNo, helper.cardVersion);
+
+    // 2. Consume 4 grace meals using physical card token
+    const cardToken = generateCardToken('RW01', regRes.customer.memberNo, regRes.customer.cardVersion);
+    for (let i = 1; i <= 3; i++) {
+      const scanRes = restoStore.processScan(cardToken);
+      assert.equal(scanRes.outcome, 'ACCEPTED', `Grace meal #${i} must be accepted`);
+      assert.equal(scanRes.isGraceMeal, true);
+      restoStore.processScan(helperToken); // Interleave to clear double-scan cooldown
+    }
+
+    // Age the 3rd scan timestamp beyond 120 minutes to avoid the 3-meal meal-window limit
+    const priorGraceScans = restoStore.getState().scanEvents.filter(
+      (event) => event.customerId === custId && event.isGracePlate && event.platesDeducted > 0
+    );
+    assert.equal(priorGraceScans.length, 3);
+    priorGraceScans[priorGraceScans.length - 1].timestamp =
+      new Date(restoStore.getGuardedTime('RW01') - 121 * 60 * 1000).toISOString();
+    restoStore.processScan(helperToken);
+
+    // 4th grace meal
+    const fourthGrace = restoStore.processScan(cardToken);
+    assert.equal(fourthGrace.outcome, 'ACCEPTED', 'Grace meal #4 must be accepted');
+    assert.equal(fourthGrace.isGraceMeal, true);
+
+    const graceAfter4 = restoStore.getCustomerGraceInfo(custId);
+    assert.equal(graceAfter4.consumed, 4);
+    assert.equal(graceAfter4.remaining, 0);
+
+    // 3. 5th grace scan must be rejected with NO_BALANCE
+    restoStore.processScan(helperToken);
+    const cardToken5 = generateCardToken('RW01', regRes.customer.memberNo, regRes.customer.cardVersion);
+    const scanRes5 = restoStore.processScan(cardToken5);
+    assert.equal(scanRes5.outcome, 'REJECTED');
+    assert.equal(scanRes5.rejectionCode, 'NO_BALANCE');
+
+    // 4. Boss approves the 60 plates: final authoritative balance is 60 - 4 = 56
+    const pending = restoStore.getState().pendingApprovals.find(
+      (a) => a.restaurantCode === 'RW01' && a.paymentReference === momoRef
+    );
+    assert.ok(pending);
+
+    const approveRes = restoStore.approvePendingRequest(pending.id, 'Manager Grace Test');
+    assert.equal(approveRes.success, true);
+    assert.equal(restoStore.getCustomerBalance(custId), 56, 'Balance must reconcile to exactly 60 - 4 = 56 plates');
+  });
+
+  test('Priority 3 & Activity: Reversals do not inflate redeemed-meal totals and entries are strictly scoped', () => {
+    const cust = restoStore.getState().customers.find((c) => c.restaurantCode === 'RW01')!;
+    assert.ok(cust);
+
+    const activitySource = readRepoFile('src/components/customer/CustomerActivityPage.tsx');
+    assert.match(activitySource, /netMealsRedeemed\s*=\s*Math\.max\(0,\s*grossMealScans\s*-\s*mealReversals\)/);
+    assert.match(activitySource, /entry\.customerId === customer\.id &&\s*entry\.restaurantCode === customer\.restaurantCode/);
+
+    // Verify mathematical formulation:
+    // If a patron has 3 scans (-1, -1, -1) and 1 reversal (+1), net redeemed is 2, not 3
+    const testEntries: any[] = [
+      { id: '1', customerId: cust.id, restaurantCode: cust.restaurantCode, type: 'scan', platesDelta: -1, timestamp: new Date().toISOString() },
+      { id: '2', customerId: cust.id, restaurantCode: cust.restaurantCode, type: 'scan', platesDelta: -1, timestamp: new Date().toISOString() },
+      { id: '3', customerId: cust.id, restaurantCode: cust.restaurantCode, type: 'scan', platesDelta: -1, timestamp: new Date().toISOString() },
+      { id: '4', customerId: cust.id, restaurantCode: cust.restaurantCode, type: 'undo', platesDelta: 1, timestamp: new Date().toISOString() },
+      { id: '5', customerId: cust.id, restaurantCode: 'OTHER_RESTO', type: 'scan', platesDelta: -1, timestamp: new Date().toISOString() }, // Cross-tenant entry
+    ];
+
+    const scoped = testEntries.filter(
+      (e) => e.customerId === cust.id && e.restaurantCode === cust.restaurantCode
+    );
+    assert.equal(scoped.length, 4, 'Cross-tenant entries must be filtered out');
+
+    const grossScans = scoped
+      .filter((e) => (e.type === 'scan' || e.type === 'extra') && e.platesDelta < 0)
+      .reduce((sum, e) => sum + Math.abs(e.platesDelta), 0);
+    const reversals = scoped
+      .filter((e) => e.type === 'undo' || (e.type === 'reversal' && e.platesDelta > 0))
+      .reduce((sum, e) => sum + e.platesDelta, 0);
+    const netRedeemed = Math.max(0, grossScans - reversals);
+
+    assert.equal(grossScans, 3);
+    assert.equal(reversals, 1);
+    assert.equal(netRedeemed, 2, 'Net redeemed meals must correctly subtract reversals');
+  });
+
+  test('Priority 4 & Header: Duplicate customer dashboard navigation removed from global header profile dropdown', () => {
+    const headerSource = readRepoFile('src/components/common/Header.tsx');
+    // Global header retains single Profile & Settings link for customer role
+    assert.match(headerSource, /My Profile &amp; Settings|My Profile & Settings/);
+    // Global header does not repeat an incomplete second set of customer dashboard tabs
+    assert.doesNotMatch(headerSource, /\{ id: 'home', label: 'Home Overview'/);
+    assert.doesNotMatch(headerSource, /\{ id: 'my_card', label: 'My Card & QR Pass'/);
+  });
+
+  test('Priority 5: Complete localization coverage for Customer Portal across English, Kinyarwanda, and French', async () => {
+    const { translations } = await import('../src/services/i18n');
+    const requiredCustomerKeys = [
+      'navHome',
+      'navMyCard',
+      'navActivity',
+      'navNotifications',
+      'navProfile',
+      'graceMeals',
+      'awaitingApproval',
+      'diningFacilityUnavailable',
+      'facilityUnavailableDesc',
+      'mealsRedeemedNet',
+      'currentBalance',
+      'topupsCredited',
+      'recentActivityTitle',
+      'noActivityYet',
+      'cardBackupQr',
+      'rotatingPhoneQr',
+    ];
+
+    for (const lang of ['en', 'rw', 'fr'] as const) {
+      assert.ok(translations[lang], `Translation dictionary for ${lang} must exist`);
+      assert.ok(translations[lang].customer, `Customer translations for ${lang} must exist`);
+      for (const key of requiredCustomerKeys) {
+        assert.ok(
+          (translations[lang].customer as any)[key],
+          `Translation key ${key} must exist in ${lang}.customer`
+        );
+      }
+    }
+  });
+
+  test('Priority 6: Verified privacy statements without support@restopass.rw or awkward technical jargon', () => {
+    const profileSource = readRepoFile('src/components/customer/CustomerProfilePage.tsx');
+    assert.doesNotMatch(profileSource, /support@restopass\.rw/);
+    assert.match(profileSource, /Visit Reception Desk/);
+
+    const layoutSource = readRepoFile('src/components/customer/CustomerPortalLayout.tsx');
+    assert.doesNotMatch(layoutSource, /Tenant-isolated session/);
+    assert.match(layoutSource, /Active dining pass at/);
+  });
+
+  test('Priority 8: Accessible notification cards use interactive semantic buttons with focus styles', () => {
+    const notifSource = readRepoFile('src/components/customer/CustomerNotificationsPage.tsx');
+    // Replaced clickable div with semantic button
+    assert.match(notifSource, /<button\s+key=\{n\.id\}\s+type="button"/);
+    assert.match(notifSource, /focus-visible:ring-2/);
+  });
+
+  test('Cleanup and server shutdown', async () => {
     await shutdownServer();
   });
 });

@@ -2,10 +2,12 @@ import React, { useState } from 'react';
 import {
   Customer,
   CustomerSubscription,
+  Language,
   Restaurant,
   StudentSubscriptionPayment,
   StudentSubscriptionSettings,
 } from '../../types';
+import { translations } from '../../services/i18n';
 import { CustomerProfileSubPage } from './CustomerPortalLayout';
 import { CustomerSecuritySettings } from './CustomerSecuritySettings';
 import { CustomerSubscriptionPage } from './CustomerSubscriptionPage';
@@ -41,6 +43,7 @@ interface CustomerProfilePageProps {
   onSignOut?: () => void;
   lockMyCardLabel: string;
   unlockMyCardLabel: string;
+  language?: Language;
 }
 
 export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
@@ -59,7 +62,9 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
   onSignOut,
   lockMyCardLabel,
   unlockMyCardLabel,
+  language,
 }) => {
+  const t = translations[language || 'en'] || translations.en;
   const [copiedMemberNo, setCopiedMemberNo] = useState(false);
 
   const handleCopyMemberNo = () => {
@@ -73,11 +78,11 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
     label: string;
     icon: React.ComponentType<{ className?: string }>;
   }> = [
-    { id: 'personal', label: 'Personal Info', icon: User },
-    { id: 'security', label: 'Security', icon: Shield },
-    { id: 'subscription', label: 'Subscription', icon: Smartphone },
-    { id: 'privacy', label: 'Privacy & Data', icon: FileText },
-    { id: 'account', label: 'Account', icon: Building2 },
+    { id: 'personal', label: t.customer.navPersonalInfo || 'Personal Info', icon: User },
+    { id: 'security', label: t.customer.navSecurity || 'Security', icon: Shield },
+    { id: 'subscription', label: t.customer.navSubscription || 'Subscription', icon: Smartphone },
+    { id: 'privacy', label: t.customer.navPrivacy || 'Privacy & Data', icon: FileText },
+    { id: 'account', label: t.customer.navAccount || 'Account', icon: Building2 },
   ];
 
   return (
@@ -266,7 +271,7 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
             <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5">
               <div className="font-bold text-white">Data Collected</div>
               <p className="text-slate-300 leading-relaxed text-xs">
-                Your name, phone number, Member ID (#{customer.memberNo}), salted PIN verification hash, stand verification portrait, and append-only meal ledger entries. Raw identity document numbers and plaintext PINs are never stored or exposed.
+                Your name, phone number, Member ID (#{customer.memberNo}), cryptographic PIN verification hash, stand verification portrait, and append-only meal ledger entries. Plaintext PINs and passwords are never stored in the database or exposed.
               </p>
             </div>
 
@@ -292,7 +297,7 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
               </div>
               <div className="flex items-center gap-1.5">
                 <Mail className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span className="truncate">{restaurant?.email || 'support@restopass.rw'}</span>
+                <span className="truncate">{restaurant?.email || 'Visit Reception Desk'}</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <MapPin className="w-3.5 h-3.5 text-emerald-400 shrink-0" />

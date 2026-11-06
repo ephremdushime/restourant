@@ -1,5 +1,6 @@
 import React from 'react';
-import { Customer, Restaurant } from '../../types';
+import { Customer, Language, Restaurant } from '../../types';
+import { translations } from '../../services/i18n';
 import {
   Home,
   QrCode,
@@ -22,6 +23,7 @@ interface CustomerPortalLayoutProps {
   activeProfileSubPage?: CustomerProfileSubPage;
   unreadNotifCount: number;
   balance: number;
+  language?: Language;
   onNavigatePage: (page: CustomerPortalPage, profileSubPage?: CustomerProfileSubPage) => void;
   onLockDashboard: () => void;
   onSignOut?: () => void;
@@ -34,11 +36,14 @@ export const CustomerPortalLayout: React.FC<CustomerPortalLayoutProps> = ({
   activePage,
   unreadNotifCount,
   balance,
+  language,
   onNavigatePage,
   onLockDashboard,
   onSignOut,
   children,
 }) => {
+  const t = translations[language || 'en'] || translations.en;
+
   const navItems: Array<{
     id: CustomerPortalPage;
     label: string;
@@ -46,17 +51,17 @@ export const CustomerPortalLayout: React.FC<CustomerPortalLayoutProps> = ({
     icon: React.ComponentType<{ className?: string }>;
     badge?: number;
   }> = [
-    { id: 'home', label: 'Home', shortLabel: 'Home', icon: Home },
-    { id: 'my_card', label: 'My Card', shortLabel: 'My Card', icon: QrCode },
-    { id: 'activity', label: 'Activity', shortLabel: 'Activity', icon: History },
+    { id: 'home', label: t.customer.navHome || 'Home', shortLabel: t.customer.navHome || 'Home', icon: Home },
+    { id: 'my_card', label: t.customer.navMyCard || 'My Card', shortLabel: t.customer.navMyCard || 'My Card', icon: QrCode },
+    { id: 'activity', label: t.customer.navActivity || 'Activity', shortLabel: t.customer.navActivity || 'Activity', icon: History },
     {
       id: 'notifications',
-      label: 'Notifications',
-      shortLabel: 'Alerts',
+      label: t.customer.navNotifications || 'Notifications',
+      shortLabel: t.customer.navNotifications || 'Alerts',
       icon: Bell,
       badge: unreadNotifCount > 0 ? unreadNotifCount : undefined,
     },
-    { id: 'profile', label: 'Profile & Settings', shortLabel: 'Profile', icon: User },
+    { id: 'profile', label: t.customer.navProfile || 'Profile & Settings', shortLabel: t.customer.navPersonalInfo || 'Profile', icon: User },
   ];
 
   return (
@@ -93,7 +98,7 @@ export const CustomerPortalLayout: React.FC<CustomerPortalLayoutProps> = ({
             }`}
           >
             <QrCode className="w-3.5 h-3.5" />
-            <span>My QR</span>
+            <span>{t.customer.showMyQr || 'My QR'}</span>
           </button>
 
           <button
@@ -181,16 +186,16 @@ export const CustomerPortalLayout: React.FC<CustomerPortalLayoutProps> = ({
             </div>
             <div className="pt-2 border-t border-slate-800 flex items-center gap-1.5 text-[11px] text-slate-400">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-              <span>Tenant-isolated session ({customer.restaurantCode})</span>
+              <span className="truncate">{t.customer.activeDiningPassAt || 'Active dining pass at'} {restaurant?.name || customer.restaurantCode}</span>
             </div>
             {onSignOut && (
               <button
                 type="button"
                 onClick={onSignOut}
-                className="w-full mt-1 py-2 px-3 rounded-xl bg-slate-950 hover:bg-rose-950/50 border border-slate-800 hover:border-rose-800/60 text-rose-400 text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                className="w-full mt-1 py-2 px-3 rounded-xl bg-slate-950 hover:bg-rose-950/50 border border-slate-800 hover:border-rose-800/60 text-rose-400 text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
               >
                 <LogOut className="w-3.5 h-3.5" />
-                <span>Sign Out</span>
+                <span>{t.customer.signOutSecurely || 'Sign Out'}</span>
               </button>
             )}
           </div>

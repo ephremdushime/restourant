@@ -4939,21 +4939,48 @@ export class RestoStore {
   }
 
   /**
+   * Authoritative calculation of remaining and consumed grace meals for a customer.
+   * Derived from pending approval records (authoritative) and customer registration rules.
+   */
+  public getCustomerGraceInfo(customerId: string): { allowed: number; consumed: number; remaining: number } {
+    const customer = this.state.customers.find((c) => c.id === customerId);
+    if (!customer) return { allowed: 4, consumed: 0, remaining: 4 };
+
+    const customerPendingApprovals = (this.state.pendingApprovals || []).filter(
+      (a) => a.customerId === customerId && a.status === 'pending'
+    );
+    const registrationApproval = customerPendingApprovals.find((a) => a.type === 'new_customer');
+    const allowed = registrationApproval?.gracePlatesAllowed ?? customer.gracePlatesAllowed ?? 4;
+
+    const totalConsumedAcrossPending = customerPendingApprovals.reduce(
+      (sum, a) => sum + Math.max(0, a.gracePlatesConsumed || 0),
+      0
+    );
+    const consumed = customerPendingApprovals.length > 0
+      ? totalConsumedAcrossPending
+      : Math.max(0, customer.gracePlatesConsumed || 0);
+
+    const remaining = Math.max(0, allowed - consumed);
+    return { allowed, consumed, remaining };
+  }
+
+  /**
    * Get filtered notifications for a customer
    */
   public getCustomerNotifications(customerId: string, restaurantCode?: string): AppNotification[] {
     if (!this.state.notifications) return [];
-    const restoCode = restaurantCode || this.state.currentRestaurantCode;
+    const cust = this.state.customers.find((c) => c.id === customerId);
+    const restoCode = restaurantCode || cust?.restaurantCode || this.state.currentRestaurantCode;
     return this.state.notifications.filter(
-      (n) => n.restaurantCode === restoCode && (n.target === 'all' || n.target === customerId)
+      (n) => n.restaurantCode === restoCode && (n.target === 'all' || n.target === customerId || (n as any).targetCustomerId === customerId)
     );
   }
 
   /**
    * Get unread notification count for a customer
    */
-  public getUnreadNotificationCount(customerId: string): number {
-    const notifs = this.getCustomerNotifications(customerId);
+  public getUnreadNotificationCount(customerId: string, restaurantCode?: string): number {
+    const notifs = this.getCustomerNotifications(customerId, restaurantCode);
     return notifs.filter((n) => !n.readByCustomerIds.includes(customerId)).length;
   }
 

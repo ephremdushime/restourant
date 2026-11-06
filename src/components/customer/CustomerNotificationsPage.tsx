@@ -1,5 +1,6 @@
 import React from 'react';
-import { AppNotification, Customer } from '../../types';
+import { AppNotification, Customer, Language } from '../../types';
+import { translations } from '../../services/i18n';
 import { CustomerPortalPage } from './CustomerPortalLayout';
 import {
   Bell,
@@ -25,6 +26,7 @@ interface CustomerNotificationsPageProps {
   onMarkAsRead: (notificationId: string) => void;
   onMarkAllAsRead: () => void;
   onNavigatePage: (page: CustomerPortalPage) => void;
+  language?: Language;
 }
 
 export const CustomerNotificationsPage: React.FC<CustomerNotificationsPageProps> = ({
@@ -36,7 +38,10 @@ export const CustomerNotificationsPage: React.FC<CustomerNotificationsPageProps>
   onMarkAsRead,
   onMarkAllAsRead,
   onNavigatePage,
+  language,
 }) => {
+  const t = translations[language || 'en'] || translations.en;
+
   // Strictly enforce tenant and customer scoping
   const scopedNotifications = notifications.filter(
     (n) =>
@@ -128,10 +133,11 @@ export const CustomerNotificationsPage: React.FC<CustomerNotificationsPageProps>
           {filteredNotifs.map((n) => {
             const isUnread = !n.readByCustomerIds.includes(customer.id);
             return (
-              <div
+              <button
                 key={n.id}
+                type="button"
                 onClick={() => onMarkAsRead(n.id)}
-                className={`p-4 rounded-2xl border transition-all cursor-pointer relative ${
+                className={`w-full text-left p-4 rounded-2xl border transition-all cursor-pointer relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
                   isUnread
                     ? 'bg-slate-800/90 border-emerald-500/60 shadow-md'
                     : 'bg-slate-900 border-slate-800 hover:border-slate-700'
@@ -183,23 +189,22 @@ export const CustomerNotificationsPage: React.FC<CustomerNotificationsPageProps>
                     </div>
 
                     {n.actionTab && (
-                      <button
-                        type="button"
+                      <span
                         onClick={(e) => {
                           e.stopPropagation();
                           onMarkAsRead(n.id);
                           if (n.actionTab === 'history') onNavigatePage('activity');
                           else if (n.actionTab === 'my_card') onNavigatePage('my_card');
                         }}
-                        className="mt-2 text-xs font-bold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 cursor-pointer"
+                        className="mt-2 text-xs font-bold text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1 cursor-pointer"
                       >
                         <span>Open in {n.actionTab === 'my_card' ? 'My Card' : 'Activity'}</span>
                         <ExternalLink className="w-3.5 h-3.5" />
-                      </button>
+                      </span>
                     )}
                   </div>
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>

@@ -10,6 +10,8 @@ import {
   CheckCircle2,
   ShieldAlert,
   Smartphone,
+  Building2,
+  LogOut,
 } from 'lucide-react';
 import { PWAInstallBanner } from './PWAInstallBanner';
 import { PinSetupModal } from './PinSetupModal';
@@ -79,11 +81,15 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   const state = restoStore.getState();
   const customer = restoStore.getCurrentCustomer();
 
-  // Strictly lock restaurant context to the authenticated customer's tenant
-  const currentRestaurant =
-    (customer
-      ? state.restaurants.find((r) => r.code === customer.restaurantCode)
-      : undefined) || restoStore.getCurrentRestaurant();
+  // Strictly lock restaurant context to the authenticated customer's tenant (never fall back to global selection)
+  const currentRestaurant = customer
+    ? state.restaurants.find((r) => r.code === customer.restaurantCode)
+    : undefined;
+
+  // Authoritative grace calculation from pending approvals and registration policy
+  const graceInfo = customer
+    ? restoStore.getCustomerGraceInfo(customer.id)
+    : { allowed: 4, consumed: 0, remaining: 4 };
 
   // Customer digital access entitlement and renewal state
   const subSettings = restoStore.getStudentSubscriptionSettings();
@@ -427,10 +433,37 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
           .filter(
             (e) =>
               e.customerId === customer.id &&
-              (!e.restaurantCode || e.restaurantCode === customer.restaurantCode)
+              e.restaurantCode === customer.restaurantCode
           )
           .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
       : [];
+
+  // Safe unavailable screen if authenticated customer's restaurant cannot be loaded
+  if (customer && !currentRestaurant) {
+    return (
+      <div className="max-w-md mx-auto px-4 py-16 space-y-4 text-center">
+        <div className="w-16 h-16 rounded-3xl bg-rose-500/15 border border-rose-500/30 text-rose-400 flex items-center justify-center mx-auto">
+          <Building2 className="w-8 h-8" />
+        </div>
+        <h1 className="text-xl font-black text-white">
+          {t.customer.diningFacilityUnavailable || 'Dining Facility Unavailable'}
+        </h1>
+        <p className="text-sm text-slate-400 leading-relaxed">
+          {(t.customer.facilityUnavailableDesc || 'We could not load information for your registered cafeteria ({code}). Please contact cafeteria administration or sign in again.').replace('{code}', customer.restaurantCode)}
+        </p>
+        {onSignOut && (
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="mt-4 px-6 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-sm inline-flex items-center gap-2 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+          >
+            <LogOut className="w-4 h-4" />
+            <span>{t.customer.signOutSecurely || 'Sign Out Securely'}</span>
+          </button>
+        )}
+      </div>
+    );
+  }
 
   if (customer?.registrationStatus === 'pending_boss_approval') {
     return (
@@ -452,14 +485,14 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
               <strong className="font-mono text-white">#{customer.memberNo}</strong>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-slate-400">Grace meals available</span>
+              <span className="text-slate-400">{t.customer.graceMealsAvailable || 'Grace meals available'}</span>
               <strong className="text-emerald-300">
-                {Math.max(0, customer.gracePlatesRemaining ?? 4)} / 4
+                {graceInfo.remaining} / {graceInfo.allowed}
               </strong>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-slate-400">Registration review</span>
-              <strong className="text-amber-300">Awaiting boss approval</strong>
+              <strong className="text-amber-300">{t.customer.awaitingApproval || 'Awaiting boss approval'}</strong>
             </div>
           </div>
           <div className="rounded-2xl bg-white p-4 flex flex-col items-center gap-2">
@@ -615,6 +648,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
         activeProfileSubPage={activeProfileSubPage}
         unreadNotifCount={unreadNotifCount}
         balance={balance}
+        language={language}
         onNavigatePage={handleNavigatePage}
         onLockDashboard={() => setIsDashboardLocked(true)}
         onSignOut={onSignOut}
@@ -626,6 +660,8 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             balance={balance}
             recentActivity={customerHistory}
             unreadNotifCount={unreadNotifCount}
+            graceInfo={graceInfo}
+            language={language}
             lowBalanceTitle={t.scanner.lowBalanceWarning}
             lowBalanceMessage={t.customer.lowBalanceBanner}
             unlockCardLabel={t.customer.unlockMyCard}
@@ -648,6 +684,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             onToggleLockCard={handleToggleLockCard}
             lockMyCardLabel={t.customer.lockMyCard}
             unlockMyCardLabel={t.customer.unlockMyCard}
+            language={language}
           />
         )}
 
@@ -658,6 +695,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             entries={customerHistory}
             activeFilter={historyFilter}
             onChangeFilter={setHistoryFilter}
+            language={language}
           />
         )}
 
@@ -671,6 +709,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             onMarkAsRead={(id) => restoStore.markNotificationAsRead(id, customer.id)}
             onMarkAllAsRead={() => restoStore.markAllNotificationsAsRead(customer.id)}
             onNavigatePage={handleNavigatePage}
+            language={language}
           />
         )}
 
@@ -691,6 +730,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             onSignOut={onSignOut}
             lockMyCardLabel={t.customer.lockMyCard}
             unlockMyCardLabel={t.customer.unlockMyCard}
+            language={language}
           />
         )}
       </CustomerPortalLayout>
