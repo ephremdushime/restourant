@@ -2356,7 +2356,7 @@ const SENSITIVE_CLIENT_FIELDS = new Set([
   'recoverycode', 'verificationcode', 'temporarycode', 'onetimecode', 'otp',
   'pairingkey', 'pairingsecret', 'secret', 'apisecret', 'apikey',
   'accesskey', 'secretaccesskey', 'accesstoken', 'refreshtoken',
-  'magicauthtoken', 'tokenhash', 'qrsecret', 'privatekey', 'photostoragekey',
+  'magicauthtoken', 'tokenhash', 'qrsecret', 'privatekey', 'photostoragekey', 'photostoragetype',
 ]);
 
 /**
@@ -2922,8 +2922,10 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
             });
           }
         } else if (user.role !== 'customer') {
-          // Only staff/admins may create new customer records
-          existingCustomersMap.set(inc.id, inc);
+          // Only staff/admins may create new customer records. Photo object
+          // references are issued exclusively by the private upload endpoint.
+          const { photoStorageKey: _untrustedPhotoKey, photoStorageType: _untrustedPhotoType, ...safeIncomingCustomer } = inc;
+          existingCustomersMap.set(inc.id, safeIncomingCustomer);
         }
       }
       serverDbState.customers = Array.from(existingCustomersMap.values());
@@ -3125,7 +3127,7 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
     const scopedState = scopeStateForUser(serverDbState, user);
     return res.json({
       success: true,
-      serverState: scopedState,
+      serverState: sanitizeSensitiveState(scopedState),
       serverTime: new Date().toISOString(),
     });
   }
