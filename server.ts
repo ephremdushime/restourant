@@ -2874,57 +2874,94 @@ app.patch('/api/admin/settings/student-subscriptions', apiRateLimiter, requireAu
 app.post('/api/admin/customers/:customerId/entitlements', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
   ensureServerDbDefaults(serverDbState);
   const { customerId } = req.params;
-  const { reason, durationDays } = req.body;
-
-  if (!reason || !reason.trim()) {
-    return res.status(400).json({ success: false, error: 'A mandatory reason is required to grant complimentary access' });
+  const { reason, durationDays } = req.body || {};
+  if (typeof reason !== 'string' || !reason.trim()) {
+    return res.status(400).json({ success: false, error: 'A mandatory reason is required to grant complimentary access.' });
   }
-
   const customer = (serverDbState.customers || []).find((c: any) => c.id === customerId);
-  if (!customer) {
-    return res.status(404).json({ success: false, error: 'Customer not found' });
+  if (!customer) return res.status(404).json({ success: false, error: 'Customer not found.' });
+  if (customer.registrationStatus && customer.registrationStatus !== 'approved') {
+    return res.status(409).json({ success: false, error: 'The Restaurant Boss must approve the registration before complimentary access can be activated.' });
   }
 
   const nowMs = Date.now();
-  const days = typeof durationDays === 'number' ? durationDays : 30;
-  const periodEndMs = nowMs + days * 24 * 3600 * 1000;
-  const graceEndMs = periodEndMs + 3 * 24 * 3600 * 1000;
-
-  let sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === customerId);
-  if (!sub) {
-    sub = {
-      id: `sub_${customerId}_${Date.now()}`,
-      customerId: customer.id,
-      memberNo: customer.memberNo,
-      restaurantCode: customer.restaurantCode,
-      status: 'complimentary',
-      planName: 'Complimentary Student Pass',
-      priceRwf: 0,
-      currency: 'RWF',
-      currentPeriodStart: new Date(nowMs).toISOString(),
-      currentPeriodEnd: new Date(periodEndMs).toISOString(),
-      gracePeriodEnd: new Date(graceEndMs).toISOString(),
-      cancelAtPeriodEnd: false,
-      paymentMethod: 'complimentary',
-      complimentaryReason: reason.trim(),
-      complimentaryGrantedBy: req.user!.username,
-      createdAt: new Date(nowMs).toISOString(),
-      updatedAt: new Date(nowMs).toISOString(),
-    };
-    serverDbState.customerSubscriptions.push(sub);
-  } else {
-    sub.status = 'complimentary';
-    sub.currentPeriodStart = new Date(nowMs).toISOString();
-    sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
-    sub.gracePeriodEnd = new Date(graceEndMs).toISOString();
-    sub.complimentaryReason = reason.trim();
-    sub.complimentaryGrantedBy = req.user!.username;
-    sub.updatedAt = new Date(nowMs).toISOString();
+  const now = new Date(nowMs).toISOString();
+  const days = customer.registrationStatus === 'approved' ? 30 : (typeof durationDays === 'number' ? Math.min(365, Math.max(1, durationDays)) : 30);
+  const periodEnd = new Date(nowMs + days * 24 * 3600 * 1000).toISOString();
+  const graceEnd = new Date(nowMs + (days * 24 * 3600 * 1000) + 3 * 24 * 3600 * 1000).toISOString();
+  const previousCustomer = { ...customer };
+  const existingSub = (serverDbState.customerSubscriptions || []).find((sub: any) => sub.customerId === customerId);
+  const previousSub = existingSub ? { ...existingSub } : null;
+  const subscription = existingSub || {
+    id: `sub_${customerId}_${crypto.randomUUID()}`,
+    customerId: customer.id,
+    memberNo: customer.memberNo,
+    restaurantCode: customer.restaurantCode,
+    createdAt: now,
+  };
+  Object.assign(subscription, {
+    status: 'complimentary',
+    planName: 'Complimentary Student Pass',
+    priceRwf: 0,
+    currency: 'RWF',
+    currentPeriodStart: now,
+    currentPeriodEnd: periodEnd,
+    gracePeriodEnd: graceEnd,
+    cancelAtPeriodEnd: false,
+    paymentMethod: 'complimentary',
+    complimentaryReason: reason.trim(),
+    complimentaryGrantedBy: req.user!.username,
+    updatedAt: now,
+  });
+  if (!existingSub) {
+    if (!Array.isArray(serverDbState.customerSubscriptions)) serverDbState.customerSubscriptions = [];
+    serverDbState.customerSubscriptions.push(subscription);
+  }
+  if (customer.registrationStatus === 'approved') {
+    customer.customerAccessStatus = 'complimentary';
+    customer.freeAccessStartedAt = now;
+    customer.freeAccessExpiresAt = periodEnd;
   }
 
-  await queueDbSave(serverDbState);
+  if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
+  const auditId = `audit_${crypto.randomUUID()}`;
+  serverDbState.auditLogs.unshift({
+    id: auditId,
+    timestamp: now,
+    restaurantCode: customer.restaurantCode,
+    actorRole: 'super_admin',
+    actorName: req.user!.username,
+    action: 'COMPLIMENTARY_STUDENT_SUBSCRIPTION_GRANTED',
+    details: `Granted ${days}-day complimentary dashboard access to #${customer.memberNo}. Reason: ${reason.trim()}.`,
+  });
+  if (!Array.isArray(serverDbState.notifications)) serverDbState.notifications = [];
+  const notificationId = `notif_${crypto.randomUUID()}`;
+  serverDbState.notifications.unshift({
+    id: notificationId,
+    restaurantCode: customer.restaurantCode,
+    target: customer.id,
+    targetName: `${customer.name} (#${customer.memberNo})`,
+    senderRole: 'system',
+    senderName: req.user!.username,
+    type: 'system_broadcast',
+    title: 'Complimentary Dashboard Access Activated',
+    message: `Your ${days}-day complimentary dashboard access is active until ${new Date(periodEnd).toLocaleDateString()}.`,
+    priority: 'important',
+    timestamp: now,
+    readByCustomerIds: [],
+    actionTab: 'my_card',
+  });
 
-  return res.json({ success: true, subscription: sub });
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    Object.assign(customer, previousCustomer);
+    if (previousSub) Object.assign(subscription, previousSub);
+    else serverDbState.customerSubscriptions = (serverDbState.customerSubscriptions || []).filter((sub: any) => sub.id !== subscription.id);
+    serverDbState.auditLogs = serverDbState.auditLogs.filter((item: any) => item.id !== auditId);
+    serverDbState.notifications = serverDbState.notifications.filter((item: any) => item.id !== notificationId);
+    return res.status(503).json({ success: false, error: 'Complimentary access could not be saved. Please retry.' });
+  }
+  return res.json({ success: true, subscription, customer: { id: customer.id, customerAccessStatus: customer.customerAccessStatus, freeAccessExpiresAt: customer.freeAccessExpiresAt } });
 });
 
 // DELETE /api/admin/customers/:customerId/entitlements/:entitlementId: Revokes complimentary access
