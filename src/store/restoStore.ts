@@ -6756,11 +6756,15 @@ export class RestoStore {
     if ((sub.status === 'active' || sub.status === 'complimentary') && sub.currentPeriodEnd) {
       const endMs = new Date(sub.currentPeriodEnd).getTime();
       const graceMs = sub.gracePeriodEnd ? new Date(sub.gracePeriodEnd).getTime() : endMs + 3 * 24 * 3600 * 1000;
-      if (now > graceMs) {
+      if (sub.status === 'complimentary' && now > endMs) {
+        // The onboarding free month ends at 30 days; it has no additional grace period.
         sub.status = 'expired';
         sub.updatedAt = new Date().toISOString();
         const expiredCustomer = this.state.customers.find((c) => c.id === customerId);
         if (expiredCustomer?.customerAccessStatus === 'complimentary') expiredCustomer.customerAccessStatus = 'payment_required';
+      } else if (now > graceMs) {
+        sub.status = 'expired';
+        sub.updatedAt = new Date().toISOString();
       } else if (now > endMs && sub.status === 'active') {
         sub.status = 'grace_period';
         sub.updatedAt = new Date().toISOString();
