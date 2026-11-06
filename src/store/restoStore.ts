@@ -2597,15 +2597,18 @@ export class RestoStore {
         (a) => a.customerId === customer.id && a.status === 'pending'
       );
       const totalGraceUsedAcrossPending = customerPendingApprovals.reduce(
-        (sum, a) => sum + (a.gracePlatesConsumed || 0),
+        (sum, approval) => sum + Math.max(0, approval.gracePlatesConsumed || 0),
         0
       );
-      // Also account for customer.gracePlatesConsumed if set directly on provisional customer
-      const effectiveGraceConsumed = Math.max(
-        totalGraceUsedAcrossPending,
-        customer.provisionalStatus === 'pending_approval' ? (customer.gracePlatesConsumed || 0) : 0
-      );
-      const graceLimit = customer.gracePlatesAllowed || 3;
+      // Pending approval records are authoritative. Customer fields are a display/cache mirror,
+      // so use them only for legacy provisional records that have no approval row.
+      const effectiveGraceConsumed = customerPendingApprovals.length > 0
+        ? totalGraceUsedAcrossPending
+        : customer.provisionalStatus === 'pending_approval'
+          ? Math.max(0, customer.gracePlatesConsumed || 0)
+          : 0;
+      const registrationApproval = customerPendingApprovals.find((approval) => approval.type === 'new_customer');
+      const graceLimit = customer.gracePlatesAllowed ?? registrationApproval?.gracePlatesAllowed ?? 3;
       const hasQualifyingPendingPayment =
         customerPendingApprovals.length > 0 || customer.provisionalStatus === 'pending_approval';
       const eligibleGraceAvailable = hasQualifyingPendingPayment && effectiveGraceConsumed < graceLimit;
@@ -2710,13 +2713,23 @@ export class RestoStore {
       } else {
         // Record 1 authorized grace meal against the earliest qualifying pending approval
         // Do NOT push a -1 paid ledger entry now, because approvePendingRequest will deduct -gracePlatesConsumed upon approval!
-        const targetApproval =
-          customerPendingApprovals
-            .slice()
-            .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-            .find((a) => (a.gracePlatesConsumed || 0) < (a.gracePlatesAllowed || customer.gracePlatesAllowed || 3)) ||
-          customerPendingApprovals[0];
+        const targetApproval = customerPendingApprovals
+          .slice()
+          .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+          .find((approval) =>
+            (approval.gracePlatesConsumed || 0) <
+            (approval.gracePlatesAllowed ?? customer.gracePlatesAllowed ?? 3)
+          );
 
+        if (customerPendingApprovals.length > 0 && !targetApproval) {
+          return buildRejection(
+            'NO_BALANCE',
+            `No balance — Grace meal limit reached (${effectiveGraceConsumed}/${graceLimit} meals consumed). Please await payment approval.`,
+            customer,
+            customer.memberNo,
+            currentBalance
+          );
+        }
         if (targetApproval) {
           targetApproval.gracePlatesConsumed = (targetApproval.gracePlatesConsumed || 0) + 1;
         }
@@ -2799,7 +2812,7 @@ export class RestoStore {
         type: 'meal_served',
         title: isUsingGraceMeal ? 'Grace Meal Served' : 'Meal Plate Served',
         message: isUsingGraceMeal
-          ? `Served 1 authorized grace meal (#${customer.gracePlatesConsumed}/3) at ${station.name} while awaiting payment approval.`
+          ? `Served 1 authorized grace meal (#${customer.gracePlatesConsumed}/${graceLimit}) at ${station.name} while awaiting Boss approval.`
           : `Redeemed 1 buffet meal at ${station.name}. Remaining balance: ${newBalance} plate(s).`,
         priority: 'normal',
         actionTab: 'history',
@@ -3379,7 +3392,9 @@ export class RestoStore {
       timestamp: now,
     };
 
-    this.state.payments.unshift(payment);
+    if (!this.state.payments.some((existing) => existing.approvalId === approval.id)) {
+      this.state.payments.unshift(payment);
+    }
 
     this.queueOutboxItem('ledger_entry', ledgerEntry.id, ledgerEntry);
     this.logAudit({
@@ -5994,14 +6009,17 @@ export class RestoStore {
       this.notify();
       return { success: true, customer };
     }
-    // Use the grace meals linked to this specific approval; fall back to customer.gracePlatesConsumed only for a new_customer registration if set directly
-    const graceConsumed =
-      (approval.gracePlatesConsumed || 0) > 0
-        ? approval.gracePlatesConsumed
-        : approval.type === 'new_customer'
-        ? ((customer as any).graceMealsConsumed || customer.gracePlatesConsumed || 0)
-        : 0;
-    const requested = approval.platesRequested || 0;
+    const requested = Math.max(0, Number(approval.platesRequested) || 0);
+    // The approval row is authoritative for this package. Only legacy rows without
+    // a recorded counter may fall back to the customer's mirrored grace counter.
+    const recordedGrace = approval.gracePlatesConsumed;
+    const legacyGrace = approval.type === 'new_customer'
+      ? ((customer as any).graceMealsConsumed ?? customer.gracePlatesConsumed ?? 0)
+      : 0;
+    const graceConsumed = Math.min(
+      requested,
+      Math.max(0, Number(typeof recordedGrace === 'number' ? recordedGrace : legacyGrace) || 0)
+    );
 
     // 1. Record confirmed purchase payment on ledger idempotently
     const purchaseIdempKey = `idemp_appr_credit_${approval.id}`;
@@ -6017,13 +6035,18 @@ export class RestoStore {
       reference: approval.paymentReference,
       idempotencyKey: purchaseIdempKey,
     };
-    const credited = this.appendLedgerEntry(ledgerEntry);
-    if (!credited) {
-      return { success: false, error: 'Request is already reviewed' };
+    // Recover safely if a previous attempt persisted only part of this approval's ledger work.
+    // Idempotency is per approval, so retries never double-credit or double-deduct.
+    const purchaseAlreadyRecorded = this.state.ledgerEntries.some(
+      (entry) => entry.idempotencyKey === purchaseIdempKey || entry.id === ledgerEntry.id
+    );
+    if (!purchaseAlreadyRecorded && !this.appendLedgerEntry(ledgerEntry)) {
+      return { success: false, error: 'Purchase credit could not be recorded. Please retry.' };
     }
 
-    // If grace plates were consumed while awaiting approval, deduct them once so balance is exact net
+    // Grace usage is deducted exactly once from this purchased package at Boss approval.
     if (graceConsumed > 0) {
+      const graceIdempotencyKey = `idemp_appr_grace_${approval.id}`;
       const graceEntry: LedgerEntry = {
         id: `led_grace_deduct_${approval.id}`,
         customerId: customer.id,
@@ -6032,11 +6055,19 @@ export class RestoStore {
         platesDelta: -graceConsumed,
         timestamp: now,
         staffId: bossName,
-        reason: `Deduction: -${graceConsumed} grace meals consumed while awaiting boss approval (< 4 policy)`,
+        reason: `Deduction: -${graceConsumed} grace plates already consumed from this package before Boss approval.`,
         reference: `GRACE-CONSUMED-${customer.memberNo}-${approval.id}`,
-        idempotencyKey: `idemp_appr_grace_${approval.id}`,
+        idempotencyKey: graceIdempotencyKey,
       };
-      this.appendLedgerEntry(graceEntry);
+      const existingGraceEntry = this.state.ledgerEntries.find(
+        (entry) => entry.idempotencyKey === graceIdempotencyKey || entry.id === graceEntry.id
+      );
+      if (existingGraceEntry && existingGraceEntry.platesDelta !== -graceConsumed) {
+        return { success: false, error: 'Grace reconciliation does not match the recorded approval. Contact support before retrying.' };
+      }
+      if (!existingGraceEntry && !this.appendLedgerEntry(graceEntry)) {
+        return { success: false, error: 'Grace-plate reconciliation could not be recorded. Please retry.' };
+      }
     }
 
     // 2. Add confirmed payment record
