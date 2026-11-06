@@ -2840,20 +2840,6 @@ async function startServer() {
     throw new Error('Cloud production mode requires REDIS_URL for distributed replay protection.');
   }
 
-  // Hash legacy station credentials before any production request can authenticate
-  // against them. Persist the migration before the server begins accepting traffic.
-  if (serverDbState && normalizeStationUserCredentials(serverDbState)) {
-    let credentialsPersisted = false;
-    if (isPostgresConfigured()) credentialsPersisted = await saveStateToPostgres(serverDbState);
-    if (!credentialsPersisted && (!isPostgresConfigured() || !isProduction)) {
-      credentialsPersisted = atomicSaveDb(serverDbState);
-    }
-    if (!credentialsPersisted) {
-      throw new Error('Station credential migration could not be persisted; refusing to start with an ambiguous credential state.');
-    }
-    console.log('[Server Authority] Legacy station credentials migrated to scrypt hashes.');
-  }
-
   // Cloud Relational Database Initialization
   if (isPostgresConfigured()) {
     console.log('[Server Authority] PostgreSQL detected. Connecting and initializing schema...');
@@ -2876,6 +2862,20 @@ async function startServer() {
     }
   } else {
     console.log('[Server Authority] Running in standalone local storage mode (Offline Reception Laptop compatible).');
+  }
+
+  // Hash legacy station credentials only after the authoritative state has loaded.
+  // Persist the migration before the server begins accepting authentication requests.
+  if (serverDbState && normalizeStationUserCredentials(serverDbState)) {
+    let credentialsPersisted = false;
+    if (isPostgresConfigured()) credentialsPersisted = await saveStateToPostgres(serverDbState);
+    if (!credentialsPersisted && (!isPostgresConfigured() || !isProduction)) {
+      credentialsPersisted = atomicSaveDb(serverDbState);
+    }
+    if (!credentialsPersisted) {
+      throw new Error('Station credential migration could not be persisted; refusing to start with an ambiguous credential state.');
+    }
+    console.log('[Server Authority] Legacy station credentials migrated to scrypt hashes.');
   }
 
   if (isProduction && deploymentMode === 'cloud') {
