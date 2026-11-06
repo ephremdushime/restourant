@@ -169,6 +169,7 @@ describe('Production Readiness Remediation & Hardening', () => {
 
       // An empty outbox must still trigger a full-state reconnect push because
       // grace counters and scan events are also synchronized through state snapshots.
+      state.syncOutbox = [];
       let emptyQueuePushCalled = false;
       globalThis.fetch = (async () => {
         emptyQueuePushCalled = true;
