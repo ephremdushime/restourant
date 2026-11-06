@@ -11,7 +11,7 @@ import {
   insertLedgerEntryPostgres,
   commitPlateTransferPostgres,
 } from './src/services/db/postgresAdapter';
-import { recordTokenScan, isRedisConfigured, checkRedisReady, revokeSessionToken, isSessionTokenRevoked } from './src/services/cache/redisClient';
+import { recordTokenScan, isRedisConfigured, checkRedisReady, revokeSessionToken, isSessionTokenRevoked, consumeRateLimit } from './src/services/cache/redisClient';
 import { uploadBase64Photo, getPrivatePatronPhoto, deletePrivatePatronPhoto } from './src/services/storage/objectStorage';
 
 const app = express();
@@ -453,56 +453,29 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
 });
 
 // ----------------------------------------------------
-// In-Memory Rate Limiting (Finding 7)
+// Distributed Rate Limiting (Redis in cloud; memory in standalone)
 // ----------------------------------------------------
-interface RateLimitRecord {
-  count: number;
-  resetTime: number;
-}
-const rateLimitStores = new Map<string, Map<string, RateLimitRecord>>();
-
 function createRateLimiter(bucketName: string, maxRequests: number, windowMs: number) {
-  let store = rateLimitStores.get(bucketName);
-  if (!store) {
-    store = new Map<string, RateLimitRecord>();
-    rateLimitStores.set(bucketName, store);
-  }
-
-  return (req: Request, res: Response, next: NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    const now = Date.now();
-    let record = store!.get(ip);
+    const result = await consumeRateLimit(bucketName, ip, maxRequests, windowMs);
 
-    if (!record || now > record.resetTime) {
-      record = { count: 1, resetTime: now + windowMs };
-      store!.set(ip, record);
-    } else {
-      record.count++;
+    if (!result.available) {
+      return res.status(503).json({
+        success: false,
+        error: 'Security rate-limit service is temporarily unavailable. Retry shortly.',
+      });
     }
-
-    if (record.count > maxRequests) {
-      res.setHeader('Retry-After', Math.ceil((record.resetTime - now) / 1000).toString());
+    if (!result.allowed) {
+      res.setHeader('Retry-After', String(result.retryAfterSeconds));
       return res.status(429).json({
         success: false,
         error: 'Too many requests. Please slow down and try again later.',
       });
     }
-
-    next();
+    return next();
   };
 }
-
-// Periodic memory pruning to prevent unbound Map growth in high DAU production
-setInterval(() => {
-  const now = Date.now();
-  for (const store of rateLimitStores.values()) {
-    for (const [ip, record] of store.entries()) {
-      if (now > record.resetTime) {
-        store.delete(ip);
-      }
-    }
-  }
-}, 5 * 60 * 1000).unref();
 
 const authRateLimiter = createRateLimiter('auth', 20, 60 * 1000); // 20 attempts per minute
 const apiRateLimiter = createRateLimiter('api', 120, 60 * 1000); // 120 requests per minute

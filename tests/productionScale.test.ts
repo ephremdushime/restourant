@@ -6,6 +6,9 @@ import os from 'os';
 import { isPostgresConfigured, getPostgresPool } from '../src/services/db/postgresAdapter';
 import {
   isRedisConfigured,
+  consumeRateLimit,
+  revokeSessionToken,
+  isSessionTokenRevoked,
   recordTokenScan,
   isTokenUsed,
   resetMemoryCache,
@@ -111,6 +114,64 @@ describe('Production Scalability & Cloud Infrastructure Verification (50,000 DAU
 
       assert.equal(resA.allowed, true);
       assert.equal(resB.allowed, true);
+    });
+
+    it('enforces local rate limits when Redis is not configured', async () => {
+      const previousRedisUrl = process.env.REDIS_URL;
+      delete process.env.REDIS_URL;
+      try {
+        const bucket = `local-test-${Date.now()}`;
+        const first = await consumeRateLimit(bucket, '127.0.0.1', 2, 60000);
+        const second = await consumeRateLimit(bucket, '127.0.0.1', 2, 60000);
+        const third = await consumeRateLimit(bucket, '127.0.0.1', 2, 60000);
+        assert.equal(first.allowed, true);
+        assert.equal(second.allowed, true);
+        assert.equal(third.allowed, false);
+        assert.equal(third.available, true);
+      } finally {
+        if (previousRedisUrl === undefined) delete process.env.REDIS_URL;
+        else process.env.REDIS_URL = previousRedisUrl;
+      }
+    });
+
+    it('uses Redis atomic counters for shared cloud rate limits', {
+      skip: !process.env.TEST_REDIS_URL ? 'TEST_REDIS_URL is not configured' : false,
+    }, async () => {
+      const previousRedisUrl = process.env.REDIS_URL;
+      await closeRedis();
+      process.env.REDIS_URL = process.env.TEST_REDIS_URL!;
+      try {
+        const bucket = `redis-test-${Date.now()}`;
+        const first = await consumeRateLimit(bucket, '127.0.0.1', 2, 60000);
+        const second = await consumeRateLimit(bucket, '127.0.0.1', 2, 60000);
+        const third = await consumeRateLimit(bucket, '127.0.0.1', 2, 60000);
+        assert.equal(first.available, true);
+        assert.equal(first.allowed, true);
+        assert.equal(second.allowed, true);
+        assert.equal(third.allowed, false);
+      } finally {
+        await closeRedis();
+        if (previousRedisUrl === undefined) delete process.env.REDIS_URL;
+        else process.env.REDIS_URL = previousRedisUrl;
+      }
+    });
+
+    it('persists only session-token digests in Redis revocation storage', {
+      skip: !process.env.TEST_REDIS_URL ? 'TEST_REDIS_URL is not configured' : false,
+    }, async () => {
+      const previousRedisUrl = process.env.REDIS_URL;
+      await closeRedis();
+      process.env.REDIS_URL = process.env.TEST_REDIS_URL!;
+      try {
+        const digest = `session-digest-test-${Date.now()}`;
+        assert.equal(await revokeSessionToken(digest, 60), true);
+        assert.deepEqual(await isSessionTokenRevoked(digest), { revoked: true, available: true });
+        assert.deepEqual(await isSessionTokenRevoked(`${digest}-other`), { revoked: false, available: true });
+      } finally {
+        await closeRedis();
+        if (previousRedisUrl === undefined) delete process.env.REDIS_URL;
+        else process.env.REDIS_URL = previousRedisUrl;
+      }
     });
 
     it('prunes expired tokens and allows token reuse after TTL window expires', async () => {
