@@ -68,6 +68,9 @@ export async function consumeRateLimit(
   }
   const memoryKey = `${safeBucket}:${safeSubject}`;
   const existing = memoryRateLimits.get(memoryKey);
+  if (!existing && memoryRateLimits.size >= 10000) {
+    return { allowed: false, remaining: 0, retryAfterSeconds: 1, available: false };
+  }
   const record = !existing || now >= existing.resetAt
     ? { count: 1, resetAt: now + safeWindow }
     : { count: existing.count + 1, resetAt: existing.resetAt };
