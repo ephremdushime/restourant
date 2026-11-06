@@ -1100,8 +1100,8 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   required
                   className="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-white focus:border-amber-500 outline-hidden"
                 >
-                  <option value="">-- Choose customer --</option>
-                  {state.customers.map((c) => (
+                  <option value="">-- Choose boss-approved customer --</option>
+                  {state.customers.filter((c) => c.registrationStatus === 'approved').map((c) => (
                     <option key={c.id} value={c.id}>
                       #{c.memberNo} - {c.name} ({c.restaurantCode}) · {c.registrationStatus || 'legacy'}
                     </option>
