@@ -9,7 +9,6 @@ import {
   RefreshCw,
   Database,
   ArrowRightLeft,
-  CheckCircle2,
   AlertTriangle,
   HardDriveDownload,
   Shield,
