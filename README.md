@@ -284,10 +284,14 @@ SESSION_SECRET="generate_a_strong_64_hex_char_secret_here_for_session_signing"
 RESTOPASS_MASTER_SECRET="generate_a_strong_64_hex_char_secret_here_for_master_authority"
 VITE_RESTOPASS_MASTER_KEY="generate_a_strong_64_hex_char_secret_here_for_master_authority"
 
-# Optional role password overrides
+# Platform administrator
 RESTOPASS_SUPERADMIN_PASSWORD="your_strong_superadmin_password"
-RESTOPASS_BOSS_PASSWORD="your_strong_restaurant_boss_password"
-RESTOPASS_STAFF_DEFAULT_PIN="1234"
+
+# Required production restaurant-admin credentials; use a unique account per tenant.
+# JSON object keyed by restaurant code. Passwords should be unique 32+ character secrets.
+RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS='{"RW01":{"username":"manager@your-restaurant.rw","password":"REPLACE_WITH_A_UNIQUE_32_CHAR_SECRET"}}'
+
+# Do not configure a shared production staff PIN. Provision a unique PIN per staff account.
 ```
 
 Generate cryptographically strong secrets using Node.js:
