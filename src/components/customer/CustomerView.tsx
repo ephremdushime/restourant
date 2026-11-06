@@ -356,9 +356,18 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             <div className="flex justify-between text-sm"><span className="text-slate-400">Grace meals available</span><strong className="text-emerald-300">{Math.max(0, customer.gracePlatesRemaining ?? 4)} / 4</strong></div>
             <div className="flex justify-between text-sm"><span className="text-slate-400">Registration review</span><strong className="text-amber-300">Awaiting boss approval</strong></div>
           </div>
+          <div className="rounded-2xl bg-white p-4 flex flex-col items-center gap-2">
+            <QrCanvas
+              value={generateCardToken(customer.restaurantCode, customer.memberNo, customer.cardVersion)}
+              size={210}
+              className="max-w-full"
+            />
+            <span className="text-xs font-bold text-slate-900">Temporary meal pass · #${customer.memberNo}</span>
+          </div>
           <p className="text-sm leading-relaxed text-slate-200">
             Your reception payment has been confirmed. You may use up to four grace meals while the Restaurant Boss reviews your registration. Your full dashboard and physical card will be enabled after approval.
           </p>
+          <p className="text-xs text-amber-200">Show this QR at the cafeteria scanner for your four provisional grace meals. Do not share or post your QR code.</p>
           <p className="text-xs text-slate-400">You can sign in with your registered phone number and PIN to check this status. No additional payment is due for this approval step.</p>
         </div>
       </div>
