@@ -704,7 +704,711 @@ function canAccessCustomerPhoto(user: UserSession | null | undefined, customer: 
 function safeCustomerPhotoUrl(customer: any): string {
   if (customer && typeof customer.id === 'string' && typeof customer.restaurantCode === 'string' &&
       typeof customer.photoStorageKey === 'string' &&
-      customer.photoStorageKey.startsWith(`patron-photos/${customer.restaurantCode.toUpperCase()}/`)) {
+      new RegExp(`^patron-photos/${customer.restaurantCode.toUpperCase()}/[a-f0-9-]{36}\\.(jpg|png|webp)import express, { Request, Response, NextFunction } from 'express';
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+import {
+  isPostgresConfigured,
+  checkPostgresReady,
+  initPostgres,
+  loadStateFromPostgres,
+  saveStateToPostgres,
+  insertLedgerEntryPostgres,
+  commitPlateTransferPostgres,
+} from './src/services/db/postgresAdapter';
+import { recordTokenScan, isRedisConfigured, checkRedisReady, revokeSessionToken, isSessionTokenRevoked } from './src/services/cache/redisClient';
+import { uploadBase64Photo, getPrivatePatronPhoto, deletePrivatePatronPhoto } from './src/services/storage/objectStorage';
+
+const app = express();
+const PORT = parseInt(process.env.PORT || '3000', 10);
+
+// Configure trust proxy for cloud deployment (Cloudflare, AWS ALB, Nginx, Railway, Render)
+const trustProxySetting = process.env.TRUST_PROXY?.trim().toLowerCase();
+if (trustProxySetting === 'true') {
+  app.set('trust proxy', true);
+} else if (trustProxySetting === 'false' || trustProxySetting === '0') {
+  app.set('trust proxy', false);
+} else if (trustProxySetting && /^\d+$/.test(trustProxySetting)) {
+  app.set('trust proxy', Number(trustProxySetting));
+} else if (trustProxySetting) {
+  // Explicit trusted proxy subnet(s), e.g. loopback or a private reverse-proxy network.
+  app.set('trust proxy', trustProxySetting);
+} else {
+  // Do not trust client-supplied X-Forwarded-* headers unless the operator opts in.
+  app.set('trust proxy', false);
+}
+
+// Cryptographic secrets for session signing & data integrity
+const DEV_SESSION_SECRET = crypto
+  .createHash('sha256')
+  .update('RESTOPASS_DEV_EPHEMERAL_SESSION_KEY_V1')
+  .digest('hex');
+const DEV_MASTER_SECRET = ['RESTOPASS', 'RWANDA', 'MASTER', '2026', 'SUPER', 'ADMIN', 'EPHREM'].join('_');
+
+const FORBIDDEN_PLACEHOLDERS = [
+  'REPLACE_WITH',
+  'CHANGE_ME',
+  'CHANGE_THIS',
+  'CHANGETHIS',
+  'YOUR_SECRET',
+  'EXAMPLE_SECRET',
+  'GENERATE_',
+  'CONFIGURE_',
+  'YOUR_',
+];
+
+function validateProductionSecrets(env: NodeJS.ProcessEnv = process.env): {
+  sessionSecret: string;
+  masterSecret: string;
+} {
+  const isProd = env.NODE_ENV === 'production';
+  const sessionSecret = env.SESSION_SECRET?.trim() || '';
+  const masterSecret = (env.RESTOPASS_MASTER_SECRET || env.RESTOPASS_MASTER_KEY || '')?.trim();
+
+  if (isProd) {
+    if (env.S3_PUBLIC_URL_PREFIX?.trim() || /public-read|public-read-write|authenticated-read/i.test(env.S3_OBJECT_ACL || '')) {
+      throw new Error('[FATAL SECURITY ERROR] Public patron-photo URL prefixes and public object ACLs are forbidden. Use a private bucket and authenticated photo delivery.');
+    }
+    if (!sessionSecret || sessionSecret.length < 32 || sessionSecret === DEV_SESSION_SECRET) {
+      throw new Error(
+        '[FATAL SECURITY ERROR] SESSION_SECRET (>= 32 characters) must be configured in production environment. Server startup aborted.'
+      );
+    }
+    if (FORBIDDEN_PLACEHOLDERS.some((p) => sessionSecret.toUpperCase().includes(p))) {
+      throw new Error(
+        '[FATAL SECURITY ERROR] SESSION_SECRET contains an unconfigured placeholder. Generate a strong random production secret.'
+      );
+    }
+
+    if (!masterSecret || masterSecret.length < 32 || masterSecret === DEV_MASTER_SECRET) {
+      throw new Error(
+        '[FATAL SECURITY ERROR] RESTOPASS_MASTER_SECRET (>= 32 characters) must be configured in production environment. Server startup aborted.'
+      );
+    }
+    if (FORBIDDEN_PLACEHOLDERS.some((p) => masterSecret.toUpperCase().includes(p))) {
+      throw new Error(
+        '[FATAL SECURITY ERROR] RESTOPASS_MASTER_SECRET contains an unconfigured placeholder. Generate a strong random production secret.'
+      );
+    }
+
+    const superAdminPassword = env.RESTOPASS_SUPERADMIN_PASSWORD?.trim() || '';
+    if (superAdminPassword.length < 16 || FORBIDDEN_PLACEHOLDERS.some((p) => superAdminPassword.toUpperCase().includes(p))) {
+      throw new Error('[FATAL SECURITY ERROR] RESTOPASS_SUPERADMIN_PASSWORD must be configured with at least 16 non-placeholder characters in production.');
+    }
+
+    // Production restaurant administrators must have unique tenant-scoped
+    // identities. A single global boss password is explicitly rejected.
+    if (env.RESTOPASS_BOSS_PASSWORD || env.BOSS_PASSWORD) {
+      throw new Error('[FATAL SECURITY ERROR] Shared RESTOPASS_BOSS_PASSWORD is not accepted. Configure RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS instead.');
+    }
+    const rawRestaurantAdminAccounts = env.RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS?.trim() || '';
+    let restaurantAdminAccounts: any;
+    try {
+      restaurantAdminAccounts = JSON.parse(rawRestaurantAdminAccounts);
+    } catch {
+      throw new Error('[FATAL SECURITY ERROR] RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS must be valid JSON keyed by restaurant code.');
+    }
+    if (!restaurantAdminAccounts || typeof restaurantAdminAccounts !== 'object' || Array.isArray(restaurantAdminAccounts)) {
+      throw new Error('[FATAL SECURITY ERROR] RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS must be a non-empty JSON object keyed by restaurant code.');
+    }
+    const accountEntries = Object.entries(restaurantAdminAccounts);
+    if (accountEntries.length === 0 || accountEntries.length > 100) {
+      throw new Error('[FATAL SECURITY ERROR] Configure between 1 and 100 tenant-specific restaurant administrator accounts.');
+    }
+    const seenAdminUsernames = new Set<string>();
+    const seenAdminPasswords = new Set<string>();
+    for (const [restaurantCode, value] of accountEntries) {
+      const account: any = value;
+      const username = typeof account?.username === 'string' ? account.username.trim().toLowerCase() : '';
+      const password = typeof account?.password === 'string' ? account.password : '';
+      if (!/^[A-Z0-9_-]{1,32}$/.test(restaurantCode) || username.length < 3 || username.length > 128 ||
+          password.length < 16 || password.length > 1024 ||
+          FORBIDDEN_PLACEHOLDERS.some((p) => password.toUpperCase().includes(p))) {
+        throw new Error(`[FATAL SECURITY ERROR] Invalid tenant-specific restaurant administrator credentials for ${restaurantCode}.`);
+      }
+      if (seenAdminUsernames.has(username) || seenAdminPasswords.has(password)) {
+        throw new Error('[FATAL SECURITY ERROR] Restaurant administrator usernames and passwords must be unique across tenants.');
+      }
+      seenAdminUsernames.add(username);
+      seenAdminPasswords.add(password);
+    }
+
+    const staffPin = env.RESTOPASS_STAFF_DEFAULT_PIN?.trim();
+    if (staffPin && !/^\d{6,8}$/.test(staffPin)) {
+      throw new Error('[FATAL SECURITY ERROR] RESTOPASS_STAFF_DEFAULT_PIN must be 6-8 digits when configured.');
+    }
+
+    return { sessionSecret, masterSecret };
+  }
+
+  return {
+    sessionSecret: sessionSecret || DEV_SESSION_SECRET,
+    masterSecret: masterSecret || DEV_MASTER_SECRET,
+  };
+}
+
+const resolvedSecrets = validateProductionSecrets(process.env);
+const SESSION_SECRET = resolvedSecrets.sessionSecret;
+const MASTER_KEY = resolvedSecrets.masterSecret;
+
+// Server-side persistent storage with atomic file writing & backups
+const DATA_DIR = path.resolve(process.cwd(), 'data');
+const DB_FILE = path.join(DATA_DIR, 'db.json');
+const DB_BACKUP_FILE = path.join(DATA_DIR, 'db.backup.json');
+
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+// Clean up any leftover atomic write temporary files in data/
+try {
+  const files = fs.readdirSync(DATA_DIR);
+  for (const f of files) {
+    if (f.startsWith('db.tmp.')) {
+      try {
+        fs.unlinkSync(path.join(DATA_DIR, f));
+      } catch {}
+    }
+  }
+} catch {}
+
+let serverDbState: any = null;
+
+function isValidAppState(obj: any): boolean {
+  // An empty but correctly shaped database is valid on first cloud boot;
+  // the super-admin must be able to onboard the first restaurant.
+  return Boolean(obj && typeof obj === 'object' && Array.isArray(obj.restaurants) && Array.isArray(obj.customers));
+}
+
+if (fs.existsSync(DB_FILE)) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
+    if (isValidAppState(parsed)) {
+      serverDbState = parsed;
+      console.log('[Server Authority] Loaded persistent state from db.json');
+    }
+  } catch (e) {
+    console.error('[Server Authority] Error reading db.json, attempting backup restoration:', e);
+    if (fs.existsSync(DB_BACKUP_FILE)) {
+      try {
+        const parsedBackup = JSON.parse(fs.readFileSync(DB_BACKUP_FILE, 'utf-8'));
+        if (isValidAppState(parsedBackup)) {
+          serverDbState = parsedBackup;
+          console.log('[Server Authority] Successfully restored state from backup');
+        }
+      } catch (backupErr) {
+        console.error('[Server Authority] Backup restoration failed:', backupErr);
+      }
+    }
+  }
+}
+
+// Strip mock demo seed items from production server database
+const SEED_EXPENSE_IDS = new Set(['exp_rw01_1', 'exp_rw01_2']);
+const SEED_NOTIFICATION_IDS = new Set(['notif_init_1', 'notif_init_2', 'notif_init_3', 'notif_init_4', 'notif_init_5', 'notif_init_rw02_1']);
+const SEED_BRANCH_IDS = new Set(['br_rw01_main', 'br_rw01_east', 'br_rw01_huye', 'br_rw02_main', 'br_rw02_heights']);
+const SEED_USER_IDS = new Set(['usr_rw01_1', 'usr_rw01_2', 'usr_rw01_3', 'usr_rw02_1']);
+
+/**
+ * Ensures student monetization defaults exist in state per specification
+ */
+function ensureServerDbDefaults(state: any) {
+  if (!state) return;
+  if (!state.licenses) state.licenses = [];
+  if (!state.restaurants) state.restaurants = [];
+  if (!state.customers) state.customers = [];
+  if (!state.ledgerEntries) state.ledgerEntries = [];
+  if (!state.payments) state.payments = [];
+  if (!state.scanEvents) state.scanEvents = [];
+  if (!state.scanPoints) state.scanPoints = [];
+  if (!state.notifications) state.notifications = [];
+  if (!state.branches) state.branches = [];
+  if (!state.stationUsers) state.stationUsers = [];
+  if (!state.expenses) state.expenses = [];
+  if (!state.balanceCheckpoints) state.balanceCheckpoints = [];
+  if (!state.pendingApprovals) state.pendingApprovals = [];
+  if (!state.transfers) state.transfers = [];
+  if (!state.auditLogs) state.auditLogs = [];
+  if (!state.shifts) state.shifts = [];
+  if (!state.cashierSessions) state.cashierSessions = [];
+  if (!state.packages) state.packages = [];
+  if (!state.menuItems) state.menuItems = [];
+  if (!state.plans) state.plans = [];
+  if (!state.customTranslations) state.customTranslations = {};
+  if (!state.usedTokens) state.usedTokens = [];
+  if (!state.studentSubscriptionSettings) {
+    state.studentSubscriptionSettings = {
+      enabled: false, // strictly disabled at launch per spec
+      priceRwf: 500, // exact 500 RWF per month
+      currency: 'RWF',
+      period: 'monthly',
+      graceDays: 3, // 3 calendar days (72 hours)
+      requireForTransfers: true,
+      requireForDashboard: true,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+  if (!state.customerSubscriptions) state.customerSubscriptions = [];
+  if (!state.studentSubscriptionPayments) state.studentSubscriptionPayments = [];
+  if (!state.subscriptionPayments) state.subscriptionPayments = [];
+  if (!state.activationCodes) state.activationCodes = [];
+  if (!state.restaurantSubscriptions) state.restaurantSubscriptions = [];
+  if (!state.restaurantSubscriptionPayments) state.restaurantSubscriptionPayments = [];
+  if (!state.activationRequests) state.activationRequests = [];
+  if (!state.pinRecoveryRequests) state.pinRecoveryRequests = [];
+  if (!Array.isArray(state.deletionTombstones)) state.deletionTombstones = [];
+
+  if (Array.isArray(state.expenses)) {
+    state.expenses = state.expenses.filter((e: any) => !SEED_EXPENSE_IDS.has(e.id) && e.restaurantCode !== 'RW02');
+  }
+  if (Array.isArray(state.notifications)) {
+    state.notifications = state.notifications.filter((n: any) => !SEED_NOTIFICATION_IDS.has(n.id) && n.restaurantCode !== 'RW02');
+  }
+  if (Array.isArray(state.branches)) {
+    state.branches = state.branches.filter((b: any) => !SEED_BRANCH_IDS.has(b.id) && b.restaurantCode !== 'RW02');
+  }
+  if (Array.isArray(state.stationUsers)) {
+    state.stationUsers = state.stationUsers.filter((u: any) => !SEED_USER_IDS.has(u.id) && u.restaurantCode !== 'RW02');
+  }
+
+  // Reapply persisted tombstones in standalone JSON mode as well as PostgreSQL.
+  const tombstoneCollections: Record<string, string> = {
+    customers: 'customers',
+    stationUsers: 'stationUsers',
+    branches: 'branches',
+    packages: 'packages',
+    menuItems: 'menuItems',
+    scanPoints: 'scanPoints',
+    cashierSessions: 'cashierSessions',
+  };
+  const deletedKeys = new Set(
+    (state.deletionTombstones || [])
+      .filter((item: any) => item && tombstoneCollections[item.collection] && item.recordId && item.restaurantCode)
+      .map((item: any) => `${item.collection}:${item.restaurantCode}:${item.recordId}`)
+  );
+  for (const [collection, stateKey] of Object.entries(tombstoneCollections)) {
+    if (Array.isArray(state[stateKey])) {
+      state[stateKey] = state[stateKey].filter(
+        (item: any) => !deletedKeys.has(`${collection}:${item.restaurantCode}:${item.id}`)
+      );
+    }
+  }
+}
+ensureServerDbDefaults(serverDbState);
+
+/**
+ * Persists application state atomically to prevent data corruption.
+ * Writes to a temporary file first, then atomically renames to target file.
+ */
+function atomicSaveDb(state: any): boolean {
+  try {
+    const serialized = JSON.stringify(state, null, 2);
+    const tempFile = path.join(
+      DATA_DIR,
+      `db.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).substring(2, 6)}`
+    );
+
+    // 1. Write to temp file
+    fs.writeFileSync(tempFile, serialized, 'utf-8');
+
+    // 2. Create rolling backup if primary exists
+    if (fs.existsSync(DB_FILE)) {
+      try {
+        fs.copyFileSync(DB_FILE, DB_BACKUP_FILE);
+      } catch {}
+    }
+
+    // 3. Atomic rename with Windows fallback and retry
+    let saved = false;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        fs.renameSync(tempFile, DB_FILE);
+        saved = true;
+        break;
+      } catch {
+        try {
+          fs.copyFileSync(tempFile, DB_FILE);
+          try { fs.unlinkSync(tempFile); } catch {}
+          saved = true;
+          break;
+        } catch {
+          const end = Date.now() + 15;
+          while (Date.now() < end) {}
+        }
+      }
+    }
+    if (!saved) {
+      try {
+        fs.writeFileSync(DB_FILE, serialized, { encoding: 'utf-8', flag: 'w' });
+        saved = true;
+      } catch (writeErr) {
+        console.error('[Server Authority] Final persistence fallback failed:', writeErr);
+      }
+      try { fs.unlinkSync(tempFile); } catch {}
+    }
+    return saved;
+  } catch (err) {
+    console.error('[Server Authority] Critical Error persisting database:', err);
+    return false;
+  }
+}
+
+if (serverDbState) {
+  atomicSaveDb(serverDbState);
+}
+
+/**
+ * Serialized write queue mutex to prevent concurrent write collisions (Finding 5)
+ * Dual persistence engine: saves to PostgreSQL when configured, and atomic JSON file on local disk
+ */
+let dbWriteQueue: Promise<boolean> = Promise.resolve(true);
+function queueDbSave(state: any): Promise<boolean> {
+  return new Promise((resolve) => {
+    dbWriteQueue = dbWriteQueue.then(async () => {
+      try {
+        // Normalize credentials arriving in newly-created or edited station-user
+        // records before either PostgreSQL or the local snapshot persists them.
+        normalizeStationUserCredentials(state);
+        let pgOk = true;
+        if (isPostgresConfigured()) {
+          pgOk = await saveStateToPostgres(state);
+        }
+        const fileOk = atomicSaveDb(state);
+        const ok = isPostgresConfigured() ? pgOk : fileOk;
+        resolve(ok);
+        return ok;
+      } catch (err) {
+        console.error('[Server DB Save Error]', err);
+        resolve(false);
+        return false;
+      }
+    });
+  });
+}
+
+/**
+ * Server-authoritative HMAC and key derivation helpers
+ */
+function serverHmac(key: string, data: string): string {
+  return crypto.createHmac('sha256', key).update(data).digest('hex');
+}
+
+function deriveServerRestaurantKey(restaurantCode: string): string {
+  return serverHmac(MASTER_KEY, `RESTAURANT:${restaurantCode.toUpperCase()}`);
+}
+
+function deriveServerCustomerKey(restaurantKey: string, memberNo: string, keyVersion: number): string {
+  return serverHmac(restaurantKey, `CUSTOMER:${memberNo}|V${keyVersion}`);
+}
+
+function normalizeStationUserCredentials(state: any): boolean {
+  if (!Array.isArray(state?.stationUsers)) return false;
+  let changed = false;
+  for (const stationUser of state.stationUsers) {
+    if (!stationUser || typeof stationUser !== 'object') continue;
+    if (typeof stationUser.pin === 'string' && stationUser.pin.trim()) {
+      // A newly supplied PIN must replace the previous hash, not be discarded
+      // merely because an older pinHash already exists.
+      stationUser.pinHash = computeServerCustomerPinHash(
+        stationUser.pin.trim(),
+        stationUser.id || 'station',
+        stationUser.username || 'operator'
+      );
+      delete stationUser.pin;
+      changed = true;
+    }
+    if (
+      typeof stationUser.passwordHash === 'string' &&
+      stationUser.passwordHash.length > 0 &&
+      !stationUser.passwordHash.startsWith('scrypt$')
+    ) {
+      stationUser.passwordHash = computeServerCustomerPinHash(
+        stationUser.passwordHash,
+        stationUser.id || 'station',
+        stationUser.username || 'operator'
+      );
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function getCurrentServerTimeStep(clockOffsetMs = 0): number {
+  const effectiveTime = Date.now() + clockOffsetMs;
+  return Math.floor(effectiveTime / 30000);
+}
+
+// ----------------------------------------------------
+// Security Headers Middleware (Finding 7)
+// ----------------------------------------------------
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https: blob:; connect-src 'self' ws: wss:; object-src 'none'; frame-ancestors 'none';"
+  );
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
+
+// ----------------------------------------------------
+// In-Memory Rate Limiting (Finding 7)
+// ----------------------------------------------------
+interface RateLimitRecord {
+  count: number;
+  resetTime: number;
+}
+const rateLimitStores = new Map<string, Map<string, RateLimitRecord>>();
+
+function createRateLimiter(bucketName: string, maxRequests: number, windowMs: number) {
+  let store = rateLimitStores.get(bucketName);
+  if (!store) {
+    store = new Map<string, RateLimitRecord>();
+    rateLimitStores.set(bucketName, store);
+  }
+
+  return (req: Request, res: Response, next: NextFunction) => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    let record = store!.get(ip);
+
+    if (!record || now > record.resetTime) {
+      record = { count: 1, resetTime: now + windowMs };
+      store!.set(ip, record);
+    } else {
+      record.count++;
+    }
+
+    if (record.count > maxRequests) {
+      res.setHeader('Retry-After', Math.ceil((record.resetTime - now) / 1000).toString());
+      return res.status(429).json({
+        success: false,
+        error: 'Too many requests. Please slow down and try again later.',
+      });
+    }
+
+    next();
+  };
+}
+
+// Periodic memory pruning to prevent unbound Map growth in high DAU production
+setInterval(() => {
+  const now = Date.now();
+  for (const store of rateLimitStores.values()) {
+    for (const [ip, record] of store.entries()) {
+      if (now > record.resetTime) {
+        store.delete(ip);
+      }
+    }
+  }
+}, 5 * 60 * 1000).unref();
+
+const authRateLimiter = createRateLimiter('auth', 20, 60 * 1000); // 20 attempts per minute
+const apiRateLimiter = createRateLimiter('api', 120, 60 * 1000); // 120 requests per minute
+const syncRateLimiter = createRateLimiter('sync', 40, 60 * 1000); // 40 syncs per minute
+const photoUploadRateLimiter = createRateLimiter('photo-upload', 10, 60 * 1000); // 10 portrait writes per minute
+const photoReadRateLimiter = createRateLimiter('photo-read', 120, 60 * 1000); // 120 authorized reads per minute
+
+// Request body parser with scoped limits (supports patron portrait uploads)
+app.use(express.json({ limit: '10mb' }));
+// Block legacy public upload paths before either Vite or production static middleware.
+app.use((req, res, next) => {
+  if (req.path === '/uploads' || req.path.startsWith('/uploads/')) {
+    return res.status(404).json({ success: false, error: 'Resource not found.' });
+  }
+  return next();
+});
+// Patron photos are never served from a public static directory. All reads use
+// the authenticated, tenant-scoped endpoint below.
+
+// ----------------------------------------------------
+// Cryptographic Session Engine & Token Verification (Finding 1 & 4)
+// ----------------------------------------------------
+export interface UserSession {
+  userId: string;
+  username: string;
+  role: 'stand_staff' | 'restaurant_admin' | 'customer' | 'super_admin';
+  restaurantCode: string;
+  stationId?: string;
+  authVersion?: string;
+  iat: number;
+  exp: number;
+}
+
+const revokedTokens = new Set<string>();
+
+// Periodic pruning of expired revoked session tokens
+setInterval(() => {
+  const now = Date.now();
+  for (const token of revokedTokens) {
+    const parts = token.slice('rp_sess_'.length).split('.');
+    if (parts.length === 2) {
+      try {
+        const payload = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf-8'));
+        if (payload.exp && payload.exp < now) {
+          revokedTokens.delete(token);
+        }
+      } catch {
+        revokedTokens.delete(token);
+      }
+    }
+  }
+}, 10 * 60 * 1000).unref();
+
+/**
+ * Constant-time string equality check to prevent timing side channels
+ */
+function timingSafeCompare(a: string, b: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a, 'utf-8');
+  const bufB = Buffer.from(b, 'utf-8');
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+/**
+ * Signs a session token with HMAC-SHA256
+ */
+function createSessionToken(session: Omit<UserSession, 'iat' | 'exp'>, expiresInMs = 24 * 3600 * 1000): string {
+  const iat = Date.now();
+  const exp = iat + expiresInMs;
+  const payload: UserSession = { ...session, iat, exp };
+  const b64Payload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = crypto
+    .createHmac('sha256', SESSION_SECRET)
+    .update(`RP_SESS:${b64Payload}`)
+    .digest('hex');
+  return `rp_sess_${b64Payload}.${signature}`;
+}
+
+/**
+ * Verifies and decodes a session token
+ */
+function verifySessionToken(token: string): UserSession | null {
+  try {
+    if (!token || !token.startsWith('rp_sess_')) return null;
+    if (revokedTokens.has(token)) return null;
+
+    const parts = token.slice('rp_sess_'.length).split('.');
+    if (parts.length !== 2) return null;
+
+    const [b64Payload, signature] = parts;
+    const expectedSig = crypto
+      .createHmac('sha256', SESSION_SECRET)
+      .update(`RP_SESS:${b64Payload}`)
+      .digest('hex');
+
+    if (!timingSafeCompare(signature, expectedSig)) {
+      return null;
+    }
+
+    const payload: UserSession = JSON.parse(Buffer.from(b64Payload, 'base64url').toString('utf-8'));
+    if (!payload.userId || !payload.role || !payload.exp) return null;
+
+    if (Date.now() > payload.exp) {
+      return null;
+    }
+
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+// Extends Express Request with authenticated user
+declare global {
+  namespace Express {
+    interface Request {
+      user?: UserSession;
+    }
+  }
+}
+
+/**
+ * Middleware: Enforces valid session token and optional role verification
+ */
+function requireAuth(allowedRoles?: string[]) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const authHeader = req.headers.authorization || (req.headers['x-restopass-token'] as string);
+    let token = '';
+
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7).trim();
+    } else if (authHeader) {
+      token = authHeader.trim();
+    }
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required. Please log in to access this resource.',
+      });
+    }
+
+    const session = verifySessionToken(token);
+    if (!session) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid or expired authentication session. Please sign in again.',
+      });
+    }
+
+    if (isRedisConfigured()) {
+      const digest = crypto.createHash('sha256').update(token).digest('hex');
+      const revocation = await isSessionTokenRevoked(digest);
+      if (!revocation.available) {
+        return res.status(503).json({ success: false, error: 'Session revocation service is unavailable. Retry shortly.' });
+      }
+      if (revocation.revoked) {
+        return res.status(401).json({ success: false, error: 'Session has been revoked. Please sign in again.' });
+      }
+    }
+
+    if (process.env.NODE_ENV === 'production' && !isActiveStationSession(session, serverDbState)) {
+      return res.status(401).json({ success: false, error: 'Station account is blocked or no longer exists. Please contact the restaurant administrator.' });
+    }
+    if (process.env.NODE_ENV === 'production' &&
+        session.role === 'restaurant_admin' &&
+        !isCurrentRestaurantAdminSession(session)) {
+      return res.status(401).json({ success: false, error: 'Restaurant administrator credentials changed. Please sign in again.' });
+    }
+
+    if (allowedRoles && allowedRoles.length > 0 && !allowedRoles.includes(session.role)) {
+      return res.status(403).json({
+        success: false,
+        error: `Forbidden: User role '${session.role}' is not authorized for this action.`,
+      });
+    }
+
+    req.user = session;
+    next();
+  };
+}
+
+/**
+ * Photo access is scoped to the subject customer or their own restaurant.
+ * Super-admin access is platform-wide and remains session-authenticated.
+ */
+function canAccessCustomerPhoto(user: UserSession | null | undefined, customer: any): boolean {
+  if (!user || !customer || typeof customer.id !== 'string' ||
+      typeof customer.restaurantCode !== 'string' || !customer.restaurantCode) return false;
+  if (user.role === 'super_admin') return true;
+  if (user.role === 'customer') {
+    return user.userId === customer.id && user.restaurantCode === customer.restaurantCode;
+  }
+  return (user.role === 'stand_staff' || user.role === 'restaurant_admin') &&
+    user.restaurantCode === customer.restaurantCode;
+}
+
+function safeCustomerPhotoUrl(customer: any): string {
+).test(customer.photoStorageKey)) {
     return `/api/customers/${encodeURIComponent(customer.id)}/photo`;
   }
   const candidate = typeof customer?.photoUrl === 'string' ? customer.photoUrl : '';
