@@ -921,8 +921,44 @@ app.post('/api/reception/customer/payment-confirm', apiRateLimiter, requireAuth(
     action: 'REGISTRATION_PAYMENT_CONFIRMED',
     details: `Reception confirmed ${pkg.priceRwf} RWF for customer #${customer.memberNo} via ${paymentMethod.toUpperCase()} (Ref: ${paymentReference}). Account partially activated with up to 4 grace plates; awaiting boss approval.`,
   });
+  if (!Array.isArray(serverDbState.notifications)) serverDbState.notifications = [];
+  const bossNotificationId = `notif_${crypto.randomUUID()}`;
+  const customerNotificationId = `notif_${crypto.randomUUID()}`;
+  serverDbState.notifications.unshift(
+    {
+      id: bossNotificationId,
+      restaurantCode: customer.restaurantCode,
+      target: 'all',
+      senderRole: 'system',
+      senderName: `${staffName} (${stationName})`,
+      type: 'system_broadcast',
+      title: `Payment Confirmed: New Customer #${customer.memberNo}`,
+      message: `Reception confirmed payment for ${customer.name}. Review and approve the registration to activate the full account and issue the physical card.`,
+      priority: 'important',
+      timestamp: now,
+      readByCustomerIds: [],
+      actionTab: 'approvals',
+    },
+    {
+      id: customerNotificationId,
+      restaurantCode: customer.restaurantCode,
+      target: customer.id,
+      targetName: `${customer.name} (#${customer.memberNo})`,
+      senderRole: 'system',
+      senderName: stationName,
+      type: 'topup_success',
+      title: 'Payment Confirmed — PIN Setup Available',
+      message: 'Your reception payment is confirmed. Set your personal PIN to access the limited onboarding dashboard. Your full account and physical card will be enabled after boss approval.',
+      priority: 'important',
+      timestamp: now,
+      readByCustomerIds: [],
+      actionTab: 'my_card',
+    }
+  );
+
   const saved = await queueDbSave(serverDbState);
   if (!saved) {
+    serverDbState.notifications = serverDbState.notifications.filter((n: any) => n.id !== bossNotificationId && n.id !== customerNotificationId);
     serverDbState.pendingApprovals = serverDbState.pendingApprovals.filter((a: any) => a.id !== approvalId);
     Object.assign(customer, previousCustomer);
     return res.status(503).json({ success: false, error: 'Payment confirmation could not be saved. Do not retry with a new reference; contact support.' });
