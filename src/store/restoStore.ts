@@ -2608,7 +2608,7 @@ export class RestoStore {
           ? Math.max(0, customer.gracePlatesConsumed || 0)
           : 0;
       const registrationApproval = customerPendingApprovals.find((approval) => approval.type === 'new_customer');
-      const graceLimit = customer.gracePlatesAllowed ?? registrationApproval?.gracePlatesAllowed ?? 3;
+      const graceLimit = registrationApproval?.gracePlatesAllowed ?? customer.gracePlatesAllowed ?? 3;
       const hasQualifyingPendingPayment =
         customerPendingApprovals.length > 0 || customer.provisionalStatus === 'pending_approval';
       const eligibleGraceAvailable = hasQualifyingPendingPayment && effectiveGraceConsumed < graceLimit;
