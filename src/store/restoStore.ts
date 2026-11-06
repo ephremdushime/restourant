@@ -6808,7 +6808,7 @@ export class RestoStore {
       return {
         allowed: false,
         feature,
-        status: lifecycleCustomer.customerAccessStatus,
+        status: lifecycleCustomer.customerAccessStatus === 'pending_super_admin_activation' ? 'inactive' : 'expired',
         inGracePeriod: false,
         enforcementEnabled: true,
         reason: lifecycleCustomer.customerAccessStatus === 'pending_super_admin_activation'
@@ -6821,7 +6821,7 @@ export class RestoStore {
       return {
         allowed: false,
         feature,
-        status: 'payment_required',
+        status: 'expired',
         inGracePeriod: false,
         enforcementEnabled: true,
         reason: 'Your dashboard access period has expired. Please pay the monthly access fee to continue.',
