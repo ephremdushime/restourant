@@ -198,6 +198,13 @@ export interface AppState {
   activationRequests: CustomerActivationRequest[];
   pinRecoveryRequests: CustomerPinRecoveryRequest[];
   customTranslations?: Partial<Record<Language, any>>;
+  deletionTombstones?: Array<{
+    id: string;
+    collection: string;
+    recordId: string;
+    restaurantCode: string;
+    deletedAt: string;
+  }>;
 }
 
 function getInitialState(): AppState {
@@ -1493,6 +1500,7 @@ export class RestoStore {
 
   constructor() {
     this.state = this.loadState();
+    if (!Array.isArray(this.state.deletionTombstones)) this.state.deletionTombstones = [];
     if (this.state.customTranslations) {
       applyCustomTranslations(this.state.customTranslations);
     }
@@ -1523,6 +1531,21 @@ export class RestoStore {
 
   public getAuthToken(): string | null {
     return this.authToken;
+  }
+
+  private recordDeletionTombstone(collection: string, recordId: string, restaurantCode: string): void {
+    if (!this.state.deletionTombstones) this.state.deletionTombstones = [];
+    const exists = this.state.deletionTombstones.some(
+      (item) => item.collection === collection && item.recordId === recordId && item.restaurantCode === restaurantCode
+    );
+    if (exists) return;
+    this.state.deletionTombstones.push({
+      id: `local_delete_${collection}_${recordId}`,
+      collection,
+      recordId,
+      restaurantCode,
+      deletedAt: new Date().toISOString(),
+    });
   }
 
   private pendingOfflineAuthParams: {
@@ -1665,6 +1688,41 @@ export class RestoStore {
   private mergeServerState(serverState: Partial<AppState>): void {
     let hasChanges = false;
     const isProdClean = typeof window !== 'undefined' && !this.isDemoModeActive();
+
+    // Merge durable server tombstones before merging any records. This prevents
+    // stale local/offline copies from reappearing in the active UI.
+    if (Array.isArray(serverState.deletionTombstones) && serverState.deletionTombstones.length > 0) {
+      if (!this.state.deletionTombstones) this.state.deletionTombstones = [];
+      const tombstoneKeys = new Set(
+        this.state.deletionTombstones.map((item) => `${item.collection}:${item.restaurantCode}:${item.recordId}`)
+      );
+      for (const item of serverState.deletionTombstones) {
+        const key = `${item.collection}:${item.restaurantCode}:${item.recordId}`;
+        if (!tombstoneKeys.has(key)) {
+          this.state.deletionTombstones.push(item);
+          tombstoneKeys.add(key);
+        }
+      }
+      const deleted = new Set(tombstoneKeys);
+      const mappings: Record<string, keyof AppState> = {
+        customers: 'customers',
+        stationUsers: 'stationUsers',
+        branches: 'branches',
+        packages: 'packages',
+        menuItems: 'menuItems',
+        scanPoints: 'scanPoints',
+        cashierSessions: 'cashierSessions',
+      };
+      for (const [collection, stateKey] of Object.entries(mappings)) {
+        const current = (this.state as any)[stateKey];
+        if (Array.isArray(current)) {
+          (this.state as any)[stateKey] = current.filter(
+            (item: any) => !deleted.has(`${collection}:${item.restaurantCode}:${item.id}`)
+          );
+        }
+      }
+      hasChanges = true;
+    }
 
     // 1. Merge customers by id (preserving local pinHash when redacted by customer scope)
     if (serverState.customers && Array.isArray(serverState.customers)) {
@@ -4565,6 +4623,7 @@ export class RestoStore {
     const idx = this.state.packages.findIndex((p) => p.id === packageId && p.restaurantCode === restaurantCode);
     if (idx !== -1) {
       const removed = this.state.packages.splice(idx, 1)[0];
+      this.recordDeletionTombstone('packages', removed.id, restaurantCode);
       this.logAudit({
         restaurantCode,
         actorRole: 'restaurant_admin',
@@ -4582,6 +4641,8 @@ export class RestoStore {
    * Reset packages for a restaurant to standard default packages
    */
   public resetRestaurantPackages(restaurantCode: string, actorName = 'Restaurant Admin'): Package[] {
+    const removedPackages = this.state.packages.filter((p) => p.restaurantCode === restaurantCode);
+    for (const item of removedPackages) this.recordDeletionTombstone('packages', item.id, restaurantCode);
     this.state.packages = this.state.packages.filter((p) => p.restaurantCode !== restaurantCode);
     const refreshed = this.getRestaurantPackages(restaurantCode);
     this.logAudit({
@@ -4817,6 +4878,7 @@ export class RestoStore {
     const idx = this.state.menuItems.findIndex((i) => i.id === id && i.restaurantCode === restaurantCode);
     if (idx !== -1) {
       const removed = this.state.menuItems.splice(idx, 1)[0];
+      this.recordDeletionTombstone('menuItems', removed.id, restaurantCode);
       this.logAudit({
         restaurantCode,
         actorRole: 'restaurant_admin',
@@ -4897,6 +4959,7 @@ export class RestoStore {
     const idx = this.state.branches.findIndex((b) => b.id === branchId && b.restaurantCode === restaurantCode);
     if (idx !== -1) {
       const removed = this.state.branches.splice(idx, 1)[0];
+      this.recordDeletionTombstone('branches', removed.id, restaurantCode);
       this.logAudit({
         restaurantCode,
         branchId: removed.id,
@@ -5077,6 +5140,7 @@ export class RestoStore {
     );
     if (idx !== -1) {
       const removed = this.state.stationUsers.splice(idx, 1)[0];
+      this.recordDeletionTombstone('stationUsers', removed.id, restaurantCode);
       this.logAudit({
         restaurantCode,
         branchId: removed.branchId,
@@ -6340,6 +6404,7 @@ export class RestoStore {
     if (idx === -1) return false;
 
     const cust = this.state.customers.splice(idx, 1)[0];
+    this.recordDeletionTombstone('customers', cust.id, cust.restaurantCode);
     this.logAudit({
       restaurantCode: cust.restaurantCode,
       actorRole: 'restaurant_admin',
