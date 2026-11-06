@@ -6838,6 +6838,30 @@ export class RestoStore {
       };
     }
 
+    if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'complimentary' && lifecycleSubscription?.status === 'complimentary') {
+      return {
+        allowed: true,
+        feature,
+        status: 'complimentary',
+        inGracePeriod: false,
+        enforcementEnabled: true,
+        expiresAt: lifecycleSubscription.currentPeriodEnd,
+        reason: 'Super Admin activated the one-month complimentary dashboard period.',
+      };
+    }
+    if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'active' &&
+        (lifecycleSubscription?.status === 'active' || lifecycleSubscription?.status === 'grace_period')) {
+      return {
+        allowed: true,
+        feature,
+        status: lifecycleSubscription.status,
+        inGracePeriod: lifecycleSubscription.status === 'grace_period',
+        enforcementEnabled: true,
+        expiresAt: lifecycleSubscription.currentPeriodEnd,
+        gracePeriodEnd: lifecycleSubscription.gracePeriodEnd,
+      };
+    }
+
     // 1. If feature flag is disabled at launch: All existing rules apply without subscription requirement
     if (!settings.enabled) {
       return {
