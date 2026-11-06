@@ -25,7 +25,8 @@ It replaces paper meal tickets, fragile manual spreadsheets, and screenshot-vuln
 9. [Getting Started & Local Development](#9-getting-started--local-development)
 10. [Production Environment & Security Configuration](#10-production-environment--security-configuration)
 11. [API Reference](#11-api-reference)
-12. [Automated Quality Gate & Test Suite](#12-automated-quality-gate--test-suite)
+12. [Cloud-Authoritative Production Deployment](#12-cloud-authoritative-production-deployment)
+13. [Automated Quality Gate & Test Suite](#13-automated-quality-gate--test-suite)
 
 ---
 
@@ -115,13 +116,13 @@ $$\text{RestaurantKey} = \text{HMAC-SHA256}(\text{MasterSecret},\ \text{"RESTAUR
 - **Standard Dimensions**: ISO/IEC 7810 ID-1 (`85.60mm × 53.98mm`, aspect ratio ~`1.586`).
 - **Front Side**: Restaurant branding, patron photo, full name, Member ID (`#28491`), serial number (`RP202628491`), and high-contrast `c1` QR code. **Dynamic meal balances are never printed on the physical card.**
 - **Back Side**: Bilingual ownership & return notice in Kinyarwanda (*"Iyi karita ni umutungo wa resitora..."*) and English (*"This card is the property of the restaurant..."*).
-- **Print Stylesheet**: Dedicated `@media print` and `@page { size: 85.60mm 53.98mm; margin: 0; }` rules in [`src/index.css`](file:///c:/Users/ADMIN/Restourant/restourant/src/index.css) ensure exact duplex page breaks for Front Only, Back Only, or Double-Sided (`Front -> Page Break -> Back`) printing.
+- **Print Stylesheet**: Dedicated `@media print` and `@page { size: 85.60mm 53.98mm; margin: 0; }` rules in [`src/index.css`](src/index.css) ensure exact duplex page breaks for Front Only, Back Only, or Double-Sided (`Front -> Page Break -> Back`) printing.
 
 ---
 
 ## 4. Scanner Station Validation & Sound Alert Specification
 
-Every scan at the buffet stand executes **6 ordered validation rules** in [`restoStore.processScan()`](file:///c:/Users/ADMIN/Restourant/restourant/src/store/restoStore.ts) and emits one of two unmistakable Web Audio synthesizer tones via [`audioService.ts`](file:///c:/Users/ADMIN/Restourant/restourant/src/services/audioService.ts):
+Every scan at the buffet stand executes **6 ordered validation rules** in [`restoStore.processScan()`](src/store/restoStore.ts) and emits one of two unmistakable Web Audio synthesizer tones via [`audioService.ts`](src/services/audioService.ts):
 
 - **Sound 1 (`playSuccessSound`)**: One short, bright confirmation tone (`1850Hz -> 2150Hz`) played **only** after a meal deduction or authorized grace meal is committed. Identical for physical cards and phone QR passes.
 - **Sound 2 (`playFailureSound`)**: One distinct, lower-pitched double warning tone (`260Hz -> 195Hz` sawtooth) played **once** whenever a scan is rejected.
@@ -244,7 +245,7 @@ npm install
 ```
 
 ### 2. Configure Environment Variables
-Copy [`.env.example`](file:///c:/Users/ADMIN/Restourant/restourant/.env.example) to `.env`:
+Copy [`.env.example`](.env.example) to `.env`:
 ```bash
 cp .env.example .env
 ```
@@ -272,7 +273,7 @@ This launches the Express authority server and Vite middleware together on **`ht
 > **Release gate:** This branch is not approved for live production until the external items in [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md) are closed. A green CI run alone is not production approval.
 
 > [!IMPORTANT]
-> In `NODE_ENV=production`, [`server.ts`](file:///c:/Users/ADMIN/Restourant/restourant/server.ts) enforces `validateProductionSecrets()` at startup and **will refuse to boot** if `SESSION_SECRET` or `RESTOPASS_MASTER_SECRET` is missing, shorter than 32 characters, or set to a development default.
+> In `NODE_ENV=production`, [`server.ts`](server.ts) enforces `validateProductionSecrets()` at startup and **will refuse to boot** if `SESSION_SECRET` or `RESTOPASS_MASTER_SECRET` is missing, shorter than 32 characters, or set to a development default.
 
 ### Required Production Variables (`.env`)
 
@@ -391,8 +392,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 ---
 
-## 12. Production Cloud Deployment & Dual-Path Failover Architecture (single-instance pilot)
-
+## 12. Cloud-Authoritative Production Deployment
 
 Future customer dashboard Mobile Money subscription architecture, merchant registration/onboarding runbook, provider adapter contract, database requirements, and activation checklist: [`docs/architecture/mobile-money-subscription-integration.md`](docs/architecture/mobile-money-subscription-integration.md).
 
@@ -406,7 +406,7 @@ Future customer dashboard Mobile Money subscription architecture, merchant regis
 - Scanning is cloud-authoritative. If the reception laptop is powered off, paired scanners can still reach the cloud directly. If internet or cloud dependencies are unavailable, scans fail closed. Offline meal redemption is intentionally disabled.
 - Encrypted local backups and dependency-aware readiness are implemented. Off-site replication, a staging restore drill, external penetration testing, production alerting and load testing remain release gates.
 
-## 12. Cloud-Authoritative Production Deployment
+### Cloud Authority Topology
 
 RestoPass uses one canonical cloud authority for customer accounts, tenant administration, approvals, payments and meal balances.
 
@@ -418,8 +418,6 @@ RestoPass uses one canonical cloud authority for customer accounts, tenant admin
   - `https://app.restopass.rw/rw02` (Kigali Heights Dining)
   - `https://app.restopass.rw/rw03` (UR Huye Dining)
   - Sub-pages: `/rw02/register` (Self-Registration) and `/rw02/boss` (Boss Approvals)
-
-
 
 **Hosting scope:** The current PostgreSQL-backed cloud topology is a single application instance. Do not enable horizontal app replicas or claim a 50,000-DAU capacity until the state model is moved to transaction-scoped database operations and load-tested. For deployment, backups and recovery, follow [the Production Hosting Runbook](docs/PRODUCTION_HOSTING_RUNBOOK.md). Customer Mobile Money checkout and callback processing remain intentionally disabled pending the verified MTN Collections integration.
 
@@ -441,7 +439,7 @@ docker compose --project-directory . --env-file .env -f deploy/docker-compose.pr
 
 ## 13. Automated Quality Gate & Test Suite
 
-Every push and pull request to `main` is verified by GitHub Actions ([`.github/workflows/ci.yml`](file:///c:/Users/ADMIN/Restourant/restourant/.github/workflows/ci.yml)):
+Every push and pull request to `main` is verified by GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
 
 ```bash
 npm run lint
@@ -449,17 +447,17 @@ npm test
 npm run build
 ```
 
-### Test Coverage Breakdown (`88` Passing Tests across `23` Suites)
-- **[`tests/productionScale.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/productionScale.test.ts)**: PostgreSQL schema DDL parsing and relational table definitions, graceful offline database fallback, distributed Redis 30s QR replay guard with atomic SETNX, private S3/Spaces/R2 object storage with private local fallback, authenticated tenant-scoped photo upload/read, and cross-tenant denial tests.
-- **[`tests/apiSecurity.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/apiSecurity.test.ts)**: HMAC session token signing, tampering/expiration rejection, role-based tenant scoping, atomic DB backup persistence, customer identity isolation (`getCurrentCustomer` never falls back to another customer), and production secret validation.
-- **[`tests/cryptoService.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/cryptoService.test.ts)**: SHA-256 digests, HMAC-SHA256, hierarchical restaurant/customer key isolation, constant-time comparison, salted PIN verification, and `c1`/`v1` QR token verification.
-- **[`tests/customerAuthAndPhysicalCard.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/customerAuthAndPhysicalCard.test.ts)**: 7-step end-to-end verification of provisional registration, boss approval with grace meal reconciliation, non-SMS 6+ digit PIN activation, rate-limited login, audited PIN recovery, CR80 physical card scanning, and `500 RWF` monetization gating with physical card fallback.
-- **[`tests/ledgerIntegrity.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/ledgerIntegrity.test.ts)**: Append-only ledger balance derivation from checkpoints and immutable top-up entries.
-- **[`tests/magicAuth.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/magicAuth.test.ts)**: WhatsApp `v2` magic-link HMAC verification, payload/signature tampering rejection, expiration, and single-use replay prevention.
-- **[`tests/productionRemediation.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/productionRemediation.test.ts)**: Elimination of station pairing bypass codes, brute-force lockout, ledger idempotency guards, serialized disk writes under concurrency, and dynamic phone QR replay blocking.
-- **[`tests/studentSubscription.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/studentSubscription.test.ts)**: Launch feature flag defaults, `500 RWF` integer safety, subscription entitlement rules and 72-hour grace period boundaries, complimentary access auditing, and physical card independence.
-- **[`tests/topupGraceAndScannerSpec.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/topupGraceAndScannerSpec.test.ts)**: All 5 top-up/grace accounting scenarios (`103 + 60 -> 163`, `5 - 2 + 60 -> 63`, `0 + 60 - 2 -> 58`, new customer `60 - 3 -> 57`, `0 balance + 3 grace used + second pending top-up -> blocked`) and all 12 scanner station validation and audio acceptance tests.
-- **[`tests/selfRegistrationAndPrintReadyExport.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/selfRegistrationAndPrintReadyExport.test.ts)**: Self-onboarding student workflow, Boss approval activation, print-ready PVC card batch export, and initial PIN setup.
+### Test Coverage Breakdown (`82` Passing Tests across `12` Suites)
+- **[`tests/productionScale.test.ts`](tests/productionScale.test.ts)**: PostgreSQL schema DDL parsing and relational table definitions, graceful offline database fallback, distributed Redis 30s QR replay guard with atomic SETNX, private S3/Spaces/R2 object storage with private local fallback, authenticated tenant-scoped photo upload/read, and cross-tenant denial tests.
+- **[`tests/apiSecurity.test.ts`](tests/apiSecurity.test.ts)**: HMAC session token signing, tampering/expiration rejection, role-based tenant scoping, atomic DB backup persistence, customer identity isolation (`getCurrentCustomer` never falls back to another customer), and production secret validation.
+- **[`tests/cryptoService.test.ts`](tests/cryptoService.test.ts)**: SHA-256 digests, HMAC-SHA256, hierarchical restaurant/customer key isolation, constant-time comparison, salted PIN verification, and `c1`/`v1` QR token verification.
+- **[`tests/customerAuthAndPhysicalCard.test.ts`](tests/customerAuthAndPhysicalCard.test.ts)**: 7-step end-to-end verification of provisional registration, boss approval with grace meal reconciliation, non-SMS 6+ digit PIN activation, rate-limited login, audited PIN recovery, CR80 physical card scanning, and `500 RWF` monetization gating with physical card fallback.
+- **[`tests/ledgerIntegrity.test.ts`](tests/ledgerIntegrity.test.ts)**: Append-only ledger balance derivation from checkpoints and immutable top-up entries.
+- **[`tests/magicAuth.test.ts`](tests/magicAuth.test.ts)**: WhatsApp `v2` magic-link HMAC verification, payload/signature tampering rejection, expiration, and single-use replay prevention.
+- **[`tests/productionRemediation.test.ts`](tests/productionRemediation.test.ts)**: Elimination of station pairing bypass codes, brute-force lockout, ledger idempotency guards, serialized disk writes under concurrency, and dynamic phone QR replay blocking.
+- **[`tests/studentSubscription.test.ts`](tests/studentSubscription.test.ts)**: Launch feature flag defaults, `500 RWF` integer safety, subscription entitlement rules and 72-hour grace period boundaries, complimentary access auditing, and physical card independence.
+- **[`tests/topupGraceAndScannerSpec.test.ts`](tests/topupGraceAndScannerSpec.test.ts)**: All 5 top-up/grace accounting scenarios (`103 + 60 -> 163`, `5 - 2 + 60 -> 63`, `0 + 60 - 2 -> 58`, new customer `60 - 3 -> 57`, `0 balance + 3 grace used + second pending top-up -> blocked`) and all 12 scanner station validation and audio acceptance tests.
+- **[`tests/selfRegistrationAndPrintReadyExport.test.ts`](tests/selfRegistrationAndPrintReadyExport.test.ts)**: Self-onboarding student workflow, Boss approval activation, print-ready PVC card batch export, and initial PIN setup.
 
 ---
 

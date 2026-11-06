@@ -536,6 +536,23 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
   }
 }
 
+export type PlateTransferCommitErrorCode =
+  | 'NOT_READY'
+  | 'CUSTOMER_NOT_FOUND'
+  | 'INSUFFICIENT_BALANCE'
+  | 'IDEMPOTENCY_CONFLICT'
+  | 'PERSISTENCE_ERROR';
+
+export interface PlateTransferCommitResult {
+  ok: boolean;
+  idempotent?: boolean;
+  transfer?: any;
+  senderBalance?: number;
+  recipientBalance?: number;
+  code?: PlateTransferCommitErrorCode;
+  message?: string;
+}
+
 /**
  * Atomically commits a plate transfer under PostgreSQL row locks.
  * This is the authoritative path for cloud mode; balance validation and both
@@ -547,10 +564,7 @@ export async function commitPlateTransferPostgres(input: {
   ledgerIn: any;
   auditLog: any;
   notifications: any[];
-}): Promise<
-  | { ok: true; idempotent: boolean; transfer: any; senderBalance: number; recipientBalance: number }
-  | { ok: false; code: 'NOT_READY' | 'CUSTOMER_NOT_FOUND' | 'INSUFFICIENT_BALANCE' | 'IDEMPOTENCY_CONFLICT' | 'PERSISTENCE_ERROR'; message: string }
-> {
+}): Promise<PlateTransferCommitResult> {
   const p = getPostgresPool();
   if (!p || !isInitialized) return { ok: false, code: 'NOT_READY', message: 'PostgreSQL is not ready.' };
 

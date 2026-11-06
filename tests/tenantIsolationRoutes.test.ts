@@ -84,7 +84,7 @@ test('authenticated state API scopes boss, scanner and customer accounts to thei
           setHeader() { return this; },
           end(data?: any) { resolve({ status: statusCode, json: async () => data || null }); return this; },
         };
-        app.handle(req, res);
+        (app as any).handle(req, res);
       });
     }
   };
