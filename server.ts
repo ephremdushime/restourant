@@ -1495,8 +1495,9 @@ function isActiveStationSession(session: UserSession, state: any): boolean {
 // POST /api/customer/auth/login: Authenticate phone number + 6+ digit PIN (Rate-limited, lockout, generic error)
 app.post('/api/customer/auth/login', authRateLimiter, async (req, res) => {
   const { phone, pin, username, restaurantCode } = req.body;
-  const cleanIdentifier = (phone || username || '').trim();
-  const cleanPin = (pin || '').trim();
+  const rawIdentifier = typeof phone === 'string' ? phone : (typeof username === 'string' ? username : '');
+  const cleanIdentifier = rawIdentifier.trim();
+  const cleanPin = typeof pin === 'string' ? pin.trim() : '';
 
   // Phone numbers and student/member identifiers are unique only within a
   // restaurant. Never authenticate against the first global match.
@@ -3876,6 +3877,24 @@ async function startServer() {
     }
   } else {
     console.log('[Server Authority] Running in standalone local storage mode (Offline Reception Laptop compatible).');
+  }
+
+  // A first standalone boot has no db.json yet. Initialize a clean, valid empty
+  // state so readiness is truthful and the first restaurant can be onboarded.
+  // Never replace an existing but unreadable database file with empty data.
+  if (!serverDbState) {
+    if (fs.existsSync(DB_FILE)) {
+      throw new Error('Local database file exists but could not be loaded or recovered from backup. Refusing to replace it with empty state.');
+    }
+    if (isPostgresConfigured() && isProduction) {
+      throw new Error('Production database authority did not load. Refusing to initialize standalone state.');
+    }
+    serverDbState = { restaurants: [], customers: [] };
+    ensureServerDbDefaults(serverDbState);
+    if (!atomicSaveDb(serverDbState)) {
+      throw new Error('Could not persist the initial empty standalone database state. Refusing to start unready.');
+    }
+    console.log('[Server Authority] Initialized a new empty standalone database.');
   }
 
   // Hash legacy station credentials only after the authoritative state has loaded.
