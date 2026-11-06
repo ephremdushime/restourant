@@ -8,7 +8,7 @@ import {
   closePostgres,
   checkPostgresReady,
 } from '../src/services/db/postgresAdapter';
-import { checkRedisReady, recordTokenScan, closeRedis } from '../src/services/cache/redisClient';
+import { checkRedisReady, recordTokenScan, closeRedis, revokeSessionToken, isSessionTokenRevoked } from '../src/services/cache/redisClient';
 
 test('PostgreSQL persistence round-trip and concurrent transfer invariants', {
   skip: !process.env.TEST_DATABASE_URL,
@@ -152,6 +152,14 @@ test('Redis readiness and atomic QR replay prevention', {
     assert.equal(await checkRedisReady(), true);
     assert.deepEqual(await recordTokenScan(tokenKey, 60), { allowed: true });
     assert.deepEqual(await recordTokenScan(tokenKey, 60), { allowed: false, reason: 'REPLAY_DETECTED' });
+
+    const revokedDigest = `ci_session_revocation_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    assert.equal(await revokeSessionToken(revokedDigest, 60), true);
+    assert.deepEqual(await isSessionTokenRevoked(revokedDigest), { revoked: true, available: true });
+    // Reconnect to Redis to prove revocation survives an application-side client restart.
+    await closeRedis();
+    assert.equal(await checkRedisReady(), true);
+    assert.deepEqual(await isSessionTokenRevoked(revokedDigest), { revoked: true, available: true });
   } finally {
     await closeRedis();
     if (previousRedisUrl === undefined) delete process.env.REDIS_URL;
