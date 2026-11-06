@@ -1522,6 +1522,10 @@ app.post(
     try {
       const previousPhotoKey = customer.photoStorageKey;
       const previousPhotoStorageType = customer.photoStorageType;
+      const previousPhotoUrl = customer.photoUrl;
+      const previousApprovalPhotos = (serverDbState.pendingApprovals || [])
+        .filter((approval: any) => approval.customerId === customer.id)
+        .map((approval: any) => ({ approval, customerPhoto: approval.customerPhoto }));
       const uploaded = await uploadBase64Photo(photoBase64, customer.restaurantCode);
       const photoUrl = `/api/customers/${encodeURIComponent(customer.id)}/photo`;
       customer.photoStorageKey = uploaded.key;
@@ -1542,7 +1546,13 @@ app.post(
         timestamp: new Date().toISOString(),
       });
 
+      const auditEntryId = serverDbState.auditLogs[serverDbState.auditLogs.length - 1]?.id;
       if (!(await queueDbSave(serverDbState))) {
+        customer.photoStorageKey = previousPhotoKey;
+        customer.photoStorageType = previousPhotoStorageType;
+        customer.photoUrl = previousPhotoUrl;
+        for (const previous of previousApprovalPhotos) previous.approval.customerPhoto = previous.customerPhoto;
+        if (auditEntryId) serverDbState.auditLogs = serverDbState.auditLogs.filter((entry: any) => entry.id !== auditEntryId);
         await deletePrivatePatronPhoto(uploaded.key, uploaded.storageType).catch(() => undefined);
         return res.status(503).json({ success: false, error: 'Photo metadata could not be persisted. The uploaded object was discarded; retry the upload.' });
       }
