@@ -99,7 +99,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
     return digitsOnly.length >= 9 && digitsOnly.length <= 15;
   };
 
-  const handleRegisterNewSubmit = (e: React.FormEvent) => {
+  const handleRegisterNewSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
