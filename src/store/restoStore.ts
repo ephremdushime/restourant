@@ -5612,7 +5612,7 @@ export class RestoStore {
 
   /**
    * Scanner station user / reception provisionally registers a new customer.
-   * Customer can immediately receive up to 3 grace plates while awaiting boss approval!
+   * Customer can receive up to 4 grace plates after reception confirms payment, while awaiting boss approval.
    */
   public registerProvisionalCustomer(
     data: {
@@ -5754,7 +5754,7 @@ export class RestoStore {
       senderName: approval.stationName,
       type: 'topup_success',
       title: `Registration Recorded (#${memberNo}) — Awaiting Boss Approval`,
-      message: `Your registration for ${platesCount} plates (${(approval.amountRwf || 0).toLocaleString()} RWF, Ref: ${approval.paymentReference}) is in the Boss approval queue. You may consume up to 3 grace meals while waiting.`,
+      message: `Your registration for ${platesCount} plates (${(approval.amountRwf || 0).toLocaleString()} RWF, Ref: ${approval.paymentReference}) is in the Boss approval queue. You may consume up to 4 grace meals while waiting.`,
       priority: 'important',
       actionTab: 'my_card',
     });
@@ -6020,7 +6020,7 @@ export class RestoStore {
         platesDelta: -graceConsumed,
         timestamp: now,
         staffId: bossName,
-        reason: `Deduction: -${graceConsumed} grace meals consumed while awaiting boss approval (< 3 policy)`,
+        reason: `Deduction: -${graceConsumed} grace meals consumed while awaiting boss approval (< 4 policy)`,
         reference: `GRACE-CONSUMED-${customer.memberNo}-${approval.id}`,
         idempotencyKey: `idemp_appr_grace_${approval.id}`,
       };
@@ -7370,7 +7370,7 @@ export class RestoStore {
     if (check.status === 'pending_boss_approval') {
       return {
         success: false,
-        error: 'Your registration is still awaiting Restaurant Boss approval. You can use up to 3 grace meals at the stand while waiting.',
+        error: 'Your registration is awaiting Restaurant Boss approval. You can use up to 4 grace meals at the stand while waiting.',
       };
     }
     if (check.status === 'rejected') {
