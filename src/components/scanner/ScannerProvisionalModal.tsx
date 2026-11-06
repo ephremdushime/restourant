@@ -214,7 +214,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
     }
   };
 
-  const handleTopupSubmit = (e: React.FormEvent) => {
+  const handleTopupSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     if (!selectedCustomer) {
@@ -233,7 +233,8 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
     try {
       const reference = paymentReference.trim().toUpperCase();
       if (selectedCustomer.registrationStatus === 'pending_reception_payment') {
-        const result = restoStore.confirmRegistrationPayment({
+        if (isCustomPlates) throw new Error('Choose a configured meal package to confirm a new registration payment.');
+        const result = await restoStore.confirmRegistrationPayment({
           customerId: selectedCustomer.id,
           packageId: isCustomPlates ? undefined : selectedPkg?.id,
           platesRequested: effectivePlates,
