@@ -600,6 +600,10 @@ function requireAuth(allowedRoles?: string[]) {
       }
     }
 
+    if (process.env.NODE_ENV === 'production' && !isActiveStationSession(session, serverDbState)) {
+      return res.status(401).json({ success: false, error: 'Station account is blocked or no longer exists. Please contact the restaurant administrator.' });
+    }
+
     if (allowedRoles && allowedRoles.length > 0 && !allowedRoles.includes(session.role)) {
       return res.status(403).json({
         success: false,
@@ -973,6 +977,17 @@ function verifyStationUserCredentials(entered: string, stationUser: any): boolea
   const pinValid = acceptsPin && verifyServerCustomerPin(entered, { pinHash: stationUser.pinHash });
   const passwordValid = acceptsPassword && verifyServerCustomerPin(entered, { pinHash: stationUser.passwordHash });
   return Boolean(pinValid || passwordValid);
+}
+
+/** Existing production staff sessions are invalidated immediately when an account is blocked or deleted. */
+function isActiveStationSession(session: UserSession, state: any): boolean {
+  if (session.role !== 'stand_staff') return true;
+  const account = (state?.stationUsers || []).find(
+    (item: any) =>
+      item.restaurantCode === session.restaurantCode &&
+      (item.username === session.username || item.id === session.username)
+  );
+  return Boolean(account && account.status === 'active');
 }
 
 // POST /api/customer/auth/login: Authenticate phone number + 6+ digit PIN (Rate-limited, lockout, generic error)
@@ -2955,4 +2970,5 @@ export {
   normalizeStationUserCredentials,
   verifyServerCustomerPin,
   verifyStationUserCredentials,
+  isActiveStationSession,
 };
