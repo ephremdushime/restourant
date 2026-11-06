@@ -30,7 +30,8 @@ HMAC_KEY="$(printf 'RESTOPASS_BACKUP_HMAC:%s' "$BACKUP_ENCRYPTION_KEY" | sha256s
 
 mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR"
-timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+timestamp="${RESTOPASS_BACKUP_TIMESTAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
+if ! [[ "$timestamp" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then echo "Invalid RESTOPASS_BACKUP_TIMESTAMP." >&2; exit 1; fi
 backup_file="$BACKUP_DIR/restopass_$timestamp.dump.enc"
 temporary_file="$backup_file.partial"
 
