@@ -68,6 +68,11 @@ export async function consumeRateLimit(
 
   // Standalone/local deployments are single-process by design.
   const now = Date.now();
+  if (memoryRateLimits.size > 5000) {
+    for (const [key, value] of memoryRateLimits.entries()) {
+      if (now >= value.resetAt) memoryRateLimits.delete(key);
+    }
+  }
   const memoryKey = `${safeBucket}:${safeSubject}`;
   const existing = memoryRateLimits.get(memoryKey);
   const record = !existing || now >= existing.resetAt
