@@ -6410,7 +6410,7 @@ export class RestoStore {
       actorRole: 'restaurant_admin',
       actorName: bossName,
       action: 'CUSTOMER_ACCOUNT_DELETED',
-      details: `Permanently deleted customer account #${cust.memberNo} (${cust.name}) and revoked all card/key credentials.`,
+      details: `Removed customer account #${cust.memberNo} (${cust.name}) from active rosters and revoked all card/key credentials; financial history is retained.`,
     });
 
     this.scheduleSaveState();
