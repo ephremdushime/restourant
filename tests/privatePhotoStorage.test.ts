@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { uploadPatronPhoto, getPrivatePatronPhoto, resetS3Client } from '../src/services/storage/objectStorage';
+import { uploadPatronPhoto, getPrivatePatronPhoto, deletePrivatePatronPhoto, resetS3Client } from '../src/services/storage/objectStorage';
 
 describe('Private patron photo storage', () => {
   test('stores photos outside the public web root and retrieves only validated private keys', async () => {
@@ -35,6 +35,8 @@ describe('Private patron photo storage', () => {
       assert.ok(retrieved);
       assert.equal(retrieved.mimeType, 'image/png');
       assert.deepEqual(retrieved.buffer, png);
+      await deletePrivatePatronPhoto(uploaded.key, 'local');
+      assert.equal(await getPrivatePatronPhoto(uploaded.key), null);
       await assert.rejects(() => getPrivatePatronPhoto('../public/uploads/photo.png'), /Invalid photo key/);
     } finally {
       resetS3Client();
