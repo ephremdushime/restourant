@@ -19,6 +19,7 @@ import {
   verifyRestaurantAdminCredentials,
   getRestaurantAdminAuthVersion,
   isCurrentRestaurantAdminSession,
+  canAccessCustomerPhoto,
   UserSession,
 } from '../server';
 import { restoStore } from '../src/store/restoStore';
@@ -441,6 +442,39 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     });
     assert.equal(isCurrentRestaurantAdminSession(session, rotatedConfig), false);
     assert.equal(isCurrentRestaurantAdminSession({ ...session, authVersion: undefined }, config), false);
+  });
+
+
+  test('authorizes private patron-photo reads only for the subject or same-tenant staff', () => {
+    const customer = { id: 'cust_28491', restaurantCode: 'RW01' };
+    const ownCustomer: UserSession = {
+      userId: 'cust_28491', username: '28491', role: 'customer', restaurantCode: 'RW01',
+      iat: Date.now(), exp: Date.now() + 60000,
+    };
+    const otherCustomer: UserSession = {
+      ...ownCustomer, userId: 'cust_28492', username: '28492',
+    };
+    const sameTenantStaff: UserSession = {
+      ...ownCustomer, userId: 'staff_1', username: 'cashier', role: 'stand_staff',
+    };
+    const sameTenantAdmin: UserSession = {
+      ...sameTenantStaff, role: 'restaurant_admin',
+    };
+    const otherTenantAdmin: UserSession = {
+      ...sameTenantAdmin, restaurantCode: 'RW02',
+    };
+    const platformAdmin: UserSession = {
+      ...sameTenantAdmin, role: 'super_admin', restaurantCode: 'ALL',
+    };
+
+    assert.equal(canAccessCustomerPhoto(ownCustomer, customer), true);
+    assert.equal(canAccessCustomerPhoto(otherCustomer, customer), false);
+    assert.equal(canAccessCustomerPhoto(sameTenantStaff, customer), true);
+    assert.equal(canAccessCustomerPhoto(sameTenantAdmin, customer), true);
+    assert.equal(canAccessCustomerPhoto(otherTenantAdmin, customer), false);
+    assert.equal(canAccessCustomerPhoto(platformAdmin, customer), true);
+    assert.equal(canAccessCustomerPhoto(undefined, customer), false);
+    assert.equal(canAccessCustomerPhoto(sameTenantStaff, null), false);
   });
 
   test('validateProductionSecrets throws fatal error in production when secrets are missing or weak', () => {
