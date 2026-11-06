@@ -708,6 +708,47 @@ app.get('/api/public/restaurants', apiRateLimiter, (_req, res) => {
   res.json({ success: true, restaurants: safeList });
 });
 
+/**
+ * Production restaurant administrator credentials are tenant-specific. The
+ * environment variable contains a JSON object keyed by restaurant code:
+ * { "RW01": { "username": "...", "password": "..." } }.
+ * The legacy global boss password is never accepted in production.
+ */
+function resolveRestaurantAdminAccount(
+  restaurantCode: string,
+  raw = process.env.RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS
+): { username: string; password: string } | null {
+  if (!raw || raw.length > 32768) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const account = parsed[restaurantCode.trim().toUpperCase()];
+    if (!account || typeof account !== 'object' || Array.isArray(account)) return null;
+    const username = typeof account.username === 'string' ? account.username.trim() : '';
+    const password = typeof account.password === 'string' ? account.password : '';
+    if (username.length < 3 || username.length > 128 || password.length < 12 || password.length > 1024) return null;
+    return { username, password };
+  } catch {
+    return null;
+  }
+}
+
+function verifyRestaurantAdminCredentials(
+  restaurantCode: string,
+  username: string,
+  password: string,
+  raw = process.env.RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS,
+  isProduction = process.env.NODE_ENV === 'production'
+): boolean {
+  const account = resolveRestaurantAdminAccount(restaurantCode, raw);
+  if (account) {
+    return timingSafeCompare((username || '').trim().toLowerCase(), account.username.toLowerCase()) &&
+      timingSafeCompare(password || '', account.password);
+  }
+  // Development-only convenience for local demo. Never used in production.
+  return !isProduction && typeof password === 'string' && password.length >= 6;
+}
+
 // ----------------------------------------------------
 // Authentication Routes (Finding 4)
 // ----------------------------------------------------
@@ -761,20 +802,27 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Restaurant code is required' });
     }
     const isProd = process.env.NODE_ENV === 'production';
-    const configuredBossPassword = process.env.RESTOPASS_BOSS_PASSWORD || process.env.BOSS_PASSWORD;
-    const validPassword = configuredBossPassword
-      ? timingSafeCompare(password || '', configuredBossPassword)
-      : (!isProd && typeof password === 'string' && password.length >= 6);
-
-    if (!validPassword) {
-      return res.status(401).json({ success: false, error: 'Invalid Restaurant Administrator credentials' });
-    }
-
     const currentResto = (serverDbState?.restaurants || []).find((r: any) => r.code === restaurantCode);
     if (!currentResto || currentResto.status === 'suspended' || currentResto.status === 'expired') {
       return res.status(403).json({ success: false, error: 'Restaurant is unavailable or not authorized for administrator access.' });
     }
-    const safeBossUsername = (username || `admin_${restaurantCode}@example.local`).trim();
+    const configuredAdminAccount = resolveRestaurantAdminAccount(restaurantCode);
+    if (isProd && !configuredAdminAccount) {
+      console.error(`[SECURITY ERROR] Restaurant admin login blocked: no tenant-specific account is configured for ${restaurantCode}.`);
+      return res.status(503).json({ success: false, error: 'Restaurant administrator account is not configured for this tenant. Contact the platform operator.' });
+    }
+    const validPassword = verifyRestaurantAdminCredentials(
+      restaurantCode,
+      username || '',
+      password || '',
+      process.env.RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS,
+      isProd
+    );
+
+    if (!validPassword) {
+      return res.status(401).json({ success: false, error: 'Invalid Restaurant Administrator credentials' });
+    }
+    const safeBossUsername = configuredAdminAccount?.username || (username || `admin_${restaurantCode}@example.local`).trim();
     const token = createSessionToken({
       userId: `admin_${restaurantCode}`,
       username: safeBossUsername,
@@ -3105,4 +3153,6 @@ export {
   isActiveStationSession,
   applySyncDeletionTombstones,
   canMergeTenantScopedRecord,
+  resolveRestaurantAdminAccount,
+  verifyRestaurantAdminCredentials,
 };
