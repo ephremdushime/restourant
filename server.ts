@@ -1265,6 +1265,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       role: 'stand_staff',
       restaurantCode,
       stationId: stationId || 'stand_1',
+      ...(matchingStaffUser ? { authVersion: getStationUserAuthVersion(matchingStaffUser) } : {}),
     });
     return res.json({
       success: true,
@@ -1482,14 +1483,35 @@ function isActiveCustomerSession(session: UserSession, state: any): boolean {
   );
 }
 
-function isActiveStationSession(session: UserSession, state: any): boolean {
+function getStationUserAuthVersion(stationUser: any): string {
+  return crypto.createHmac('sha256', MASTER_KEY)
+    .update([
+      'RESTOPASS_STATION_AUTH',
+      String(stationUser?.restaurantCode || '').trim().toUpperCase(),
+      String(stationUser?.id || '').trim(),
+      String(stationUser?.username || '').trim().toLowerCase(),
+      String(stationUser?.authType || 'both'),
+      String(stationUser?.pinHash || ''),
+      String(stationUser?.passwordHash || ''),
+    ].join(':'))
+    .digest('hex');
+}
+
+function isActiveStationSession(
+  session: UserSession,
+  state: any,
+  isProduction = process.env.NODE_ENV === 'production'
+): boolean {
   if (session.role !== 'stand_staff') return true;
   const account = (state?.stationUsers || []).find(
     (item: any) =>
       item.restaurantCode === session.restaurantCode &&
       (item.username === session.username || item.id === session.username)
   );
-  return Boolean(account && account.status === 'active');
+  if (!account || account.status !== 'active') return false;
+  if (!isProduction) return true;
+  const expectedVersion = getStationUserAuthVersion(account);
+  return typeof session.authVersion === 'string' && timingSafeCompare(session.authVersion, expectedVersion);
 }
 
 // POST /api/customer/auth/login: Authenticate phone number + 6+ digit PIN (Rate-limited, lockout, generic error)
@@ -3996,6 +4018,7 @@ export {
   verifyServerCustomerPin,
   verifyStationUserCredentials,
   isActiveStationSession,
+  getStationUserAuthVersion,
   isActiveCustomerSession,
   findCustomerForLogin,
   getSuperAdminAuthVersion,
