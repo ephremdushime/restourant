@@ -5664,15 +5664,18 @@ export class RestoStore {
       studentProfile: data.studentProfile,
       cardVersion: 1,
       keyVersion: 1,
-      cardStatus: 'active', // Allowed for provisional grace taps
-      pinHash: '1234',
+      cardStatus: 'active', // Reception-confirmed registration may use only its limited grace allowance
+      pinHash: '',
       hasCustomPin: false,
       provisionalStatus: 'pending_approval',
-      activationStatus: 'pending_approval',
+      activationStatus: 'partial_active',
+      registrationStatus: 'pending_boss_approval',
+      receptionPaymentStatus: 'confirmed',
+      gracePlatesAllowed: 4,
       cardReadyForPrint: false,
       failedLoginAttempts: 0,
       gracePlatesConsumed: 0,
-      gracePlatesRemaining: 3,
+      gracePlatesRemaining: 4,
       pendingApprovalId: approvalId,
       createdAt: now,
       onboardingToken: `OB-${memberNo}-PROV`,
@@ -5704,7 +5707,7 @@ export class RestoStore {
       registeredByStaffName: data.registeredByStaffName || 'Station Staff',
       stationId: data.stationId || 'sp_kgl_01',
       stationName: data.stationName || 'Reception POS Desk',
-      gracePlatesAllowed: 3,
+      gracePlatesAllowed: 4,
       gracePlatesConsumed: 0,
       createdAt: now,
       status: 'pending',
@@ -6129,10 +6132,12 @@ export class RestoStore {
     customer.provisionalStatus = 'approved';
     customer.cardStatus = 'active';
     customer.gracePlatesConsumed = remainingGraceUsed;
-    customer.gracePlatesRemaining = Math.max(0, 3 - remainingGraceUsed);
+    customer.gracePlatesRemaining = Math.max(0, (customer.gracePlatesAllowed || 4) - remainingGraceUsed);
     customer.pendingApprovalId = remainingPending[0]?.id;
     customer.activationStatus = customer.hasCustomPin ? 'active' : 'ready_for_activation';
     if (approval.type === 'new_customer') {
+      customer.registrationStatus = 'approved';
+      customer.customerAccessStatus = customer.customerAccessStatus || 'pending_super_admin_activation';
       customer.cardReadyForPrint = true;
     }
 
