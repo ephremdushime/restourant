@@ -6753,13 +6753,15 @@ export class RestoStore {
 
     // Evaluate expiration & grace period transitions dynamically
     const now = Date.now();
-    if (sub.status === 'active' && sub.currentPeriodEnd) {
+    if ((sub.status === 'active' || sub.status === 'complimentary') && sub.currentPeriodEnd) {
       const endMs = new Date(sub.currentPeriodEnd).getTime();
       const graceMs = sub.gracePeriodEnd ? new Date(sub.gracePeriodEnd).getTime() : endMs + 3 * 24 * 3600 * 1000;
       if (now > graceMs) {
         sub.status = 'expired';
         sub.updatedAt = new Date().toISOString();
-      } else if (now > endMs) {
+        const expiredCustomer = this.state.customers.find((c) => c.id === customerId);
+        if (expiredCustomer?.customerAccessStatus === 'complimentary') expiredCustomer.customerAccessStatus = 'payment_required';
+      } else if (now > endMs && sub.status === 'active') {
         sub.status = 'grace_period';
         sub.updatedAt = new Date().toISOString();
       }
@@ -7073,11 +7075,14 @@ export class RestoStore {
 
     const cust = this.state.customers.find((c) => c.id === params.customerId);
     if (!cust) return { success: false, error: 'Customer not found' };
+    if (cust.registrationStatus && cust.registrationStatus !== 'approved') {
+      return { success: false, error: 'The Restaurant Boss must approve this registration before Super Admin can activate the complimentary month.' };
+    }
 
     if (!this.state.customerSubscriptions) this.state.customerSubscriptions = [];
 
     const nowMs = Date.now();
-    const days = params.durationDays || 30;
+    const days = cust.registrationStatus === 'approved' ? 30 : (params.durationDays || 30);
     const periodEndMs = nowMs + days * 24 * 3600 * 1000;
     const graceEndMs = periodEndMs + 3 * 24 * 3600 * 1000;
 
@@ -7112,6 +7117,12 @@ export class RestoStore {
       sub.complimentaryReason = params.reason.trim();
       sub.complimentaryGrantedBy = params.grantedBy || 'Platform Administrator';
       sub.updatedAt = new Date(nowMs).toISOString();
+    }
+
+    if (cust.registrationStatus === 'approved') {
+      cust.customerAccessStatus = 'complimentary';
+      cust.freeAccessStartedAt = new Date(nowMs).toISOString();
+      cust.freeAccessExpiresAt = new Date(periodEndMs).toISOString();
     }
 
     this.logAudit({
