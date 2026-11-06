@@ -7112,6 +7112,43 @@ export class RestoStore {
     return { success: true, subscription: sub };
   }
 
+  public async activatePaidStudentSubscription(params: {
+    customerId: string;
+    paymentMethod: 'cash' | 'mtn_momo' | 'bank_transfer';
+    paymentReference: string;
+    verificationNote?: string;
+  }): Promise<{ success: boolean; subscription?: CustomerSubscription; error?: string }> {
+    if (typeof window === 'undefined' || !navigator.onLine || !this.authToken) {
+      return { success: false, error: 'Paid access activation requires an authenticated online Super Admin session.' };
+    }
+    if (params.paymentMethod !== 'cash' && !params.paymentReference.trim()) {
+      return { success: false, error: 'Enter the verified payment transaction reference.' };
+    }
+    try {
+      const response = await fetch('/api/superadmin/customer/subscription/activate-paid', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.authToken}`,
+        },
+        body: JSON.stringify({
+          customerId: params.customerId,
+          paymentMethod: params.paymentMethod,
+          paymentReference: params.paymentReference.trim(),
+          verificationNote: params.verificationNote?.trim() || '',
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        return { success: false, error: result.error || 'Paid access renewal could not be activated.' };
+      }
+      await this.pullStateFromServer();
+      return { success: true, subscription: result.subscription as CustomerSubscription };
+    } catch {
+      return { success: false, error: 'Unable to reach RestoPass. No access renewal was activated.' };
+    }
+  }
+
   public cancelStudentSubscription(customerId: string): { success: boolean; error?: string } {
     const sub = this.getCustomerSubscription(customerId);
     if (!sub) return { success: false, error: 'Subscription not found' };
