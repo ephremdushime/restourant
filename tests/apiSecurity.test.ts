@@ -278,6 +278,25 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     ], admin), 0);
     assert.equal(state.deletionTombstones.length, 2);
 
+    // More than 200 previously-applied markers must not starve a new deletion
+    // appended after them in an offline client's durable tombstone queue.
+    const manyState: any = {
+      customers: [{ id: 'customer_after_queue', restaurantCode: 'RW01' }],
+      deletionTombstones: Array.from({ length: 205 }, (_, index) => ({
+        id: `old_${index}`,
+        collection: 'customers',
+        recordId: `already_deleted_${index}`,
+        restaurantCode: 'RW01',
+      })),
+      auditLogs: [],
+    };
+    const queuedRequests = [
+      ...manyState.deletionTombstones,
+      { collection: 'customers', recordId: 'customer_after_queue', restaurantCode: 'RW01' },
+    ];
+    assert.equal(applySyncDeletionTombstones(manyState, queuedRequests, admin), 1);
+    assert.equal(manyState.customers.length, 0);
+
     // A customer session cannot submit administrative deletions.
     const customer: UserSession = { ...admin, userId: 'customer_keep_2', username: 'student', role: 'customer' };
     assert.equal(applySyncDeletionTombstones(state, [
