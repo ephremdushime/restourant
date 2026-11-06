@@ -13,6 +13,7 @@ import {
   verifyServerCustomerPin,
   verifyStationUserCredentials,
   isActiveStationSession,
+  applySyncDeletionTombstones,
   UserSession,
 } from '../server';
 import { restoStore } from '../src/store/restoStore';
@@ -233,6 +234,56 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     }), false);
     assert.equal(isActiveStationSession(session, { stationUsers: [] }), false);
     assert.equal(isActiveStationSession({ ...session, role: 'customer' }, { stationUsers: [] }), true);
+  });
+
+  test('applies tenant-scoped soft-deletion tombstones without deleting financial history', () => {
+    const state: any = {
+      customers: [
+        { id: 'customer_delete_1', restaurantCode: 'RW01' },
+        { id: 'customer_keep_2', restaurantCode: 'RW01' },
+        { id: 'customer_other_tenant', restaurantCode: 'RW02' },
+      ],
+      stationUsers: [{ id: 'station_delete_1', restaurantCode: 'RW01', username: 'cashier' }],
+      ledgerEntries: [{ id: 'ledger_keep_1', restaurantCode: 'RW01', customerId: 'customer_delete_1', platesDelta: -1 }],
+      payments: [{ id: 'payment_keep_1', restaurantCode: 'RW01', amountRwf: 1000 }],
+      auditLogs: [],
+      deletionTombstones: [],
+    };
+    const admin: UserSession = {
+      userId: 'admin_rw01',
+      username: 'admin@rw01.test',
+      role: 'restaurant_admin',
+      restaurantCode: 'RW01',
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+    };
+    const applied = applySyncDeletionTombstones(state, [
+      { collection: 'customers', recordId: 'customer_delete_1', restaurantCode: 'RW01' },
+      { collection: 'stationUsers', recordId: 'station_delete_1', restaurantCode: 'RW01' },
+      { collection: 'customers', recordId: 'customer_other_tenant', restaurantCode: 'RW02' },
+      { collection: 'ledgerEntries', recordId: 'ledger_keep_1', restaurantCode: 'RW01' },
+    ], admin);
+
+    assert.equal(applied, 2);
+    assert.deepEqual(state.customers.map((item: any) => item.id), ['customer_keep_2', 'customer_other_tenant']);
+    assert.equal(state.stationUsers.length, 0);
+    assert.equal(state.ledgerEntries.length, 1);
+    assert.equal(state.payments.length, 1);
+    assert.equal(state.deletionTombstones.length, 2);
+    assert.equal(state.auditLogs.length, 2);
+
+    // Replaying the same deletion request is idempotent.
+    assert.equal(applySyncDeletionTombstones(state, [
+      { collection: 'customers', recordId: 'customer_delete_1', restaurantCode: 'RW01' },
+    ], admin), 0);
+    assert.equal(state.deletionTombstones.length, 2);
+
+    // A customer session cannot submit administrative deletions.
+    const customer: UserSession = { ...admin, userId: 'customer_keep_2', username: 'student', role: 'customer' };
+    assert.equal(applySyncDeletionTombstones(state, [
+      { collection: 'customers', recordId: 'customer_keep_2', restaurantCode: 'RW01' },
+    ], customer), 0);
+    assert.equal(state.customers.length, 2);
   });
 
   test('redacts PINs, password hashes, recovery codes and replay state from every client payload', () => {
