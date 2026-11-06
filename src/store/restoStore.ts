@@ -7011,7 +7011,7 @@ export class RestoStore {
     this.pushStateToServer();
     this.notify();
 
-    const providerName = params.provider === 'mtn_momo' ? 'MTN Mobile Money (*182#)' : 'Airtel Money (*500#)';
+    const providerName = params.provider === 'mtn_momo' ? 'MTN Mobile Money (*182#)' : params.provider === 'airtel_money' ? 'Airtel Money (*500#)' : params.provider === 'cash' ? 'cash at reception' : 'bank transfer';
     return {
       success: true,
       payment,
@@ -7091,7 +7091,7 @@ export class RestoStore {
       actorRole: 'customer',
       actorName: payment.memberNo,
       action: 'STUDENT_SUBSCRIPTION_ACTIVATED',
-      details: `Activated student subscription for #${payment.memberNo} via ${payment.provider.toUpperCase()} (Ref: ${payment.internalReference}, Amount: 500 RWF). Valid until ${new Date(periodEndMs).toLocaleDateString()}`,
+      details: `Activated student subscription for #${payment.memberNo} via ${payment.provider.toUpperCase()} (Ref: ${payment.internalReference}, Amount: ${verifiedPrice.toLocaleString()} RWF). Valid until ${new Date(periodEndMs).toLocaleDateString()}`,
     });
 
     this.sendNotification({
@@ -7101,7 +7101,7 @@ export class RestoStore {
       senderName: 'RestoPass Subscription Authority',
       type: 'system_broadcast',
       title: 'Student Digital Pass Active! 🌟',
-      message: 'Your 500 RWF monthly digital subscription is active! Digital plate transfers and online pass features are unlocked for 30 days.',
+      message: 'Your ${verifiedPrice.toLocaleString()} RWF monthly digital subscription is active! Digital plate transfers and online pass features are unlocked for 30 days.',
       priority: 'important',
       actionTab: 'my_card',
     });
@@ -7110,6 +7110,75 @@ export class RestoStore {
     this.pushStateToServer();
     this.notify();
     return { success: true, subscription: sub };
+  }
+
+  public async activateComplimentarySubscription(params: {
+    customerId: string;
+    reason: string;
+    durationDays?: number;
+  }): Promise<{ success: boolean; subscription?: CustomerSubscription; error?: string }> {
+    if (typeof window === 'undefined' || !navigator.onLine || !this.authToken) {
+      return { success: false, error: 'Complimentary access activation requires an authenticated online Super Admin session.' };
+    }
+    if (!params.reason.trim()) return { success: false, error: 'A mandatory reason is required.' };
+    try {
+      const response = await fetch(`/api/admin/customers/${encodeURIComponent(params.customerId)}/entitlements`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.authToken}`,
+        },
+        body: JSON.stringify({
+          reason: params.reason.trim(),
+          durationDays: params.durationDays || 30,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        return { success: false, error: result.error || 'Complimentary access could not be activated.' };
+      }
+      await this.pullStateFromServer();
+      return { success: true, subscription: result.subscription as CustomerSubscription };
+    } catch {
+      return { success: false, error: 'Unable to reach RestoPass. No complimentary access was activated.' };
+    }
+  }
+
+  public async activatePaidStudentSubscription(params: {
+    customerId: string;
+    paymentMethod: 'cash' | 'mtn_momo' | 'bank_transfer';
+    paymentReference: string;
+    verificationNote?: string;
+  }): Promise<{ success: boolean; subscription?: CustomerSubscription; error?: string }> {
+    if (typeof window === 'undefined' || !navigator.onLine || !this.authToken) {
+      return { success: false, error: 'Paid access activation requires an authenticated online Super Admin session.' };
+    }
+    if (params.paymentMethod !== 'cash' && !params.paymentReference.trim()) {
+      return { success: false, error: 'Enter the verified payment transaction reference.' };
+    }
+    try {
+      const response = await fetch('/api/superadmin/customer/subscription/activate-paid', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.authToken}`,
+        },
+        body: JSON.stringify({
+          customerId: params.customerId,
+          paymentMethod: params.paymentMethod,
+          paymentReference: params.paymentReference.trim(),
+          verificationNote: params.verificationNote?.trim() || '',
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        return { success: false, error: result.error || 'Paid access renewal could not be activated.' };
+      }
+      await this.pullStateFromServer();
+      return { success: true, subscription: result.subscription as CustomerSubscription };
+    } catch {
+      return { success: false, error: 'Unable to reach RestoPass. No access renewal was activated.' };
+    }
   }
 
   public cancelStudentSubscription(customerId: string): { success: boolean; error?: string } {

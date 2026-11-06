@@ -53,7 +53,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
   const customer = restoStore.getCurrentCustomer();
 
-  // Student Subscription & MoMo State (500 RWF/mo, 72h Grace, MoMo Checkout)
+  // Customer digital access entitlement and renewal state
   const subSettings = restoStore.getStudentSubscriptionSettings();
   const customerSub = customer ? restoStore.getCustomerSubscription(customer.id) : null;
   const dashboardEntitlement = customer
@@ -77,15 +77,6 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   // Only read balance when dashboard subscription allows it
   const balance = customer && !isDashboardGated ? restoStore.getCustomerBalance(customer.id) : 0;
 
-  const [subModalOpen, setSubModalOpen] = useState(false);
-  const [momoPhone, setMomoPhone] = useState(customer?.phone || '+250 788 ');
-  const [momoProvider, setMomoProvider] = useState<'mtn_momo'>('mtn_momo');
-  const [subCheckoutLoading, setSubCheckoutLoading] = useState(false);
-  const [subCheckoutMessage, setSubCheckoutMessage] = useState<{
-    text: string;
-    isError: boolean;
-    ref?: string;
-  } | null>(null);
   const [transferRequiresSub, setTransferRequiresSub] = useState(false);
 
   // Dynamic 30-second token rotation (only generated when dashboard subscription is active)
@@ -413,159 +404,50 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   if (isDashboardGated) {
     return (
       <div className="max-w-md mx-auto px-4 py-6 space-y-5 animate-in fade-in duration-200">
-        {/* HOME-SCREEN INSTALLATION OPTION */}
         <PWAInstallBanner />
-
-        {/* APPROVED RESTAURANT / CAMPUS BRANDING HEADER */}
-        <div className={`p-5 rounded-3xl bg-gradient-to-br ${badgeTheme.gradient} border-2 ${badgeTheme.border} shadow-xl relative overflow-hidden`}>
+        <div className={`p-5 rounded-3xl bg-gradient-to-br ${badgeTheme.gradient} border-2 ${badgeTheme.border} shadow-xl`}>
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-700 flex items-center justify-center text-xl shadow-inner shrink-0">
-              🍽️
-            </div>
+            <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-700 flex items-center justify-center text-xl">🍽️</div>
             <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <h1 className="text-base sm:text-lg font-black text-white tracking-tight">
-                  {currentRestaurant?.name || 'Campus Dining'}
-                </h1>
-                <span className={`px-2.5 py-0.5 rounded-full text-xs font-mono font-bold uppercase tracking-wider border ${badgeTheme.badgeBg}`}>
-                  {currentRestaurant?.code}
-                </span>
-              </div>
-              <p className="text-xs sm:text-sm text-slate-200 font-medium mt-0.5">
-                Member #{customer.memberNo} · {customer.name}
-              </p>
+              <h1 className="text-base font-black text-white">{currentRestaurant?.name || 'Campus Dining'}</h1>
+              <p className="text-xs text-slate-200">Member #{customer.memberNo} · {customer.name}</p>
             </div>
           </div>
         </div>
 
-        {/* DASHBOARD SUBSCRIPTION PAYWALL CARD */}
-        <div className="p-6 rounded-3xl bg-slate-900 border-2 border-amber-500/80 shadow-2xl space-y-4 relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-36 h-36 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
-
+        <div className="p-6 rounded-3xl bg-slate-900 border-2 border-amber-500/80 shadow-2xl space-y-4">
           <div className="flex items-center gap-3 text-amber-400">
             <Smartphone className="w-6 h-6 shrink-0" />
-            <h2 className="text-lg font-black text-white tracking-tight">
-              RestoPass Digital Dashboard Subscription
-            </h2>
+            <h2 className="text-lg font-black text-white">Digital Dashboard Access Required</h2>
           </div>
-
-          <div className="p-4 rounded-2xl bg-slate-950 border border-amber-500/50 flex items-center justify-between gap-2">
-            <div>
-              <div className="text-xs text-slate-300 uppercase font-mono font-semibold">Monthly Digital Fee</div>
-              <div className="text-2xl font-black text-emerald-400 font-mono">
-                500 RWF <span className="text-sm font-normal text-slate-300">/ month</span>
-              </div>
+          <div className="p-4 rounded-2xl bg-slate-950 border border-amber-500/50">
+            <div className="text-xs text-slate-300 uppercase font-mono font-semibold">Monthly Access Fee</div>
+            <div className="text-2xl font-black text-emerald-400 font-mono">
+              {restoStore.getStudentSubscriptionPrice(customer.restaurantCode).toLocaleString()} RWF <span className="text-sm font-normal text-slate-300">/ month</span>
             </div>
-            <span className="px-3 py-1 rounded-full text-xs font-mono font-bold bg-amber-500/20 text-amber-200 border border-amber-500/50 uppercase">
-              Subscription Required
-            </span>
           </div>
-
           <p className="text-sm text-slate-200 leading-relaxed">
-            An active dashboard subscription is required to view your remaining plates/balance online, generate your digital dashboard QR, transfer plates, and access dashboard features.
+            {customer.customerAccessStatus === 'payment_required' || customer.customerAccessStatus === 'expired'
+              ? 'Your complimentary or paid digital access period has ended. Pay the monthly access fee to restore your dashboard.'
+              : 'Digital dashboard access requires an active monthly entitlement.'}
           </p>
-
-          {/* PHYSICAL CARD EXCEPTION GUARANTEE */}
-          <div className="p-4 rounded-2xl bg-emerald-950/80 border-2 border-emerald-500 text-sm space-y-1.5 shadow-sm">
+          <div className="p-4 rounded-2xl bg-amber-950/40 border border-amber-500/30 space-y-2">
+            <h3 className="text-sm font-bold text-amber-200">How to renew access</h3>
+            <ol className="list-decimal pl-5 space-y-1 text-xs text-slate-200">
+              <li>Visit the cafeteria reception and pay the displayed monthly access fee.</li>
+              <li>Keep your cash receipt or MTN MoMo / bank transaction reference.</li>
+              <li>Super Admin verifies the payment and activates your next 30-day access period.</li>
+            </ol>
+            <p className="text-xs text-amber-100">Your dashboard remains locked until verification is complete.</p>
+          </div>
+          <div className="p-4 rounded-2xl bg-emerald-950/80 border-2 border-emerald-500 space-y-1.5">
             <div className="flex items-center gap-2 font-black text-emerald-200">
               <CheckCircle2 className="w-5 h-5 shrink-0 text-emerald-400" />
-              <span>Physical Card Always Works Without Subscription</span>
+              <span>Physical Card Remains Active</span>
             </div>
-            <p className="text-xs sm:text-sm text-slate-100 leading-relaxed">
-              Physical card QR scanning does <strong>not</strong> require the dashboard subscription. You can use your printed physical card at any cafeteria scanner station for all eligible meal deductions.
+            <p className="text-xs text-slate-100 leading-relaxed">
+              Dashboard expiry does not remove your meal balance or block your physical card. Continue using your printed card at cafeteria scanner stations.
             </p>
-          </div>
-
-          {/* MOBILE MONEY CHECKOUT */}
-          <div className="space-y-3.5 pt-3 border-t border-slate-800">
-            <div className="text-sm font-bold text-white">
-              Activate Dashboard Subscription via Mobile Money:
-            </div>
-            <div className="grid grid-cols-1 gap-2.5 text-sm">
-              <button
-                type="button"
-                onClick={() => setMomoProvider('mtn_momo')}
-                className={`p-3 rounded-xl border-2 text-center font-bold transition-all cursor-pointer ${
-                  momoProvider === 'mtn_momo'
-                    ? 'bg-amber-500/20 border-amber-400 text-amber-200'
-                    : 'bg-slate-950 border-slate-700 text-slate-300 hover:text-white'
-                }`}
-              >
-                MTN MoMo (*182#)
-              </button>
-              
-            </div>
-
-            <div>
-              <label className="text-sm font-bold text-slate-200 block mb-1.5">MoMo Phone Number</label>
-              <input
-                type="tel"
-                value={momoPhone}
-                onChange={(e) => setMomoPhone(e.target.value)}
-                placeholder="+250 788 123 456"
-                className="w-full p-3 rounded-xl bg-slate-950 border-2 border-slate-700 text-white font-mono text-sm focus:border-amber-400 outline-hidden"
-              />
-            </div>
-
-            {subCheckoutMessage && (
-              <div
-                className={`p-3.5 rounded-xl text-sm space-y-2.5 ${
-                  subCheckoutMessage.isError
-                    ? 'bg-rose-950/90 border border-rose-600 text-rose-100'
-                    : 'bg-emerald-950/90 border border-emerald-600 text-emerald-100'
-                }`}
-              >
-                <div className="font-medium">{subCheckoutMessage.text}</div>
-                {subCheckoutMessage.ref && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const verifyRes = restoStore.verifyStudentPayment(subCheckoutMessage.ref!);
-                      if (verifyRes.success) {
-                        setSubCheckoutMessage({
-                          text: 'Payment verified! Digital dashboard unlocked.',
-                          isError: false,
-                        });
-                      }
-                    }}
-                    className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm transition-colors cursor-pointer shadow-sm"
-                  >
-                    Simulate USSD Approval &amp; Unlock Dashboard Now
-                  </button>
-                )}
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={() => {
-                setSubCheckoutLoading(true);
-                setSubCheckoutMessage(null);
-                const checkoutRes = restoStore.initiateStudentCheckout({
-                  customerId: customer.id,
-                  phoneNumber: momoPhone,
-                  provider: momoProvider,
-                });
-                setSubCheckoutLoading(false);
-                if (checkoutRes.success && checkoutRes.payment) {
-                  setSubCheckoutMessage({
-                    text: checkoutRes.instructions || 'USSD prompt sent. Please approve on your phone.',
-                    isError: false,
-                    ref: checkoutRes.payment.internalReference,
-                  });
-                } else {
-                  setSubCheckoutMessage({
-                    text: checkoutRes.error || 'Failed to initiate Mobile Money payment',
-                    isError: true,
-                  });
-                }
-              }}
-              disabled={subCheckoutLoading || !momoPhone}
-              className="w-full py-3.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-sm flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer disabled:opacity-50"
-            >
-              <Smartphone className="w-5 h-5" />
-              <span>{subCheckoutLoading ? 'Sending USSD Prompt...' : 'Pay 500 RWF & Unlock Dashboard'}</span>
-            </button>
           </div>
         </div>
       </div>
@@ -820,7 +702,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                 </div>
                 <div>
                   <div className="text-sm font-bold text-white flex items-center gap-2">
-                    <span>Student Digital Pass (500 RWF/mo)</span>
+                    <span>Student Digital Pass ({restoStore.getStudentSubscriptionPrice(customer.restaurantCode).toLocaleString()} RWF/mo)</span>
                     <span
                       className={`text-xs px-2 py-0.5 rounded font-mono font-bold uppercase ${
                         customerSub?.status === 'active'
@@ -845,13 +727,9 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setSubModalOpen(true)}
-                className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs sm:text-sm transition-colors cursor-pointer whitespace-nowrap shadow-xs"
-              >
-                {customerSub?.status === 'active' || customerSub?.status === 'complimentary' ? 'Manage' : 'Subscribe'}
-              </button>
+              <span className="px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 text-xs font-bold uppercase">
+                {customerSub?.status || 'inactive'}
+              </span>
             </div>
           )}
 
@@ -1509,17 +1387,9 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             )}
 
             {transferRequiresSub && (
-              <button
-                type="button"
-                onClick={() => {
-                  setTransferModalOpen(false);
-                  setSubModalOpen(true);
-                }}
-                className="w-full py-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-md"
-              >
-                <Smartphone className="w-4 h-4" />
-                <span>Subscribe to Digital Pass (500 RWF / mo)</span>
-              </button>
+              <div className="p-3 rounded-xl bg-amber-950/70 border border-amber-600 text-amber-100 text-xs">
+                Digital transfers require active dashboard access. Visit reception to pay the monthly fee; Super Admin must verify and activate your access before transfers resume.
+              </div>
             )}
 
             <button
@@ -1530,201 +1400,6 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             >
               {transferSubmitting ? 'Processing securely…' : 'Confirm & Transfer Plates'}
             </button>
-          </div>
-        </div>
-      )}
-
-      {/* STUDENT DIGITAL SUBSCRIPTION MODAL */}
-      {subModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-slate-900 border-2 border-slate-700 rounded-3xl max-w-sm w-full p-6 space-y-4 shadow-2xl text-sm animate-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2 text-amber-400">
-                <Smartphone className="w-5 h-5" />
-                <h3 className="text-base font-bold text-white">Student Digital Pass</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setSubModalOpen(false);
-                  setSubCheckoutMessage(null);
-                }}
-                className="text-slate-300 hover:text-white font-bold cursor-pointer"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-950/50 via-slate-950 to-slate-950 border border-amber-700/60 flex items-center justify-between">
-              <div>
-                <div className="text-xs text-slate-300 uppercase font-mono">Monthly Rate</div>
-                <div className="text-2xl font-black text-emerald-400 font-mono">500 RWF</div>
-                <div className="text-xs text-slate-300 mt-0.5">Includes 3-day (72h) grace period</div>
-              </div>
-              <span
-                className={`px-2.5 py-1 rounded text-xs font-mono font-bold uppercase ${
-                  customerSub?.status === 'active'
-                    ? 'bg-emerald-500/20 text-emerald-200'
-                    : customerSub?.status === 'grace_period'
-                    ? 'bg-amber-500/20 text-amber-200'
-                    : customerSub?.status === 'complimentary'
-                    ? 'bg-purple-500/20 text-purple-200'
-                    : 'bg-slate-800 text-slate-300'
-                }`}
-              >
-                {customerSub?.status || 'inactive'}
-              </span>
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-xs sm:text-sm text-slate-200 space-y-1">
-              <div className="font-bold text-emerald-300 flex items-center gap-1.5">
-                <CheckCircle2 className="w-4 h-4" />
-                <span>Physical Card Always Supported</span>
-              </div>
-              <p className="text-slate-300 text-xs leading-relaxed">
-                Physical card QR scanning never requires a subscription. The digital pass unlocks dashboard balance viewing, digital QR, and online plate transfers.
-              </p>
-            </div>
-
-            {customerSub &&
-            (customerSub.status === 'active' ||
-              customerSub.status === 'complimentary' ||
-              customerSub.status === 'grace_period') ? (
-              <div className="space-y-3">
-                <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 font-mono text-xs sm:text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-slate-300">Current Period:</span>
-                    <span className="text-white">
-                      {customerSub.currentPeriodEnd
-                        ? new Date(customerSub.currentPeriodEnd).toLocaleDateString()
-                        : 'Active'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-300">Grace End (+72h):</span>
-                    <span className="text-amber-300">
-                      {customerSub.gracePeriodEnd
-                        ? new Date(customerSub.gracePeriodEnd).toLocaleDateString()
-                        : 'N/A'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-300">Auto-Renewal:</span>
-                    <span className={customerSub.cancelAtPeriodEnd ? 'text-rose-300' : 'text-emerald-300'}>
-                      {customerSub.cancelAtPeriodEnd ? 'Cancelled at period end' : 'Active'}
-                    </span>
-                  </div>
-                </div>
-
-                {!customerSub.cancelAtPeriodEnd && customerSub.status !== 'complimentary' && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (
-                        confirm(
-                          'Cancel future renewal? You will retain access until the end of your paid period.'
-                        )
-                      ) {
-                        restoStore.cancelStudentSubscription(customer.id);
-                      }
-                    }}
-                    className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold transition-colors cursor-pointer"
-                  >
-                    Cancel Future Renewal
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <div>
-                  <label className="font-bold text-slate-200 block mb-1.5">Select Mobile Money Provider</label>
-                  <div className="grid grid-cols-1 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setMomoProvider('mtn_momo')}
-                      className={`p-3 rounded-xl border-2 text-center font-bold text-xs sm:text-sm transition-all cursor-pointer ${
-                        momoProvider === 'mtn_momo'
-                          ? 'bg-amber-500/20 border-amber-400 text-amber-200'
-                          : 'bg-slate-950 border-slate-700 text-slate-300 hover:text-white'
-                      }`}
-                    >
-                      MTN MoMo (*182#)
-                    </button>
-                    
-                  </div>
-                </div>
-
-                <div>
-                  <label className="font-bold text-slate-200 block mb-1.5">Mobile Money Phone Number</label>
-                  <input
-                    type="tel"
-                    value={momoPhone}
-                    onChange={(e) => setMomoPhone(e.target.value)}
-                    placeholder="e.g. +250 788 123 456"
-                    className="w-full p-3 rounded-xl bg-slate-950 border-2 border-slate-700 text-white font-mono focus:border-amber-400 outline-hidden"
-                  />
-                </div>
-
-                {subCheckoutMessage && (
-                  <div
-                    className={`p-3 rounded-xl text-xs sm:text-sm space-y-2 ${
-                      subCheckoutMessage.isError
-                        ? 'bg-rose-950/90 border border-rose-600 text-rose-100'
-                        : 'bg-emerald-950/90 border border-emerald-600 text-emerald-100'
-                    }`}
-                  >
-                    <div>{subCheckoutMessage.text}</div>
-                    {subCheckoutMessage.ref && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const verifyRes = restoStore.verifyStudentPayment(subCheckoutMessage.ref!);
-                          if (verifyRes.success) {
-                            setSubCheckoutMessage({
-                              text: 'Payment verified! Student Digital Pass is now active.',
-                              isError: false,
-                            });
-                          }
-                        }}
-                        className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs sm:text-sm transition-colors cursor-pointer"
-                      >
-                        Simulate Prompt Approval (Test/Demo)
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSubCheckoutLoading(true);
-                    setSubCheckoutMessage(null);
-                    const checkoutRes = restoStore.initiateStudentCheckout({
-                      customerId: customer.id,
-                      phoneNumber: momoPhone,
-                      provider: momoProvider,
-                    });
-                    setSubCheckoutLoading(false);
-                    if (checkoutRes.success && checkoutRes.payment) {
-                      setSubCheckoutMessage({
-                        text: checkoutRes.instructions || 'USSD prompt sent. Please approve on your phone.',
-                        isError: false,
-                        ref: checkoutRes.payment.internalReference,
-                      });
-                    } else {
-                      setSubCheckoutMessage({
-                        text: checkoutRes.error || 'Failed to initiate Mobile Money payment',
-                        isError: true,
-                      });
-                    }
-                  }}
-                  disabled={subCheckoutLoading || !momoPhone}
-                  className="w-full py-3.5 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white font-black text-sm shadow-md transition-colors cursor-pointer"
-                >
-                  {subCheckoutLoading ? 'Sending USSD Prompt...' : 'Pay 500 RWF via Mobile Money'}
-                </button>
-              </div>
-            )}
           </div>
         </div>
       )}

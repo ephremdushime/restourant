@@ -2632,6 +2632,164 @@ app.post('/api/payments/mobile-money/callback', apiRateLimiter, (_req, res) => {
   });
 });
 
+// Super Admin verifies an offline access-fee payment and activates a paid 30-day renewal.
+app.post('/api/superadmin/customer/subscription/activate-paid', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
+  if (!serverDbState) return res.status(503).json({ success: false, error: 'Subscription service is unavailable.' });
+  const body = req.body || {};
+  const customerId = typeof body.customerId === 'string' ? body.customerId.trim() : '';
+  const paymentMethod = typeof body.paymentMethod === 'string' ? body.paymentMethod : '';
+  const referenceInput = typeof body.paymentReference === 'string' ? body.paymentReference.trim().toUpperCase() : '';
+  const verificationNote = typeof body.verificationNote === 'string' ? body.verificationNote.trim().slice(0, 500) : '';
+  if (!customerId || !['cash', 'mtn_momo', 'bank_transfer'].includes(paymentMethod)) {
+    return res.status(400).json({ success: false, error: 'Select a customer and valid payment method.' });
+  }
+  if (paymentMethod !== 'cash' && (!referenceInput || referenceInput.length > 100)) {
+    return res.status(400).json({ success: false, error: 'A payment transaction reference is required.' });
+  }
+
+  const customer = (serverDbState.customers || []).find((c: any) => c.id === customerId);
+  if (!customer) return res.status(404).json({ success: false, error: 'Customer not found.' });
+  if (customer.registrationStatus !== 'approved') {
+    return res.status(409).json({ success: false, error: 'The Restaurant Boss must approve the registration before paid digital access can be activated.' });
+  }
+
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const existingSub = (serverDbState.customerSubscriptions || []).find((sub: any) => sub.customerId === customerId);
+  if (customer.customerAccessStatus === 'active' && existingSub) {
+    const currentGraceEnd = new Date(existingSub.gracePeriodEnd || existingSub.currentPeriodEnd || 0).getTime();
+    if (existingSub.status === 'expired' || (currentGraceEnd > 0 && currentGraceEnd <= nowMs)) {
+      customer.customerAccessStatus = 'payment_required';
+      existingSub.status = 'expired';
+    }
+  }
+  if (customer.customerAccessStatus === 'complimentary' &&
+      new Date(customer.freeAccessExpiresAt || existingSub?.currentPeriodEnd || 0).getTime() > nowMs) {
+    return res.status(409).json({ success: false, error: 'The complimentary access period is still active.' });
+  }
+  if (existingSub && ['active', 'grace_period'].includes(existingSub.status) &&
+      new Date(existingSub.gracePeriodEnd || existingSub.currentPeriodEnd || 0).getTime() > nowMs) {
+    return res.status(409).json({ success: false, error: 'The current paid access period has not expired yet.' });
+  }
+  if (!['payment_required', 'expired', 'complimentary'].includes(customer.customerAccessStatus || '')) {
+    return res.status(409).json({ success: false, error: 'This customer is not currently due for a paid access renewal.' });
+  }
+
+  const restaurant = (serverDbState.restaurants || []).find((r: any) => r.code === customer.restaurantCode);
+  const settingsPrice = Number(serverDbState.studentSubscriptionSettings?.priceRwf) || 500;
+  const amountRwf = Number(restaurant?.studentSubscriptionPriceRwf ?? restaurant?.termsOverride?.studentSubscriptionPriceRwf ?? settingsPrice);
+  if (!Number.isInteger(amountRwf) || amountRwf <= 0) {
+    return res.status(409).json({ success: false, error: 'The monthly access fee is not configured correctly.' });
+  }
+  const paymentReference = referenceInput || `CASH-ACCESS-${crypto.randomUUID()}`;
+  if ((serverDbState.studentSubscriptionPayments || []).some((p: any) =>
+    p.restaurantCode === customer.restaurantCode &&
+    String(p.providerTransactionId || p.internalReference || '').toUpperCase() === paymentReference
+  )) {
+    return res.status(409).json({ success: false, error: 'This payment reference has already been used.' });
+  }
+
+  const previousCustomer = { ...customer };
+  const previousSub = existingSub ? { ...existingSub } : null;
+  const paymentId = `spay_${crypto.randomUUID()}`;
+  const subscriptionId = existingSub?.id || `sub_${customer.id}_${crypto.randomUUID()}`;
+  const internalReference = `MANUAL-ACCESS-${crypto.randomUUID()}`;
+  const periodEnd = new Date(nowMs + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const graceEnd = new Date(nowMs + 33 * 24 * 60 * 60 * 1000).toISOString();
+  const subscription = existingSub || {
+    id: subscriptionId,
+    customerId: customer.id,
+    memberNo: customer.memberNo,
+    restaurantCode: customer.restaurantCode,
+    status: 'active',
+    planName: 'Student Digital Pass',
+    priceRwf: amountRwf,
+    currency: 'RWF',
+    createdAt: now,
+    updatedAt: now,
+  };
+  Object.assign(subscription, {
+    status: 'active',
+    planName: 'Student Digital Pass',
+    priceRwf: amountRwf,
+    currency: 'RWF',
+    currentPeriodStart: now,
+    currentPeriodEnd: periodEnd,
+    gracePeriodEnd: graceEnd,
+    cancelAtPeriodEnd: false,
+    paymentMethod,
+    lastPaymentRef: paymentReference,
+    complimentaryReason: undefined,
+    complimentaryGrantedBy: undefined,
+    updatedAt: now,
+  });
+  if (!existingSub) {
+    if (!Array.isArray(serverDbState.customerSubscriptions)) serverDbState.customerSubscriptions = [];
+    serverDbState.customerSubscriptions.push(subscription);
+  }
+
+  if (!Array.isArray(serverDbState.studentSubscriptionPayments)) serverDbState.studentSubscriptionPayments = [];
+  const payment = {
+    id: paymentId,
+    subscriptionId,
+    customerId: customer.id,
+    memberNo: customer.memberNo,
+    restaurantCode: customer.restaurantCode,
+    internalReference,
+    provider: paymentMethod,
+    phoneNumber: customer.phone,
+    providerTransactionId: paymentReference,
+    amountRwf,
+    currency: 'RWF',
+    status: 'verified',
+    initiatedAt: now,
+    verifiedAt: now,
+  };
+  serverDbState.studentSubscriptionPayments.unshift(payment);
+  customer.customerAccessStatus = 'active';
+
+  if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
+  const auditId = `audit_${crypto.randomUUID()}`;
+  serverDbState.auditLogs.unshift({
+    id: auditId,
+    timestamp: now,
+    restaurantCode: customer.restaurantCode,
+    actorRole: 'super_admin',
+    actorName: req.user!.username,
+    action: 'STUDENT_SUBSCRIPTION_MANUAL_PAYMENT_VERIFIED',
+    details: `Verified ${amountRwf.toLocaleString()} RWF ${paymentMethod.toUpperCase()} access renewal for #${customer.memberNo}. Ref: ${paymentReference}. Note: ${verificationNote || 'No additional note'}.`,
+  });
+  if (!Array.isArray(serverDbState.notifications)) serverDbState.notifications = [];
+  const notificationId = `notif_${crypto.randomUUID()}`;
+  serverDbState.notifications.unshift({
+    id: notificationId,
+    restaurantCode: customer.restaurantCode,
+    target: customer.id,
+    targetName: `${customer.name} (#${customer.memberNo})`,
+    senderRole: 'system',
+    senderName: req.user!.username,
+    type: 'system_broadcast',
+    title: 'Dashboard Access Renewed',
+    message: `Your ${amountRwf.toLocaleString()} RWF access fee has been verified. Your digital dashboard is active until ${new Date(periodEnd).toLocaleDateString()}.`,
+    priority: 'important',
+    timestamp: now,
+    readByCustomerIds: [],
+    actionTab: 'my_card',
+  });
+
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    Object.assign(customer, previousCustomer);
+    if (previousSub) Object.assign(subscription, previousSub);
+    else serverDbState.customerSubscriptions = (serverDbState.customerSubscriptions || []).filter((sub: any) => sub.id !== subscriptionId);
+    serverDbState.studentSubscriptionPayments = serverDbState.studentSubscriptionPayments.filter((p: any) => p.id !== paymentId);
+    serverDbState.auditLogs = serverDbState.auditLogs.filter((a: any) => a.id !== auditId);
+    serverDbState.notifications = serverDbState.notifications.filter((n: any) => n.id !== notificationId);
+    return res.status(503).json({ success: false, error: 'Payment activation could not be saved. Please retry after checking the payment reference.' });
+  }
+  return res.json({ success: true, subscription, payment, customer: { id: customer.id, customerAccessStatus: customer.customerAccessStatus } });
+});
+
 // POST /api/customer/subscription/cancel: Cancels future subscription renewal
 app.post('/api/customer/subscription/cancel', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
   ensureServerDbDefaults(serverDbState);
@@ -2716,57 +2874,94 @@ app.patch('/api/admin/settings/student-subscriptions', apiRateLimiter, requireAu
 app.post('/api/admin/customers/:customerId/entitlements', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
   ensureServerDbDefaults(serverDbState);
   const { customerId } = req.params;
-  const { reason, durationDays } = req.body;
-
-  if (!reason || !reason.trim()) {
-    return res.status(400).json({ success: false, error: 'A mandatory reason is required to grant complimentary access' });
+  const { reason, durationDays } = req.body || {};
+  if (typeof reason !== 'string' || !reason.trim()) {
+    return res.status(400).json({ success: false, error: 'A mandatory reason is required to grant complimentary access.' });
   }
-
   const customer = (serverDbState.customers || []).find((c: any) => c.id === customerId);
-  if (!customer) {
-    return res.status(404).json({ success: false, error: 'Customer not found' });
+  if (!customer) return res.status(404).json({ success: false, error: 'Customer not found.' });
+  if (customer.registrationStatus && customer.registrationStatus !== 'approved') {
+    return res.status(409).json({ success: false, error: 'The Restaurant Boss must approve the registration before complimentary access can be activated.' });
   }
 
   const nowMs = Date.now();
-  const days = typeof durationDays === 'number' ? durationDays : 30;
-  const periodEndMs = nowMs + days * 24 * 3600 * 1000;
-  const graceEndMs = periodEndMs + 3 * 24 * 3600 * 1000;
-
-  let sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === customerId);
-  if (!sub) {
-    sub = {
-      id: `sub_${customerId}_${Date.now()}`,
-      customerId: customer.id,
-      memberNo: customer.memberNo,
-      restaurantCode: customer.restaurantCode,
-      status: 'complimentary',
-      planName: 'Complimentary Student Pass',
-      priceRwf: 0,
-      currency: 'RWF',
-      currentPeriodStart: new Date(nowMs).toISOString(),
-      currentPeriodEnd: new Date(periodEndMs).toISOString(),
-      gracePeriodEnd: new Date(graceEndMs).toISOString(),
-      cancelAtPeriodEnd: false,
-      paymentMethod: 'complimentary',
-      complimentaryReason: reason.trim(),
-      complimentaryGrantedBy: req.user!.username,
-      createdAt: new Date(nowMs).toISOString(),
-      updatedAt: new Date(nowMs).toISOString(),
-    };
-    serverDbState.customerSubscriptions.push(sub);
-  } else {
-    sub.status = 'complimentary';
-    sub.currentPeriodStart = new Date(nowMs).toISOString();
-    sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
-    sub.gracePeriodEnd = new Date(graceEndMs).toISOString();
-    sub.complimentaryReason = reason.trim();
-    sub.complimentaryGrantedBy = req.user!.username;
-    sub.updatedAt = new Date(nowMs).toISOString();
+  const now = new Date(nowMs).toISOString();
+  const days = customer.registrationStatus === 'approved' ? 30 : (typeof durationDays === 'number' ? Math.min(365, Math.max(1, durationDays)) : 30);
+  const periodEnd = new Date(nowMs + days * 24 * 3600 * 1000).toISOString();
+  const graceEnd = new Date(nowMs + (days * 24 * 3600 * 1000) + 3 * 24 * 3600 * 1000).toISOString();
+  const previousCustomer = { ...customer };
+  const existingSub = (serverDbState.customerSubscriptions || []).find((sub: any) => sub.customerId === customerId);
+  const previousSub = existingSub ? { ...existingSub } : null;
+  const subscription = existingSub || {
+    id: `sub_${customerId}_${crypto.randomUUID()}`,
+    customerId: customer.id,
+    memberNo: customer.memberNo,
+    restaurantCode: customer.restaurantCode,
+    createdAt: now,
+  };
+  Object.assign(subscription, {
+    status: 'complimentary',
+    planName: 'Complimentary Student Pass',
+    priceRwf: 0,
+    currency: 'RWF',
+    currentPeriodStart: now,
+    currentPeriodEnd: periodEnd,
+    gracePeriodEnd: graceEnd,
+    cancelAtPeriodEnd: false,
+    paymentMethod: 'complimentary',
+    complimentaryReason: reason.trim(),
+    complimentaryGrantedBy: req.user!.username,
+    updatedAt: now,
+  });
+  if (!existingSub) {
+    if (!Array.isArray(serverDbState.customerSubscriptions)) serverDbState.customerSubscriptions = [];
+    serverDbState.customerSubscriptions.push(subscription);
+  }
+  if (customer.registrationStatus === 'approved') {
+    customer.customerAccessStatus = 'complimentary';
+    customer.freeAccessStartedAt = now;
+    customer.freeAccessExpiresAt = periodEnd;
   }
 
-  await queueDbSave(serverDbState);
+  if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
+  const auditId = `audit_${crypto.randomUUID()}`;
+  serverDbState.auditLogs.unshift({
+    id: auditId,
+    timestamp: now,
+    restaurantCode: customer.restaurantCode,
+    actorRole: 'super_admin',
+    actorName: req.user!.username,
+    action: 'COMPLIMENTARY_STUDENT_SUBSCRIPTION_GRANTED',
+    details: `Granted ${days}-day complimentary dashboard access to #${customer.memberNo}. Reason: ${reason.trim()}.`,
+  });
+  if (!Array.isArray(serverDbState.notifications)) serverDbState.notifications = [];
+  const notificationId = `notif_${crypto.randomUUID()}`;
+  serverDbState.notifications.unshift({
+    id: notificationId,
+    restaurantCode: customer.restaurantCode,
+    target: customer.id,
+    targetName: `${customer.name} (#${customer.memberNo})`,
+    senderRole: 'system',
+    senderName: req.user!.username,
+    type: 'system_broadcast',
+    title: 'Complimentary Dashboard Access Activated',
+    message: `Your ${days}-day complimentary dashboard access is active until ${new Date(periodEnd).toLocaleDateString()}.`,
+    priority: 'important',
+    timestamp: now,
+    readByCustomerIds: [],
+    actionTab: 'my_card',
+  });
 
-  return res.json({ success: true, subscription: sub });
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    Object.assign(customer, previousCustomer);
+    if (previousSub) Object.assign(subscription, previousSub);
+    else serverDbState.customerSubscriptions = (serverDbState.customerSubscriptions || []).filter((sub: any) => sub.id !== subscription.id);
+    serverDbState.auditLogs = serverDbState.auditLogs.filter((item: any) => item.id !== auditId);
+    serverDbState.notifications = serverDbState.notifications.filter((item: any) => item.id !== notificationId);
+    return res.status(503).json({ success: false, error: 'Complimentary access could not be saved. Please retry.' });
+  }
+  return res.json({ success: true, subscription, customer: { id: customer.id, customerAccessStatus: customer.customerAccessStatus, freeAccessExpiresAt: customer.freeAccessExpiresAt } });
 });
 
 // DELETE /api/admin/customers/:customerId/entitlements/:entitlementId: Revokes complimentary access
