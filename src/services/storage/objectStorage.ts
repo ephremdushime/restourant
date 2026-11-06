@@ -128,7 +128,6 @@ export async function uploadPatronPhoto(
       Key: key,
       Body: buffer,
       ContentType: mimeType,
-      ServerSideEncryption: process.env.S3_SERVER_SIDE_ENCRYPTION || undefined,
       CacheControl: 'private, no-store',
     }));
     return { url: '', key, storageType: 's3', sizeBytes: buffer.length };
