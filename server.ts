@@ -449,7 +449,11 @@ const syncRateLimiter = createRateLimiter('sync', 40, 60 * 1000); // 40 syncs pe
 
 // Request body parser with scoped limits (supports patron portrait uploads)
 app.use(express.json({ limit: '10mb' }));
-app.use('/uploads', express.static(path.resolve(process.cwd(), 'public/uploads')));
+// Patron photos may contain personal data. Public static delivery is allowed only
+// for the explicitly local/offline standalone mode, never for hosted cloud mode.
+if ((process.env.RESTOPASS_DEPLOYMENT_MODE || 'standalone').toLowerCase() !== 'cloud') {
+  app.use('/uploads', express.static(path.resolve(process.cwd(), 'public/uploads')));
+}
 
 // ----------------------------------------------------
 // Cryptographic Session Engine & Token Verification (Finding 1 & 4)
@@ -771,8 +775,10 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
     );
 
     let validPin = false;
-    if (matchingStaffUser?.pin) {
-      validPin = timingSafeCompare(entered, matchingStaffUser.pin);
+    if (matchingStaffUser) {
+      // Production credentials are stored as scrypt hashes. Never compare against
+      // a removed plaintext PIN, and never authenticate a blocked station account.
+      validPin = verifyStationUserCredentials(entered, matchingStaffUser);
     } else if (configuredStaffPin && !isProd) {
       validPin = timingSafeCompare(entered, configuredStaffPin);
     } else if (!isProd) {
@@ -950,6 +956,20 @@ function verifyServerCustomerPin(enteredPin: string, customer: any): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Verifies a station user's PIN/password after legacy credentials have been
+ * migrated to scrypt. Status and authType are enforced server-side.
+ */
+function verifyStationUserCredentials(entered: string, stationUser: any): boolean {
+  if (!entered || !stationUser || stationUser.status !== 'active') return false;
+  const authType = stationUser.authType || 'both';
+  const acceptsPin = authType === 'pin8' || authType === 'both';
+  const acceptsPassword = authType === 'password' || authType === 'both';
+  const pinValid = acceptsPin && verifyServerCustomerPin(entered, { pinHash: stationUser.pinHash });
+  const passwordValid = acceptsPassword && verifyServerCustomerPin(entered, { pinHash: stationUser.passwordHash });
+  return Boolean(pinValid || passwordValid);
 }
 
 // POST /api/customer/auth/login: Authenticate phone number + 6+ digit PIN (Rate-limited, lockout, generic error)
@@ -1302,6 +1322,12 @@ app.post('/api/customer/recovery/complete', authRateLimiter, (req, res) => {
 
 // POST /api/upload/photo: Upload patron photos to cloud object storage (or local uploads/)
 app.post('/api/upload/photo', apiRateLimiter, requireAuth(), async (req, res) => {
+  if ((process.env.RESTOPASS_DEPLOYMENT_MODE || 'standalone').toLowerCase() === 'cloud') {
+    return res.status(503).json({
+      success: false,
+      error: 'Patron photo uploads are temporarily disabled in cloud mode until private, authenticated photo delivery is available.',
+    });
+  }
   const { photoBase64, filenameHint } = req.body;
   if (!photoBase64 || typeof photoBase64 !== 'string') {
     return res.status(400).json({
@@ -2814,6 +2840,20 @@ async function startServer() {
     throw new Error('Cloud production mode requires REDIS_URL for distributed replay protection.');
   }
 
+  // Hash legacy station credentials before any production request can authenticate
+  // against them. Persist the migration before the server begins accepting traffic.
+  if (serverDbState && normalizeStationUserCredentials(serverDbState)) {
+    let credentialsPersisted = false;
+    if (isPostgresConfigured()) credentialsPersisted = await saveStateToPostgres(serverDbState);
+    if (!credentialsPersisted && (!isPostgresConfigured() || !isProduction)) {
+      credentialsPersisted = atomicSaveDb(serverDbState);
+    }
+    if (!credentialsPersisted) {
+      throw new Error('Station credential migration could not be persisted; refusing to start with an ambiguous credential state.');
+    }
+    console.log('[Server Authority] Legacy station credentials migrated to scrypt hashes.');
+  }
+
   // Cloud Relational Database Initialization
   if (isPostgresConfigured()) {
     console.log('[Server Authority] PostgreSQL detected. Connecting and initializing schema...');
@@ -2911,4 +2951,5 @@ export {
   sanitizeSensitiveState,
   normalizeStationUserCredentials,
   verifyServerCustomerPin,
+  verifyStationUserCredentials,
 };
