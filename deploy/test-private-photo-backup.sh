@@ -8,7 +8,7 @@ trap 'rm -rf "$TMP"' EXIT
 key="$(openssl rand -hex 32)"
 export RESTOPASS_BACKUP_ENCRYPTION_KEY="$key"
 
-mkdir -m 700 "$TMP/source/patron-photos" -p
+mkdir -p -m 700 "$TMP/source/patron-photos"
 printf 'test image bytes' > "$TMP/source/patron-photos/sample.jpg"
 tar -czf "$TMP/photos.tar.gz" -C "$TMP/source" patron-photos
 validate_photo_archive "$TMP/photos.tar.gz"
