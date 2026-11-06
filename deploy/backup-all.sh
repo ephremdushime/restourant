@@ -57,6 +57,13 @@ photos="$PHOTOS_DIR/restopass_photos_$TIMESTAMP.tar.gz.enc"
 for file in "$pg" "$pg.sha256" "$pg.hmac" "$photos" "$photos.sha256" "$photos.hmac"; do
   [[ -s "$file" ]] || fail "Expected paired backup artifact is missing: $file"
 done
+(cd "$(dirname "$pg")" && sha256sum -c "$(basename "$pg").sha256") || fail "PostgreSQL backup checksum failed."
+pg_hmac_key="$(printf 'RESTOPASS_BACKUP_HMAC:%s' "$RESTOPASS_BACKUP_ENCRYPTION_KEY" | sha256sum | awk '{print $1}')"
+pg_expected="$(tr -d '[:space:]' < "$pg.hmac")"
+pg_actual="$(openssl dgst -sha256 -hmac "$pg_hmac_key" "$pg" | awk '{print $NF}')"
+[[ "$pg_expected" == "$pg_actual" ]] || fail "PostgreSQL backup HMAC verification failed."
+source "$ROOT_DIR/deploy/lib/photo-backup.sh"
+verify_photo_backup "$photos" "$RESTOPASS_BACKUP_ENCRYPTION_KEY" || fail "Private-photo backup integrity verification failed."
 
 manifest="$ROOT_DIR/backups/restopass_$TIMESTAMP.manifest"
 cat > "$manifest" <<EOF
@@ -80,6 +87,12 @@ for file in "$pg" "$pg.sha256" "$pg.hmac"; do upload "$file" "$remote/$date_path
 for file in "$photos" "$photos.sha256" "$photos.hmac"; do upload "$file" "$remote/$date_path/patron-photos/$(basename "$file")"; done
 # Upload manifest last: its presence denotes a complete paired off-site backup.
 upload "$manifest" "$remote/$date_path/restopass_$TIMESTAMP.manifest"
+
+retention_days="$(env_value RESTOPASS_BACKUP_RETENTION_DAYS)"
+retention_days="${retention_days:-14}"
+if [[ "$retention_days" =~ ^[0-9]+$ ]] && (( retention_days > 0 )); then
+  find "$ROOT_DIR/backups" -maxdepth 1 -type f -name 'restopass_*.manifest' -mtime +"$retention_days" -delete
+fi
 
 echo "Paired backup and off-site upload completed."
 echo "Timestamp: $TIMESTAMP"
