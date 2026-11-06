@@ -12,7 +12,7 @@ import {
   commitPlateTransferPostgres,
 } from './src/services/db/postgresAdapter';
 import { recordTokenScan, isRedisConfigured, checkRedisReady, revokeSessionToken, isSessionTokenRevoked } from './src/services/cache/redisClient';
-import { uploadBase64Photo, getPrivatePatronPhoto } from './src/services/storage/objectStorage';
+import { uploadBase64Photo, getPrivatePatronPhoto, deletePrivatePatronPhoto } from './src/services/storage/objectStorage';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -1520,6 +1520,8 @@ app.post(
     }
 
     try {
+      const previousPhotoKey = customer.photoStorageKey;
+      const previousPhotoStorageType = customer.photoStorageType;
       const uploaded = await uploadBase64Photo(photoBase64, customer.restaurantCode);
       const photoUrl = `/api/customers/${encodeURIComponent(customer.id)}/photo`;
       customer.photoStorageKey = uploaded.key;
@@ -1528,9 +1530,26 @@ app.post(
       for (const approval of serverDbState.pendingApprovals || []) {
         if (approval.customerId === customer.id) approval.customerPhoto = photoUrl;
       }
+      if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
+      serverDbState.auditLogs.push({
+        id: `audit_photo_${crypto.randomUUID()}`,
+        restaurantCode: customer.restaurantCode,
+        userId: user.userId,
+        actorName: user.username || user.userId,
+        actorRole: user.role,
+        action: 'CUSTOMER_PHOTO_UPLOADED',
+        details: `Updated private portrait for customer #${customer.memberNo || customer.id}.`,
+        timestamp: new Date().toISOString(),
+      });
 
       if (!(await queueDbSave(serverDbState))) {
-        return res.status(503).json({ success: false, error: 'Photo was stored but customer metadata could not be persisted. Retry after checking server storage.' });
+        await deletePrivatePatronPhoto(uploaded.key, uploaded.storageType).catch(() => undefined);
+        return res.status(503).json({ success: false, error: 'Photo metadata could not be persisted. The uploaded object was discarded; retry the upload.' });
+      }
+      if (previousPhotoKey && previousPhotoKey !== uploaded.key) {
+        await deletePrivatePatronPhoto(previousPhotoKey, previousPhotoStorageType).catch((cleanupError: any) => {
+          console.warn('[Photo Storage] Previous portrait cleanup failed:', cleanupError?.message || cleanupError);
+        });
       }
       return res.status(201).json({
         success: true,
@@ -1833,7 +1852,7 @@ app.post(
         memberNo,
         customerId: customer.id,
         customerName: customer.name,
-        customerPhoto: customer.photoUrl,
+        customerPhoto: safeCustomerPhotoUrl(customer),
         step: scannedStep,
         isCard: false,
       });
