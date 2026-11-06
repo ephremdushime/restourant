@@ -2601,15 +2601,16 @@ export class RestoStore {
         totalGraceUsedAcrossPending,
         customer.provisionalStatus === 'pending_approval' ? (customer.gracePlatesConsumed || 0) : 0
       );
+      const graceLimit = customer.gracePlatesAllowed || 3;
       const hasQualifyingPendingPayment =
         customerPendingApprovals.length > 0 || customer.provisionalStatus === 'pending_approval';
-      const eligibleGraceAvailable = hasQualifyingPendingPayment && effectiveGraceConsumed < 3;
+      const eligibleGraceAvailable = hasQualifyingPendingPayment && effectiveGraceConsumed < graceLimit;
 
       // 3. Available Credits: Does the customer have an approved meal balance >= 1 or an eligible grace meal?
       if (currentBalance < 1 && !eligibleGraceAvailable) {
         const noBalMsg =
-          hasQualifyingPendingPayment && effectiveGraceConsumed >= 3
-            ? 'No balance — Grace meal limit reached (3/3 meals consumed). Please await payment approval.'
+          hasQualifyingPendingPayment && effectiveGraceConsumed >= graceLimit
+            ? `No balance — Grace meal limit reached (${graceLimit}/${graceLimit} meals consumed). Please await payment approval.`
             : 'No balance — please top up or await payment approval.';
         return buildRejection(
           'NO_BALANCE',
@@ -2709,7 +2710,7 @@ export class RestoStore {
           customerPendingApprovals
             .slice()
             .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-            .find((a) => (a.gracePlatesConsumed || 0) < (a.gracePlatesAllowed || 3)) ||
+            .find((a) => (a.gracePlatesConsumed || 0) < (a.gracePlatesAllowed || customer.gracePlatesAllowed || 3)) ||
           customerPendingApprovals[0];
 
         if (targetApproval) {
@@ -2717,8 +2718,8 @@ export class RestoStore {
         }
         const updatedTotalGrace = effectiveGraceConsumed + 1;
         customer.gracePlatesConsumed = updatedTotalGrace;
-        customer.gracePlatesRemaining = Math.max(0, 3 - updatedTotalGrace);
-        overrideReason = `Authorized grace meal (#${updatedTotalGrace}/3 served). Awaiting boss Mobile Money payment approval.`;
+        customer.gracePlatesRemaining = Math.max(0, graceLimit - updatedTotalGrace);
+        overrideReason = `Authorized grace meal (#${updatedTotalGrace}/${graceLimit} served). Awaiting boss registration approval.`;
       }
 
       // Update active shift stats
@@ -2917,7 +2918,7 @@ export class RestoStore {
           .filter((a) => a.customerId === customer.id && a.status === 'pending')
           .reduce((sum, a) => sum + (a.gracePlatesConsumed || 0), 0);
         customer.gracePlatesConsumed = remainingGraceUsed;
-        customer.gracePlatesRemaining = Math.max(0, 3 - remainingGraceUsed);
+        customer.gracePlatesRemaining = Math.max(0, (customer.gracePlatesAllowed || 3) - remainingGraceUsed);
       }
     } else {
       const undoEntry: LedgerEntry = {
@@ -5885,7 +5886,7 @@ export class RestoStore {
       .reduce((sum, a) => sum + (a.gracePlatesConsumed || 0), 0);
     const effectiveGraceUsed = Math.max(totalPendingGraceConsumed, customer.gracePlatesConsumed || 0);
     customer.gracePlatesConsumed = effectiveGraceUsed;
-    customer.gracePlatesRemaining = Math.max(0, 3 - effectiveGraceUsed);
+    customer.gracePlatesRemaining = Math.max(0, (customer.gracePlatesAllowed || 3) - effectiveGraceUsed);
     if (!customer.pendingApprovalId) {
       customer.pendingApprovalId = approvalId;
     }
