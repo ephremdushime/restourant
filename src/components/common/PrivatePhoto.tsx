@@ -27,7 +27,9 @@ export const PrivatePhoto: React.FC<PrivatePhotoProps> = ({
 
     const isPrivatePhotoRoute = /^\/api\/customers\/[A-Za-z0-9_-]{1,128}\/photo$/.test(src);
     if (!isPrivatePhotoRoute) {
-      setResolvedSrc(src);
+      const isBundledAsset = /^\/(?:src\/assets\/images|assets)\/[A-Za-z0-9_.-]+$/.test(src);
+      const isLocalPreview = /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(src);
+      setResolvedSrc(isBundledAsset || isLocalPreview ? src : fallbackSrc);
       return;
     }
 
