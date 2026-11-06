@@ -73,6 +73,11 @@ jobs:
           hmac="$(openssl dgst -sha256 -hmac "$hmac_key" "$temp_dir/encrypted" | awk '{print $NF}')"
           test "${#hmac}" -eq 64
 
+      - name: Validate encrypted private patron-photo backup tooling
+        run: |
+          bash -n deploy/lib/photo-backup.sh deploy/backup-patron-photos.sh deploy/restore-patron-photos.sh deploy/test-private-photo-backup.sh
+          bash deploy/test-private-photo-backup.sh
+
       - name: Validate production Docker Compose configuration
         run: |
           export POSTGRES_PASSWORD="$(openssl rand -hex 32)"
