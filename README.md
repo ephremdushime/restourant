@@ -324,7 +324,8 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `GET /api/customer/subscription` | Authenticated | Checks student digital subscription status and entitlement (`500 RWF/month`). |
 | `POST /api/customer/subscription/checkout` | `customer` | Initiates an integer-safe `500 RWF` MTN MoMo / Airtel Money subscription payment. |
 | `POST /api/payments/mobile-money/callback` | Webhook | Processes Mobile Money provider callbacks idempotently and activates 30-day + 72h grace access. |
-| `POST /api/upload/photo` | Authenticated | Uploads patron photos to AWS S3, DigitalOcean Spaces, Cloudflare R2, or local disk fallback. |
+| `POST /api/upload/photo` | Authenticated, customer/tenant scoped | Stores a patron portrait in a private S3-compatible bucket or private local app-data directory; returns an authenticated photo route, never a public object URL. |
+| `GET /api/customers/:customerId/photo` | Authenticated, customer/tenant scoped | Streams the portrait only to the customer, staff/admin in the same restaurant, or platform super-admin. |
 
 ---
 
@@ -378,7 +379,7 @@ npm run build
 ```
 
 ### Test Coverage Breakdown (`88` Passing Tests across `23` Suites)
-- **[`tests/productionScale.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/productionScale.test.ts)**: PostgreSQL schema DDL parsing and relational table definitions, graceful offline database fallback, distributed Redis 30s QR replay guard with atomic SETNX, S3/Spaces/R2 object storage upload with local fallback, and authenticated `POST /api/upload/photo` verification.
+- **[`tests/productionScale.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/productionScale.test.ts)**: PostgreSQL schema DDL parsing and relational table definitions, graceful offline database fallback, distributed Redis 30s QR replay guard with atomic SETNX, private S3/Spaces/R2 object storage with private local fallback, authenticated tenant-scoped photo upload/read, and cross-tenant denial tests.
 - **[`tests/apiSecurity.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/apiSecurity.test.ts)**: HMAC session token signing, tampering/expiration rejection, role-based tenant scoping, atomic DB backup persistence, customer identity isolation (`getCurrentCustomer` never falls back to another customer), and production secret validation.
 - **[`tests/cryptoService.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/cryptoService.test.ts)**: SHA-256 digests, HMAC-SHA256, hierarchical restaurant/customer key isolation, constant-time comparison, salted PIN verification, and `c1`/`v1` QR token verification.
 - **[`tests/customerAuthAndPhysicalCard.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/customerAuthAndPhysicalCard.test.ts)**: 7-step end-to-end verification of provisional registration, boss approval with grace meal reconciliation, non-SMS 6+ digit PIN activation, rate-limited login, audited PIN recovery, CR80 physical card scanning, and `500 RWF` monetization gating with physical card fallback.
