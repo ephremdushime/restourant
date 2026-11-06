@@ -313,7 +313,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                 Submission Recorded!
               </h4>
               <p className="text-sm text-emerald-100 mt-1.5 max-w-md mx-auto leading-relaxed">
-                Customer <strong>#{successResult.customer.memberNo} ({successResult.customer.name})</strong> has been queued for Boss Mobile Money verification.
+                Customer <strong>#{successResult.customer.memberNo} ({successResult.customer.name})</strong> has been registered and the reception payment has been confirmed. It is now awaiting final boss approval.
               </p>
             </div>
 
@@ -321,10 +321,10 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
             <div className="p-4 rounded-xl bg-black/50 border border-emerald-400/50 text-left space-y-2 text-sm">
               <div className="flex items-center gap-2 text-amber-300 font-bold text-base">
                 <ShieldCheck className="w-5 h-5 shrink-0" />
-                <span>Grace Meals Policy: Up to 3 Plates Authorized</span>
+                <span>Grace Meals Policy: Up to 4 Plates Authorized</span>
               </div>
               <p className="text-slate-200 text-sm leading-relaxed">
-                While the boss verifies payment reference <strong>{successResult.ref}</strong> ({successResult.amount.toLocaleString()} RWF for {successResult.plates} plates), the customer may consume up to <strong>3 grace meals</strong> if their paid balance is zero.
+                Reception has confirmed {successResult.amount.toLocaleString()} RWF for {successResult.plates} plates (reference: <strong>{successResult.ref}</strong>). The customer may consume up to <strong>4 grace meals</strong> while the boss reviews the registration.
               </p>
             </div>
 
@@ -688,7 +688,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
 
                     <div>
                       <label htmlFor="reg-payment-ref" className="text-slate-200 font-semibold block mb-1.5 text-sm">
-                        Payment / MoMo Reference <span className="text-emerald-400">*</span>
+                        Payment / MoMo Reference {paymentMethod !== 'cash' && <span className="text-emerald-400">*</span>}
                       </label>
                       <input
                         id="reg-payment-ref"
