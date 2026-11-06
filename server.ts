@@ -303,6 +303,9 @@ function queueDbSave(state: any): Promise<boolean> {
   return new Promise((resolve) => {
     dbWriteQueue = dbWriteQueue.then(async () => {
       try {
+        // Normalize credentials arriving in newly-created or edited station-user
+        // records before either PostgreSQL or the local snapshot persists them.
+        normalizeStationUserCredentials(state);
         let pgOk = true;
         if (isPostgresConfigured()) {
           pgOk = await saveStateToPostgres(state);
@@ -341,13 +344,13 @@ function normalizeStationUserCredentials(state: any): boolean {
   for (const stationUser of state.stationUsers) {
     if (!stationUser || typeof stationUser !== 'object') continue;
     if (typeof stationUser.pin === 'string' && stationUser.pin.trim()) {
-      if (!stationUser.pinHash) {
-        stationUser.pinHash = computeServerCustomerPinHash(
-          stationUser.pin.trim(),
-          stationUser.id || 'station',
-          stationUser.username || 'operator'
-        );
-      }
+      // A newly supplied PIN must replace the previous hash, not be discarded
+      // merely because an older pinHash already exists.
+      stationUser.pinHash = computeServerCustomerPinHash(
+        stationUser.pin.trim(),
+        stationUser.id || 'station',
+        stationUser.username || 'operator'
+      );
       delete stationUser.pin;
       changed = true;
     }
