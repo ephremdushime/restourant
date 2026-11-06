@@ -729,7 +729,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
               <span className="px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 text-xs font-bold uppercase">
                 {customerSub?.status || 'inactive'}
-              </span>     </button>
+              </span>
             </div>
           )}
 
