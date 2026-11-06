@@ -1599,7 +1599,7 @@ app.get(
     }
 
     try {
-      const photo = await getPrivatePatronPhoto(customer.photoStorageKey);
+      const photo = await getPrivatePatronPhoto(customer.photoStorageKey, customer.photoStorageType);
       if (!photo) return res.status(404).json({ success: false, error: 'Photo not found.' });
       res.set({
         'Content-Type': photo.mimeType,
