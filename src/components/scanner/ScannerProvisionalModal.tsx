@@ -430,7 +430,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                 }`}
               >
                 <CreditCard className="w-4 h-4" />
-                <span>Existing Customer Top-Up</span>
+                <span>Find / Confirm Payment</span>
               </button>
             </div>
 
@@ -438,7 +438,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
             <div className="p-3.5 rounded-2xl bg-amber-950/60 border border-amber-500/50 text-sm text-amber-100 flex items-start gap-3">
               <Clock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
               <div className="leading-relaxed">
-                <strong>Boss Approval Policy:</strong> Collect payment, record the Mobile Money reference, and submit. New or zero-balance customers can eat up to <strong>3 grace plates</strong> while waiting for boss approval.
+                <strong>Boss Approval Policy:</strong> Collect payment, record the Mobile Money reference, and submit. New registrations with confirmed reception payment can use up to <strong>4 grace plates</strong> while waiting for boss approval.
               </div>
             </div>
 
@@ -758,12 +758,12 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                 {/* Search existing member */}
                 <div>
                   <label htmlFor="topup-member-search" className="font-bold text-white block mb-1.5 text-sm">
-                    Find Existing Member
+                    Find Registered Customer
                   </label>
                   <input
                     id="topup-member-search"
                     type="text"
-                    placeholder="Type name, member # (e.g. 28491), or phone..."
+                    placeholder="Search by name, member number, or registered phone..."
                     value={topupSearch}
                     onChange={(e) => setTopupSearch(e.target.value)}
                     className="w-full py-3 px-3.5 rounded-xl bg-slate-950 border-2 border-slate-700 text-white font-mono text-base sm:text-sm placeholder-slate-500 focus:border-emerald-400 outline-hidden"
@@ -809,7 +809,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                         <div>
                           <div className="font-bold text-white text-base">{selectedCustomer.name}</div>
                           <div className="text-slate-300 font-mono text-xs">
-                            Member #{selectedCustomer.memberNo} · Approved Balance: {restoStore.getCustomerBalance(selectedCustomer.id)} plates
+                            Member #{selectedCustomer.memberNo} · {selectedCustomer.registrationStatus === 'pending_reception_payment' ? 'Payment confirmation required' : `Balance: ${restoStore.getCustomerBalance(selectedCustomer.id)} plates`}
                           </div>
                         </div>
                       </div>
