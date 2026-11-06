@@ -1648,6 +1648,16 @@ app.post('/api/customer/activation/complete', authRateLimiter, async (req, res) 
     }
   }
 
+  const previousCustomerAuth = {
+    pinHash: cust.pinHash,
+    hasCustomPin: cust.hasCustomPin,
+    pinSetAt: cust.pinSetAt,
+    activationStatus: cust.activationStatus,
+    cardReadyForPrint: cust.cardReadyForPrint,
+    failedLoginAttempts: cust.failedLoginAttempts,
+    lockedUntil: cust.lockedUntil,
+  };
+  const previousActivationRequest = actReq ? { used: actReq.used, usedAt: actReq.usedAt } : null;
   const pinHash = computeServerCustomerPinHash(cleanPin, cust.id, cust.memberNo);
   cust.pinHash = pinHash;
   cust.hasCustomPin = true;
@@ -1664,15 +1674,8 @@ app.post('/api/customer/activation/complete', authRateLimiter, async (req, res) 
 
   const saved = await queueDbSave(serverDbState);
   if (!saved) {
-    cust.pinHash = '';
-    cust.hasCustomPin = false;
-    cust.pinSetAt = undefined;
-    cust.activationStatus = cust.registrationStatus === 'pending_boss_approval' ? 'partial_active' : 'ready_for_activation';
-    cust.cardReadyForPrint = cust.registrationStatus === 'approved';
-    if (actReq) {
-      actReq.used = false;
-      actReq.usedAt = undefined;
-    }
+    Object.assign(cust, previousCustomerAuth);
+    if (actReq && previousActivationRequest) Object.assign(actReq, previousActivationRequest);
     return res.status(503).json({ success: false, error: 'PIN setup could not be saved. Please retry.' });
   }
 
