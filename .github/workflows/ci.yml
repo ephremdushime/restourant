@@ -132,7 +132,7 @@ jobs:
             exit 1
           fi
           grep -q '"status":"ready"' /tmp/restopass-compose-ready.json
-          table_count="$("${compose[@]}" exec -T postgres sh -ec 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '''public''' AND table_type = '''BASE TABLE''';"')"
+          table_count="$("${compose[@]}" exec -T postgres sh -ec 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_type = $BASE TABLE$;"')"
           if ! [[ "$table_count" =~ ^[0-9]+$ ]] || (( table_count < 10 )); then
             echo "Cloud PostgreSQL schema is incomplete: $table_count tables."
             exit 1
