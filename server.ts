@@ -12,7 +12,7 @@ import {
   commitPlateTransferPostgres,
 } from './src/services/db/postgresAdapter';
 import { recordTokenScan, isRedisConfigured, checkRedisReady, revokeSessionToken, isSessionTokenRevoked } from './src/services/cache/redisClient';
-import { uploadBase64Photo } from './src/services/storage/objectStorage';
+import { uploadBase64Photo, getPrivatePatronPhoto } from './src/services/storage/objectStorage';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -504,14 +504,12 @@ setInterval(() => {
 const authRateLimiter = createRateLimiter('auth', 20, 60 * 1000); // 20 attempts per minute
 const apiRateLimiter = createRateLimiter('api', 120, 60 * 1000); // 120 requests per minute
 const syncRateLimiter = createRateLimiter('sync', 40, 60 * 1000); // 40 syncs per minute
+const photoRateLimiter = createRateLimiter('photo', 10, 60 * 1000); // 10 photo operations per minute
 
 // Request body parser with scoped limits (supports patron portrait uploads)
 app.use(express.json({ limit: '10mb' }));
-// Patron photos may contain personal data. Public static delivery is allowed only
-// for the explicitly local/offline standalone mode, never for hosted cloud mode.
-if ((process.env.RESTOPASS_DEPLOYMENT_MODE || 'standalone').toLowerCase() !== 'cloud') {
-  app.use('/uploads', express.static(path.resolve(process.cwd(), 'public/uploads')));
-}
+// Patron photos are never served from a public static directory. All reads use
+// the authenticated, tenant-scoped endpoint below.
 
 // ----------------------------------------------------
 // Cryptographic Session Engine & Token Verification (Finding 1 & 4)
@@ -675,6 +673,21 @@ function requireAuth(allowedRoles?: string[]) {
     req.user = session;
     next();
   };
+}
+
+/**
+ * Photo access is scoped to the subject customer or their own restaurant.
+ * Super-admin access is platform-wide and remains session-authenticated.
+ */
+function canAccessCustomerPhoto(user: UserSession | null | undefined, customer: any): boolean {
+  if (!user || !customer || typeof customer.id !== 'string' ||
+      typeof customer.restaurantCode !== 'string' || !customer.restaurantCode) return false;
+  if (user.role === 'super_admin') return true;
+  if (user.role === 'customer') {
+    return user.userId === customer.id && user.restaurantCode === customer.restaurantCode;
+  }
+  return (user.role === 'stand_staff' || user.role === 'restaurant_admin') &&
+    user.restaurantCode === customer.restaurantCode;
 }
 
 function getSessionTokenTtlSeconds(token: string): number {
@@ -1465,42 +1478,94 @@ app.post('/api/customer/recovery/complete', authRateLimiter, (req, res) => {
 });
 
 // ----------------------------------------------------
-// S3 / Cloudflare R2 / DigitalOcean Spaces / Local Photo Upload
+// Private, authenticated patron-photo storage and delivery
 // ----------------------------------------------------
 
-// POST /api/upload/photo: Upload patron photos to cloud object storage (or local uploads/)
-app.post('/api/upload/photo', apiRateLimiter, requireAuth(), async (req, res) => {
-  if ((process.env.RESTOPASS_DEPLOYMENT_MODE || 'standalone').toLowerCase() === 'cloud') {
-    return res.status(503).json({
-      success: false,
-      error: 'Patron photo uploads are temporarily disabled in cloud mode until private, authenticated photo delivery is available.',
-    });
-  }
-  const { photoBase64, filenameHint } = req.body;
-  if (!photoBase64 || typeof photoBase64 !== 'string') {
-    return res.status(400).json({
-      success: false,
-      error: 'Missing required "photoBase64" data URL string.',
-    });
-  }
+// Uploads are attached to an existing customer record; callers cannot choose a
+// storage key, tenant prefix, object URL, or filename.
+app.post(
+  '/api/upload/photo',
+  photoRateLimiter,
+  requireAuth(['customer', 'stand_staff', 'restaurant_admin', 'super_admin']),
+  async (req, res) => {
+    const { customerId, photoBase64 } = req.body || {};
+    if (typeof customerId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(customerId) ||
+        typeof photoBase64 !== 'string') {
+      return res.status(400).json({ success: false, error: 'A valid customerId and photoBase64 data URL are required.' });
+    }
 
-  try {
-    const uploadResult = await uploadBase64Photo(photoBase64, filenameHint || 'patron');
-    return res.json({
-      success: true,
-      url: uploadResult.url,
-      key: uploadResult.key,
-      storageType: uploadResult.storageType,
-      sizeBytes: uploadResult.sizeBytes,
-    });
-  } catch (err: any) {
-    console.error('[Upload Photo Error]', err.message);
-    return res.status(400).json({
-      success: false,
-      error: err.message || 'Failed to process and store patron photo.',
-    });
+    const customer = (serverDbState?.customers || []).find((item: any) => item.id === customerId);
+    if (!customer) return res.status(404).json({ success: false, error: 'Customer not found.' });
+    const user = req.user!;
+    if (!canAccessCustomerPhoto(user, customer)) {
+      return res.status(403).json({ success: false, error: 'You are not authorized to upload a photo for this customer.' });
+    }
+
+    try {
+      const uploaded = await uploadBase64Photo(photoBase64, customer.restaurantCode);
+      const photoUrl = `/api/customers/${encodeURIComponent(customer.id)}/photo`;
+      customer.photoStorageKey = uploaded.key;
+      customer.photoStorageType = uploaded.storageType;
+      customer.photoUrl = photoUrl;
+      for (const approval of serverDbState.pendingApprovals || []) {
+        if (approval.customerId === customer.id) approval.customerPhoto = photoUrl;
+      }
+
+      if (!(await queueDbSave(serverDbState))) {
+        return res.status(503).json({ success: false, error: 'Photo was stored but customer metadata could not be persisted. Retry after checking server storage.' });
+      }
+      return res.status(201).json({
+        success: true,
+        photoUrl,
+        sizeBytes: uploaded.sizeBytes,
+      });
+    } catch (err: any) {
+      console.error('[Upload Photo Error]', err?.message || err);
+      return res.status(400).json({
+        success: false,
+        error: err?.message || 'Failed to process and store patron photo.',
+      });
+    }
   }
-});
+);
+
+// Photo bytes are returned only after session validation and tenant/subject checks.
+// Never redirect to S3 or expose a bucket/CDN URL.
+app.get(
+  '/api/customers/:customerId/photo',
+  photoRateLimiter,
+  requireAuth(),
+  async (req, res) => {
+    const customerId = req.params.customerId;
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(customerId)) {
+      return res.status(404).json({ success: false, error: 'Photo not found.' });
+    }
+    const customer = (serverDbState?.customers || []).find((item: any) => item.id === customerId);
+    if (!customer || !canAccessCustomerPhoto(req.user, customer) ||
+        typeof customer.photoStorageKey !== 'string' ||
+        !customer.photoStorageKey.startsWith(`patron-photos/${String(customer.restaurantCode).toUpperCase()}/`)) {
+      return res.status(404).json({ success: false, error: 'Photo not found.' });
+    }
+
+    try {
+      const photo = await getPrivatePatronPhoto(customer.photoStorageKey);
+      if (!photo) return res.status(404).json({ success: false, error: 'Photo not found.' });
+      res.set({
+        'Content-Type': photo.mimeType,
+        'Content-Length': String(photo.buffer.length),
+        'Cache-Control': 'private, no-store, max-age=0',
+        'Pragma': 'no-cache',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; sandbox",
+        'Content-Disposition': 'inline',
+      });
+      return res.status(200).send(photo.buffer);
+    } catch (err: any) {
+      console.error('[Read Patron Photo Error]', err?.message || err);
+      return res.status(503).json({ success: false, error: 'Private photo storage is temporarily unavailable.' });
+    }
+  }
+);
 
 // ----------------------------------------------------
 // Authoritative Cryptographic QR & License Engine (Finding 1 & 4)
@@ -3215,4 +3280,5 @@ export {
   verifyRestaurantAdminCredentials,
   getRestaurantAdminAuthVersion,
   isCurrentRestaurantAdminSession,
+  canAccessCustomerPhoto,
 };
