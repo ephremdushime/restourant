@@ -768,7 +768,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
             <>
               <div className="space-y-1.5">
                 <label className="font-bold text-slate-200 text-sm">
-                  Registered Phone Number (or Member No)
+                  Registered Phone Number
                 </label>
                 <input
                   type="text"
@@ -777,7 +777,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
                     setPhoneOrMember(e.target.value);
                     setErrorMessage(null);
                   }}
-                  placeholder="e.g. +250 788 123 456 or 28491"
+                  placeholder="e.g. +250 788 123 456"
                   className="w-full bg-slate-950 border-2 border-slate-700 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-white outline-hidden font-mono text-sm font-bold"
                 />
               </div>
@@ -827,6 +827,11 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
                     </div>
                   </div>
                 </div>
+              ) : customerPortalStatus?.status === 'pending_reception_payment' ? (
+                <div className="p-3.5 rounded-2xl bg-amber-950/60 border-2 border-amber-500/60 text-amber-200 text-xs space-y-1">
+                  <div className="font-black text-sm text-amber-300">Visit Reception to Complete Payment</div>
+                  <p className="font-medium leading-relaxed">Your registration has been saved. Visit the selected dining facility reception, choose your meal package and pay. The receptionist must confirm your payment before PIN setup becomes available.</p>
+                </div>
               ) : customerPortalStatus?.status === 'pending_boss_approval' ? (
                 <div className="p-3.5 rounded-2xl bg-amber-950/60 border-2 border-amber-500/60 text-amber-200 text-xs space-y-1">
                   <div className="font-black text-sm text-amber-300">
@@ -860,7 +865,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
               )}
 
               <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 text-xs flex items-center justify-between">
-                <div className="text-slate-300 text-xs font-medium">First time after Boss approval?</div>
+                <div className="text-slate-300 text-xs font-medium">Need to set up your PIN?</div>
                 <button
                   type="button"
                   onClick={() => {
