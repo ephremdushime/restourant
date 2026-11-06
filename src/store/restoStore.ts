@@ -6092,7 +6092,9 @@ export class RestoStore {
       approvalId: approval.id,
       timestamp: now,
     };
-    this.state.payments.unshift(payment);
+    if (!this.state.payments.some((existing) => existing.approvalId === approval.id)) {
+      this.state.payments.unshift(payment);
+    }
 
     // 3. Update approval status first, then recompute customer grace state from any remaining pending approvals
     approval.gracePlatesConsumed = graceConsumed;
