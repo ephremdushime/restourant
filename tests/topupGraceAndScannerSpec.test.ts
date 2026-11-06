@@ -218,6 +218,13 @@ describe('Part 1: Top-Up, Approval-Linked Ledger, and Grace-Meal Accounting Scen
     assert.equal(fourthGrace.isGraceMeal, true);
 
     assert.equal(reg.approval.gracePlatesConsumed, 4);
+    assert.equal(newCustomer.gracePlatesRemaining, 0);
+
+    // A fifth pre-approval scan must be rejected without changing the paid package.
+    const fifthGraceAttempt = restoStore.processScan(cardToken);
+    assert.equal(fifthGraceAttempt.outcome, 'REJECTED');
+    assert.equal(fifthGraceAttempt.rejectionCode, 'NO_BALANCE');
+    assert.equal(reg.approval.gracePlatesConsumed, 4);
 
     // Boss approves -> Account activates with 60 - 4 = 56
     const apprRes = restoStore.approvePendingRequest(reg.approval.id, 'Restaurant Boss');
