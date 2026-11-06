@@ -2683,6 +2683,20 @@ function applySyncDeletionTombstones(state: any, incoming: any, user: UserSessio
   return applied;
 }
 
+/**
+ * Prevent tenant-scoped records from being reassigned by a colliding or forged
+ * ID during incremental sync. Tenant admins must submit an explicit matching
+ * restaurantCode; an existing record's tenant is immutable through generic sync.
+ */
+function canMergeTenantScopedRecord(existing: any, incoming: any, allowedRestoCode: string | null): boolean {
+  if (!incoming || typeof incoming !== 'object' || typeof incoming.restaurantCode !== 'string' || !incoming.restaurantCode) {
+    return false;
+  }
+  if (allowedRestoCode && incoming.restaurantCode !== allowedRestoCode) return false;
+  if (existing?.restaurantCode && existing.restaurantCode !== incoming.restaurantCode) return false;
+  return true;
+}
+
 // POST /api/sync: Authenticated, validated incremental synchronization with Idempotency (Findings 5 & 6)
 app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
   const { fullState } = req.body;
@@ -2704,6 +2718,7 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
       const existingCustomersMap = new Map((serverDbState.customers || []).map((c: any) => [c.id, c]));
       for (const inc of incomingCustomers) {
         const prev: any = existingCustomersMap.get(inc.id);
+        if (prev && !canMergeTenantScopedRecord(prev, inc, allowedRestoCode)) continue;
         if (prev) {
           if (user.role === 'customer') {
             // Customers can only toggle their own card lock status or update PIN metadata, never privilege/version fields
@@ -2745,9 +2760,10 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         for (const inc of fullState[key]) {
           if (!inc || !inc.id) continue;
           if (SEED_EXPENSE_IDS.has(inc.id) || SEED_NOTIFICATION_IDS.has(inc.id) || SEED_BRANCH_IDS.has(inc.id) || SEED_USER_IDS.has(inc.id)) continue;
-          if (allowedRestoCode && inc.restaurantCode && inc.restaurantCode !== allowedRestoCode) continue;
+          if (allowedRestoCode && inc.restaurantCode !== allowedRestoCode) continue;
           if (user.role === 'customer' && inc.customerId && inc.customerId !== user.userId) continue;
           const prev = map.get(inc.id);
+          if (prev && !canMergeTenantScopedRecord(prev, inc, allowedRestoCode)) continue;
           if (prev) {
             if (allowUpdate) {
               map.set(inc.id, { ...prev, ...inc });
@@ -3087,4 +3103,5 @@ export {
   verifyStationUserCredentials,
   isActiveStationSession,
   applySyncDeletionTombstones,
+  canMergeTenantScopedRecord,
 };
