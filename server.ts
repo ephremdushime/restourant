@@ -11,7 +11,7 @@ import {
   insertLedgerEntryPostgres,
   commitPlateTransferPostgres,
 } from './src/services/db/postgresAdapter';
-import { recordTokenScan, isRedisConfigured, checkRedisReady } from './src/services/cache/redisClient';
+import { recordTokenScan, isRedisConfigured, checkRedisReady, revokeSessionToken, isSessionTokenRevoked } from './src/services/cache/redisClient';
 import { uploadBase64Photo } from './src/services/storage/objectStorage';
 
 const app = express();
@@ -557,7 +557,7 @@ declare global {
  * Middleware: Enforces valid session token and optional role verification
  */
 function requireAuth(allowedRoles?: string[]) {
-  return (req: Request, res: Response, next: NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
     const authHeader = req.headers.authorization || (req.headers['x-restopass-token'] as string);
     let token = '';
 
@@ -582,6 +582,17 @@ function requireAuth(allowedRoles?: string[]) {
       });
     }
 
+    if (isRedisConfigured()) {
+      const digest = crypto.createHash('sha256').update(token).digest('hex');
+      const revocation = await isSessionTokenRevoked(digest);
+      if (!revocation.available) {
+        return res.status(503).json({ success: false, error: 'Session revocation service is unavailable. Retry shortly.' });
+      }
+      if (revocation.revoked) {
+        return res.status(401).json({ success: false, error: 'Session has been revoked. Please sign in again.' });
+      }
+    }
+
     if (allowedRoles && allowedRoles.length > 0 && !allowedRoles.includes(session.role)) {
       return res.status(403).json({
         success: false,
@@ -592,6 +603,29 @@ function requireAuth(allowedRoles?: string[]) {
     req.user = session;
     next();
   };
+}
+
+function getSessionTokenTtlSeconds(token: string): number {
+  try {
+    if (!token.startsWith('rp_sess_')) return 0;
+    const [encodedPayload] = token.slice('rp_sess_'.length).split('.');
+    const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+    return Math.max(0, Math.ceil((Number(payload.exp) - Date.now()) / 1000));
+  } catch {
+    return 0;
+  }
+}
+
+async function revokePresentedSessionToken(token: string): Promise<boolean> {
+  const ttlSeconds = getSessionTokenTtlSeconds(token);
+  if (!ttlSeconds) return true;
+  if (isRedisConfigured()) {
+    const digest = crypto.createHash('sha256').update(token).digest('hex');
+    const persisted = await revokeSessionToken(digest, ttlSeconds);
+    if (!persisted) return false;
+  }
+  revokedTokens.add(token);
+  return true;
 }
 
 // ----------------------------------------------------
@@ -846,17 +880,11 @@ app.get('/api/auth/session', apiRateLimiter, requireAuth(), (req, res) => {
 });
 
 // POST /api/auth/logout: Revoke session token
-app.post('/api/auth/logout', (req, res) => {
+app.post('/api/auth/logout', async (req, res) => {
   const authHeader = req.headers.authorization || (req.headers['x-restopass-token'] as string);
-  let token = '';
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    token = authHeader.substring(7).trim();
-  } else if (authHeader) {
-    token = authHeader.trim();
-  }
-
-  if (token) {
-    revokedTokens.add(token);
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7).trim() : (authHeader || '').trim();
+  if (token && !(await revokePresentedSessionToken(token))) {
+    return res.status(503).json({ success: false, error: 'Could not persist session revocation. Retry logout.' });
   }
   return res.json({ success: true, message: 'Logged out successfully' });
 });
@@ -1017,15 +1045,12 @@ app.post('/api/customer/auth/login', authRateLimiter, async (req, res) => {
 });
 
 // POST /api/customer/auth/logout: Revoke current session
-app.post('/api/customer/auth/logout', (req, res) => {
+app.post('/api/customer/auth/logout', async (req, res) => {
   const authHeader = req.headers.authorization || (req.headers['x-restopass-token'] as string);
-  let token = '';
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    token = authHeader.substring(7).trim();
-  } else if (authHeader) {
-    token = authHeader.trim();
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7).trim() : (authHeader || '').trim();
+  if (token && !(await revokePresentedSessionToken(token))) {
+    return res.status(503).json({ success: false, error: 'Could not persist session revocation. Retry logout.' });
   }
-  if (token) revokedTokens.add(token);
   return res.json({ success: true, message: 'Logged out successfully' });
 });
 
