@@ -7,9 +7,11 @@
  */
 
 import Redis from 'ioredis';
+import crypto from 'node:crypto';
 
 let redisInstance: Redis | null = null;
 const memoryReplayCache = new Map<string, number>();
+const memoryRevokedSessions = new Map<string, number>();
 
 export function isRedisConfigured(): boolean {
   return Boolean(process.env.REDIS_URL);
@@ -60,6 +62,43 @@ export function getRedisClient(): Redis | null {
   }
 
   return redisInstance;
+}
+
+
+/**
+ * Durable session revocation for cloud deployments. Only a one-way digest of
+ * the bearer token is stored; raw session credentials are never written to Redis.
+ */
+export async function revokeSessionToken(tokenDigest: string, ttlSeconds: number): Promise<boolean> {
+  const safeTtl = Math.max(1, Math.min(Math.floor(ttlSeconds), 24 * 60 * 60));
+  const client = getRedisClient();
+  if (isRedisConfigured()) {
+    if (!client || client.status !== 'ready') return false;
+    try {
+      return (await client.set(`revoked_session:${tokenDigest}`, '1', 'EX', safeTtl)) === 'OK';
+    } catch (err: any) {
+      console.error('[Redis Session Revocation] Failed to persist revocation:', err?.message || err);
+      return false;
+    }
+  }
+  memoryRevokedSessions.set(tokenDigest, Date.now() + safeTtl * 1000);
+  return true;
+}
+
+export async function isSessionTokenRevoked(tokenDigest: string): Promise<{ revoked: boolean; available: boolean }> {
+  const client = getRedisClient();
+  if (isRedisConfigured()) {
+    if (!client || client.status !== 'ready') return { revoked: false, available: false };
+    try {
+      return { revoked: (await client.exists(`revoked_session:${tokenDigest}`)) === 1, available: true };
+    } catch (err: any) {
+      console.error('[Redis Session Revocation] Lookup failed:', err?.message || err);
+      return { revoked: false, available: false };
+    }
+  }
+  const expiresAt = memoryRevokedSessions.get(tokenDigest) || 0;
+  if (expiresAt <= Date.now()) memoryRevokedSessions.delete(tokenDigest);
+  return { revoked: expiresAt > Date.now(), available: true };
 }
 
 /**
@@ -146,6 +185,7 @@ export async function isTokenUsed(tokenKey: string): Promise<boolean> {
  */
 export function resetMemoryCache(): void {
   memoryReplayCache.clear();
+  memoryRevokedSessions.clear();
 }
 
 /**
