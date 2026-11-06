@@ -83,6 +83,9 @@ services:
       NODE_ENV: production
       RESTOPASS_DEPLOYMENT_MODE: cloud
       PORT: 3000
+      # One host-local reverse proxy in front of the loopback-only published port.
+      # Change only when the actual trusted proxy topology differs.
+      TRUST_PROXY: ${TRUST_PROXY:-1}
       PGMAX_CONNECTIONS: 10
       # Relational persistence connection
       DATABASE_URL: postgres://${POSTGRES_USER:-restopass_app}:${POSTGRES_PASSWORD:?Set_POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-restopass}
