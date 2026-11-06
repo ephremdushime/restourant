@@ -2378,10 +2378,6 @@ app.post(
     serverDbState = incoming;
     ensureServerDbDefaults(serverDbState);
 
-    // Apply soft-deletion requests only after normal sync validation/merging.
-    // Tombstones remain durable and are reapplied on every future sync/load.
-    applySyncDeletionTombstones(serverDbState, fullState.deletionTombstones, user);
-
     const savedOk = await queueDbSave(serverDbState);
     if (!savedOk) {
       return res.status(500).json({
