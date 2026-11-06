@@ -522,6 +522,7 @@ export interface UserSession {
   role: 'stand_staff' | 'restaurant_admin' | 'customer' | 'super_admin';
   restaurantCode: string;
   stationId?: string;
+  authVersion?: string;
   iat: number;
   exp: number;
 }
@@ -658,6 +659,11 @@ function requireAuth(allowedRoles?: string[]) {
     if (process.env.NODE_ENV === 'production' && !isActiveStationSession(session, serverDbState)) {
       return res.status(401).json({ success: false, error: 'Station account is blocked or no longer exists. Please contact the restaurant administrator.' });
     }
+    if (process.env.NODE_ENV === 'production' &&
+        session.role === 'restaurant_admin' &&
+        !isCurrentRestaurantAdminSession(session)) {
+      return res.status(401).json({ success: false, error: 'Restaurant administrator credentials changed. Please sign in again.' });
+    }
 
     if (allowedRoles && allowedRoles.length > 0 && !allowedRoles.includes(session.role)) {
       return res.status(403).json({
@@ -780,6 +786,24 @@ function verifyRestaurantAdminCredentials(
   return !isProduction && typeof password === 'string' && password.length >= 6;
 }
 
+function getRestaurantAdminAuthVersion(restaurantCode: string, account: { username: string; password: string }): string {
+  return crypto.createHmac('sha256', MASTER_KEY)
+    .update(`RESTOPASS_ADMIN_AUTH:${restaurantCode.trim().toUpperCase()}:${account.username.toLowerCase()}:${account.password}`)
+    .digest('hex');
+}
+
+/** Rejects pre-migration sessions and immediately invalidates tokens after credential rotation. */
+function isCurrentRestaurantAdminSession(
+  session: UserSession,
+  raw = process.env.RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS
+): boolean {
+  if (!session || session.role !== 'restaurant_admin') return false;
+  const account = resolveRestaurantAdminAccount(session.restaurantCode, raw);
+  if (!account || session.username.trim().toLowerCase() !== account.username.toLowerCase()) return false;
+  const expectedVersion = getRestaurantAdminAuthVersion(session.restaurantCode, account);
+  return typeof session.authVersion === 'string' && timingSafeCompare(session.authVersion, expectedVersion);
+}
+
 // ----------------------------------------------------
 // Authentication Routes (Finding 4)
 // ----------------------------------------------------
@@ -859,6 +883,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       username: safeBossUsername,
       role: 'restaurant_admin',
       restaurantCode,
+      ...(configuredAdminAccount ? { authVersion: getRestaurantAdminAuthVersion(restaurantCode, configuredAdminAccount) } : {}),
     });
     return res.json({
       success: true,
@@ -3186,4 +3211,6 @@ export {
   canMergeTenantScopedRecord,
   resolveRestaurantAdminAccount,
   verifyRestaurantAdminCredentials,
+  getRestaurantAdminAuthVersion,
+  isCurrentRestaurantAdminSession,
 };
