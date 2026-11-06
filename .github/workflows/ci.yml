@@ -78,6 +78,11 @@ jobs:
           bash -n deploy/lib/photo-backup.sh deploy/backup-patron-photos.sh deploy/restore-patron-photos.sh deploy/test-private-photo-backup.sh
           bash deploy/test-private-photo-backup.sh
 
+      - name: Validate paired off-site backup orchestration
+        run: |
+          bash -n deploy/backup-all.sh deploy/verify-patron-photo-backup.sh deploy/verify-latest-paired-backup.sh deploy/install-backup-schedule.sh deploy/test-paired-backup-scripts.sh
+          bash deploy/test-paired-backup-scripts.sh
+
       - name: Validate production Docker Compose configuration
         run: |
           export POSTGRES_PASSWORD="$(openssl rand -hex 32)"
