@@ -4398,9 +4398,10 @@ export class RestoStore {
     // This is an attempt count, not a success count. Entries remain pending until
     // pushStateToServer receives an explicit successful acknowledgement.
     const pendingCount = this.state.syncOutbox.filter((item) => !item.syncedToCloud).length;
-    if (pendingCount > 0) {
-      void this.pushStateToServer();
-    }
+    // Push the full local state even when the explicit outbox is empty: some
+    // offline scanner updates (for example grace-approval counters and scan events)
+    // are synchronized as part of the authoritative state snapshot.
+    void this.pushStateToServer();
     return pendingCount;
   }
 
