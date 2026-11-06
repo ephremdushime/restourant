@@ -14,6 +14,7 @@ import {
   UserSession,
 } from '../server';
 import { restoStore } from '../src/store/restoStore';
+import { revokeSessionToken, isSessionTokenRevoked, resetMemoryCache } from '../src/services/cache/redisClient';
 
 describe('Server API Security, Session Engine & Role Scoping', () => {
   test('creates and verifies cryptographically signed session tokens', () => {
@@ -67,6 +68,22 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     );
 
     assert.equal(verifySessionToken(token), null);
+  });
+
+  test('persists session revocation in the local single-process fallback', async () => {
+    const previousRedisUrl = process.env.REDIS_URL;
+    delete process.env.REDIS_URL;
+    resetMemoryCache();
+    try {
+      const digest = 'unit_test_session_digest_0123456789abcdef';
+      assert.equal(await revokeSessionToken(digest, 60), true);
+      assert.deepEqual(await isSessionTokenRevoked(digest), { revoked: true, available: true });
+      assert.deepEqual(await isSessionTokenRevoked('another_session_digest'), { revoked: false, available: true });
+    } finally {
+      resetMemoryCache();
+      if (previousRedisUrl === undefined) delete process.env.REDIS_URL;
+      else process.env.REDIS_URL = previousRedisUrl;
+    }
   });
 
   test('role-based data scoping isolates restaurants and customers (Finding 1)', () => {
