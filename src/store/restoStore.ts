@@ -42,7 +42,7 @@ import {
   CustomerPinRecoveryRequest,
   RestaurantExpense,
   ExpenseCategory,
-} from '../types';
+} from '../types/index.ts';
 import {
   deriveRestaurantKey,
   deriveCustomerKey,
