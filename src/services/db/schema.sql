@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS customers (
 -- Database-enforced identity uniqueness within each restaurant.
 -- The application performs friendly pre-checks; these indexes close the concurrent
 -- registration race and make PostgreSQL the final authority.
-DO $
+DO $identity_preflight$
 DECLARE duplicate_groups BIGINT;
 BEGIN
   SELECT COUNT(*) INTO duplicate_groups
@@ -100,7 +100,7 @@ BEGIN
     RAISE EXCEPTION 'RestoPass identity migration blocked: % duplicate student registration number group(s) exist within a restaurant.', duplicate_groups
       USING HINT = 'Resolve duplicate student registration numbers per restaurant before restarting. No customer records were changed.';
   END IF;
-END $;
+END $identity_preflight$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_restaurant_phone_normalized
 ON customers (
