@@ -13,6 +13,7 @@ import {
   verifyServerCustomerPin,
   verifyStationUserCredentials,
   isActiveStationSession,
+  getStationUserAuthVersion,
   isActiveCustomerSession,
   findCustomerForLogin,
   getSuperAdminAuthVersion,
@@ -244,6 +245,38 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     }), false);
     assert.equal(isActiveStationSession(session, { stationUsers: [] }), false);
     assert.equal(isActiveStationSession({ ...session, role: 'customer' }, { stationUsers: [] }), true);
+  });
+
+  test('production scanner sessions are invalidated after station credential rotation', () => {
+    const stationUser = {
+      id: 'station_rw01_cashier',
+      username: 'cashier_rw01',
+      restaurantCode: 'RW01',
+      status: 'active',
+      authType: 'pin8',
+      pinHash: 'stored-pin-hash-v1',
+      passwordHash: '',
+    };
+    const session: UserSession = {
+      userId: 'staff_cashier_rw01',
+      username: 'cashier_rw01',
+      role: 'stand_staff',
+      restaurantCode: 'RW01',
+      authVersion: getStationUserAuthVersion(stationUser),
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+    };
+
+    assert.equal(isActiveStationSession(session, { stationUsers: [stationUser] }, true), true);
+    assert.equal(isActiveStationSession(session, {
+      stationUsers: [{ ...stationUser, pinHash: 'stored-pin-hash-v2' }],
+    }, true), false);
+    assert.equal(isActiveStationSession(session, {
+      stationUsers: [{ ...stationUser, status: 'blocked' }],
+    }, true), false);
+    assert.equal(isActiveStationSession({ ...session, authVersion: undefined }, {
+      stationUsers: [stationUser],
+    }, true), false);
   });
 
   test('restaurant administrators receive only their tenant records across operational and financial collections', () => {
