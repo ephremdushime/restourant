@@ -2,9 +2,9 @@ name: RestoPass CI Security & Quality Gate
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, hardening/production-readiness, 'fix/**' ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, hardening/production-readiness ]
 
 jobs:
   test-and-verify:
