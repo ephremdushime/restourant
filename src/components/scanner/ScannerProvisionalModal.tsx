@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Customer, PaymentMethod } from '../../types';
 import { restoStore } from '../../store/restoStore';
+import { PrivatePhoto } from '../common/PrivatePhoto';
 import { PhotoCaptureInput } from '../common/PhotoCaptureInput';
 import {
   UserPlus,
@@ -158,6 +159,8 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
     }
 
     try {
+      const capturedPhoto = photoUrl.startsWith('data:') ? photoUrl : null;
+      const fallbackPhoto = '/src/assets/images/avatar_student_male_1790979380050.jpg';
       const result = restoStore.registerProvisionalCustomer(
         {
           restaurantCode: restoCode,
@@ -165,7 +168,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
           branchName: currentBranch?.name || 'Main Campus Dining Hall',
           name: trimmedName,
           phone: trimmedPhone,
-          photoUrl,
+          photoUrl: capturedPhoto ? fallbackPhoto : photoUrl,
           idType: effectiveIdType,
           idNumber: effectiveIdNumber,
           isStudent,
@@ -190,6 +193,13 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
         staffName.trim()
       );
 
+      if (capturedPhoto) {
+        await restoStore.pushStateToServer();
+        const photoResult = await restoStore.uploadCustomerPhoto(result.customer.id, capturedPhoto);
+        if (!photoResult.success) {
+          setError(`Registration was recorded, but the portrait was not saved: ${photoResult.error || 'Upload unavailable'}. You can retry it from the customer profile.`);
+        }
+      }
       const qrToken = restoStore.getCustomerCardQr(result.customer);
       resetNewCustomerFields();
       setSuccessResult({
