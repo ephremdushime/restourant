@@ -4,24 +4,33 @@ import path from 'path';
 import crypto from 'crypto';
 import {
   isPostgresConfigured,
+  checkPostgresReady,
   initPostgres,
   loadStateFromPostgres,
   saveStateToPostgres,
   insertLedgerEntryPostgres,
+  commitPlateTransferPostgres,
 } from './src/services/db/postgresAdapter';
-import { recordTokenScan } from './src/services/cache/redisClient';
-import { uploadBase64Photo } from './src/services/storage/objectStorage';
+import { recordTokenScan, isRedisConfigured, checkRedisReady, revokeSessionToken, isSessionTokenRevoked, consumeRateLimit } from './src/services/cache/redisClient';
+import { uploadBase64Photo, getPrivatePatronPhoto, deletePrivatePatronPhoto } from './src/services/storage/objectStorage';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 // Configure trust proxy for cloud deployment (Cloudflare, AWS ALB, Nginx, Railway, Render)
-const trustProxySetting = process.env.TRUST_PROXY;
-if (trustProxySetting) {
-  app.set('trust proxy', trustProxySetting === 'true' ? true : Number(trustProxySetting) || trustProxySetting);
+const trustProxySetting = process.env.TRUST_PROXY?.trim().toLowerCase();
+if (trustProxySetting === 'true') {
+  app.set('trust proxy', true);
+} else if (trustProxySetting === 'false' || trustProxySetting === '0') {
+  app.set('trust proxy', false);
+} else if (trustProxySetting && /^\d+$/.test(trustProxySetting)) {
+  app.set('trust proxy', Number(trustProxySetting));
+} else if (trustProxySetting) {
+  // Explicit trusted proxy subnet(s), e.g. loopback or a private reverse-proxy network.
+  app.set('trust proxy', trustProxySetting);
 } else {
-  // Default to 1 hop behind cloud reverse proxy
-  app.set('trust proxy', 1);
+  // Do not trust client-supplied X-Forwarded-* headers unless the operator opts in.
+  app.set('trust proxy', false);
 }
 
 // Cryptographic secrets for session signing & data integrity
@@ -38,6 +47,9 @@ const FORBIDDEN_PLACEHOLDERS = [
   'CHANGETHIS',
   'YOUR_SECRET',
   'EXAMPLE_SECRET',
+  'GENERATE_',
+  'CONFIGURE_',
+  'YOUR_',
 ];
 
 function validateProductionSecrets(env: NodeJS.ProcessEnv = process.env): {
@@ -49,6 +61,9 @@ function validateProductionSecrets(env: NodeJS.ProcessEnv = process.env): {
   const masterSecret = (env.RESTOPASS_MASTER_SECRET || env.RESTOPASS_MASTER_KEY || '')?.trim();
 
   if (isProd) {
+    if (env.S3_PUBLIC_URL_PREFIX?.trim() || /public-read|public-read-write|authenticated-read/i.test(env.S3_OBJECT_ACL || '')) {
+      throw new Error('[FATAL SECURITY ERROR] Public patron-photo URL prefixes and public object ACLs are forbidden. Use a private bucket and authenticated photo delivery.');
+    }
     if (!sessionSecret || sessionSecret.length < 32 || sessionSecret === DEV_SESSION_SECRET) {
       throw new Error(
         '[FATAL SECURITY ERROR] SESSION_SECRET (>= 32 characters) must be configured in production environment. Server startup aborted.'
@@ -69,6 +84,53 @@ function validateProductionSecrets(env: NodeJS.ProcessEnv = process.env): {
       throw new Error(
         '[FATAL SECURITY ERROR] RESTOPASS_MASTER_SECRET contains an unconfigured placeholder. Generate a strong random production secret.'
       );
+    }
+
+    const superAdminPassword = env.RESTOPASS_SUPERADMIN_PASSWORD?.trim() || '';
+    if (superAdminPassword.length < 16 || FORBIDDEN_PLACEHOLDERS.some((p) => superAdminPassword.toUpperCase().includes(p))) {
+      throw new Error('[FATAL SECURITY ERROR] RESTOPASS_SUPERADMIN_PASSWORD must be configured with at least 16 non-placeholder characters in production.');
+    }
+
+    // Production restaurant administrators must have unique tenant-scoped
+    // identities. A single global boss password is explicitly rejected.
+    if (env.RESTOPASS_BOSS_PASSWORD || env.BOSS_PASSWORD) {
+      throw new Error('[FATAL SECURITY ERROR] Shared RESTOPASS_BOSS_PASSWORD is not accepted. Configure RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS instead.');
+    }
+    const rawRestaurantAdminAccounts = env.RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS?.trim() || '';
+    let restaurantAdminAccounts: any;
+    try {
+      restaurantAdminAccounts = JSON.parse(rawRestaurantAdminAccounts);
+    } catch {
+      throw new Error('[FATAL SECURITY ERROR] RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS must be valid JSON keyed by restaurant code.');
+    }
+    if (!restaurantAdminAccounts || typeof restaurantAdminAccounts !== 'object' || Array.isArray(restaurantAdminAccounts)) {
+      throw new Error('[FATAL SECURITY ERROR] RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS must be a non-empty JSON object keyed by restaurant code.');
+    }
+    const accountEntries = Object.entries(restaurantAdminAccounts);
+    if (accountEntries.length === 0 || accountEntries.length > 100) {
+      throw new Error('[FATAL SECURITY ERROR] Configure between 1 and 100 tenant-specific restaurant administrator accounts.');
+    }
+    const seenAdminUsernames = new Set<string>();
+    const seenAdminPasswords = new Set<string>();
+    for (const [restaurantCode, value] of accountEntries) {
+      const account: any = value;
+      const username = typeof account?.username === 'string' ? account.username.trim().toLowerCase() : '';
+      const password = typeof account?.password === 'string' ? account.password : '';
+      if (!/^[A-Z0-9_-]{1,32}$/.test(restaurantCode) || username.length < 3 || username.length > 128 ||
+          password.length < 16 || password.length > 1024 ||
+          FORBIDDEN_PLACEHOLDERS.some((p) => password.toUpperCase().includes(p))) {
+        throw new Error(`[FATAL SECURITY ERROR] Invalid tenant-specific restaurant administrator credentials for ${restaurantCode}.`);
+      }
+      if (seenAdminUsernames.has(username) || seenAdminPasswords.has(password)) {
+        throw new Error('[FATAL SECURITY ERROR] Restaurant administrator usernames and passwords must be unique across tenants.');
+      }
+      seenAdminUsernames.add(username);
+      seenAdminPasswords.add(password);
+    }
+
+    const staffPin = env.RESTOPASS_STAFF_DEFAULT_PIN?.trim();
+    if (staffPin && !/^\d{6,8}$/.test(staffPin)) {
+      throw new Error('[FATAL SECURITY ERROR] RESTOPASS_STAFF_DEFAULT_PIN must be 6-8 digits when configured.');
     }
 
     return { sessionSecret, masterSecret };
@@ -108,7 +170,9 @@ try {
 let serverDbState: any = null;
 
 function isValidAppState(obj: any): boolean {
-  return Boolean(obj && typeof obj === 'object' && Array.isArray(obj.restaurants) && obj.restaurants.length > 0 && Array.isArray(obj.customers));
+  // An empty but correctly shaped database is valid on first cloud boot;
+  // the super-admin must be able to onboard the first restaurant.
+  return Boolean(obj && typeof obj === 'object' && Array.isArray(obj.restaurants) && Array.isArray(obj.customers));
 }
 
 if (fs.existsSync(DB_FILE)) {
@@ -158,6 +222,15 @@ function ensureServerDbDefaults(state: any) {
   if (!state.expenses) state.expenses = [];
   if (!state.balanceCheckpoints) state.balanceCheckpoints = [];
   if (!state.pendingApprovals) state.pendingApprovals = [];
+  if (!state.transfers) state.transfers = [];
+  if (!state.auditLogs) state.auditLogs = [];
+  if (!state.shifts) state.shifts = [];
+  if (!state.cashierSessions) state.cashierSessions = [];
+  if (!state.packages) state.packages = [];
+  if (!state.menuItems) state.menuItems = [];
+  if (!state.plans) state.plans = [];
+  if (!state.customTranslations) state.customTranslations = {};
+  if (!state.usedTokens) state.usedTokens = [];
   if (!state.studentSubscriptionSettings) {
     state.studentSubscriptionSettings = {
       enabled: false, // strictly disabled at launch per spec
@@ -172,8 +245,13 @@ function ensureServerDbDefaults(state: any) {
   }
   if (!state.customerSubscriptions) state.customerSubscriptions = [];
   if (!state.studentSubscriptionPayments) state.studentSubscriptionPayments = [];
+  if (!state.subscriptionPayments) state.subscriptionPayments = [];
+  if (!state.activationCodes) state.activationCodes = [];
+  if (!state.restaurantSubscriptions) state.restaurantSubscriptions = [];
+  if (!state.restaurantSubscriptionPayments) state.restaurantSubscriptionPayments = [];
   if (!state.activationRequests) state.activationRequests = [];
   if (!state.pinRecoveryRequests) state.pinRecoveryRequests = [];
+  if (!Array.isArray(state.deletionTombstones)) state.deletionTombstones = [];
 
   if (Array.isArray(state.expenses)) {
     state.expenses = state.expenses.filter((e: any) => !SEED_EXPENSE_IDS.has(e.id) && e.restaurantCode !== 'RW02');
@@ -186,6 +264,29 @@ function ensureServerDbDefaults(state: any) {
   }
   if (Array.isArray(state.stationUsers)) {
     state.stationUsers = state.stationUsers.filter((u: any) => !SEED_USER_IDS.has(u.id) && u.restaurantCode !== 'RW02');
+  }
+
+  // Reapply persisted tombstones in standalone JSON mode as well as PostgreSQL.
+  const tombstoneCollections: Record<string, string> = {
+    customers: 'customers',
+    stationUsers: 'stationUsers',
+    branches: 'branches',
+    packages: 'packages',
+    menuItems: 'menuItems',
+    scanPoints: 'scanPoints',
+    cashierSessions: 'cashierSessions',
+  };
+  const deletedKeys = new Set(
+    (state.deletionTombstones || [])
+      .filter((item: any) => item && tombstoneCollections[item.collection] && item.recordId && item.restaurantCode)
+      .map((item: any) => `${item.collection}:${item.restaurantCode}:${item.recordId}`)
+  );
+  for (const [collection, stateKey] of Object.entries(tombstoneCollections)) {
+    if (Array.isArray(state[stateKey])) {
+      state[stateKey] = state[stateKey].filter(
+        (item: any) => !deletedKeys.has(`${collection}:${item.restaurantCode}:${item.id}`)
+      );
+    }
   }
 }
 ensureServerDbDefaults(serverDbState);
@@ -232,10 +333,15 @@ function atomicSaveDb(state: any): boolean {
       }
     }
     if (!saved) {
-      try { fs.writeFileSync(DB_FILE, serialized, 'utf-8'); } catch {}
+      try {
+        fs.writeFileSync(DB_FILE, serialized, { encoding: 'utf-8', flag: 'w' });
+        saved = true;
+      } catch (writeErr) {
+        console.error('[Server Authority] Final persistence fallback failed:', writeErr);
+      }
       try { fs.unlinkSync(tempFile); } catch {}
     }
-    return true;
+    return saved;
   } catch (err) {
     console.error('[Server Authority] Critical Error persisting database:', err);
     return false;
@@ -255,6 +361,9 @@ function queueDbSave(state: any): Promise<boolean> {
   return new Promise((resolve) => {
     dbWriteQueue = dbWriteQueue.then(async () => {
       try {
+        // Normalize credentials arriving in newly-created or edited station-user
+        // records before either PostgreSQL or the local snapshot persists them.
+        normalizeStationUserCredentials(state);
         let pgOk = true;
         if (isPostgresConfigured()) {
           pgOk = await saveStateToPostgres(state);
@@ -287,6 +396,38 @@ function deriveServerCustomerKey(restaurantKey: string, memberNo: string, keyVer
   return serverHmac(restaurantKey, `CUSTOMER:${memberNo}|V${keyVersion}`);
 }
 
+function normalizeStationUserCredentials(state: any): boolean {
+  if (!Array.isArray(state?.stationUsers)) return false;
+  let changed = false;
+  for (const stationUser of state.stationUsers) {
+    if (!stationUser || typeof stationUser !== 'object') continue;
+    if (typeof stationUser.pin === 'string' && stationUser.pin.trim()) {
+      // A newly supplied PIN must replace the previous hash, not be discarded
+      // merely because an older pinHash already exists.
+      stationUser.pinHash = computeServerCustomerPinHash(
+        stationUser.pin.trim(),
+        stationUser.id || 'station',
+        stationUser.username || 'operator'
+      );
+      delete stationUser.pin;
+      changed = true;
+    }
+    if (
+      typeof stationUser.passwordHash === 'string' &&
+      stationUser.passwordHash.length > 0 &&
+      !stationUser.passwordHash.startsWith('scrypt$')
+    ) {
+      stationUser.passwordHash = computeServerCustomerPinHash(
+        stationUser.passwordHash,
+        stationUser.id || 'station',
+        stationUser.username || 'operator'
+      );
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function getCurrentServerTimeStep(clockOffsetMs = 0): number {
   const effectiveTime = Date.now() + clockOffsetMs;
   return Math.floor(effectiveTime / 30000);
@@ -312,64 +453,50 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
 });
 
 // ----------------------------------------------------
-// In-Memory Rate Limiting (Finding 7)
+// Distributed Rate Limiting (Redis in cloud; memory in standalone)
 // ----------------------------------------------------
-interface RateLimitRecord {
-  count: number;
-  resetTime: number;
-}
-const rateLimitStores = new Map<string, Map<string, RateLimitRecord>>();
-
 function createRateLimiter(bucketName: string, maxRequests: number, windowMs: number) {
-  let store = rateLimitStores.get(bucketName);
-  if (!store) {
-    store = new Map<string, RateLimitRecord>();
-    rateLimitStores.set(bucketName, store);
-  }
-
-  return (req: Request, res: Response, next: NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    const now = Date.now();
-    let record = store!.get(ip);
+    const result = await consumeRateLimit(bucketName, ip, maxRequests, windowMs);
 
-    if (!record || now > record.resetTime) {
-      record = { count: 1, resetTime: now + windowMs };
-      store!.set(ip, record);
-    } else {
-      record.count++;
+    if (!result.available) {
+      // Cloud deployments must not silently fall back to per-process quotas.
+      return res.status(503).json({
+        success: false,
+        error: 'Security rate-limit service is temporarily unavailable. Retry shortly.',
+      });
     }
 
-    if (record.count > maxRequests) {
-      res.setHeader('Retry-After', Math.ceil((record.resetTime - now) / 1000).toString());
+    if (!result.allowed) {
+      res.setHeader('Retry-After', String(result.retryAfterSeconds));
       return res.status(429).json({
         success: false,
         error: 'Too many requests. Please slow down and try again later.',
       });
     }
 
-    next();
+    return next();
   };
 }
-
-// Periodic memory pruning to prevent unbound Map growth in high DAU production
-setInterval(() => {
-  const now = Date.now();
-  for (const store of rateLimitStores.values()) {
-    for (const [ip, record] of store.entries()) {
-      if (now > record.resetTime) {
-        store.delete(ip);
-      }
-    }
-  }
-}, 5 * 60 * 1000).unref();
 
 const authRateLimiter = createRateLimiter('auth', 20, 60 * 1000); // 20 attempts per minute
 const apiRateLimiter = createRateLimiter('api', 120, 60 * 1000); // 120 requests per minute
 const syncRateLimiter = createRateLimiter('sync', 40, 60 * 1000); // 40 syncs per minute
+const photoUploadRateLimiter = createRateLimiter('photo-upload', 10, 60 * 1000); // 10 portrait writes per minute
+const photoReadRateLimiter = createRateLimiter('photo-read', 120, 60 * 1000); // 120 authorized reads per minute
 
 // Request body parser with scoped limits (supports patron portrait uploads)
 app.use(express.json({ limit: '10mb' }));
-app.use('/uploads', express.static(path.resolve(process.cwd(), 'public/uploads')));
+// Block legacy public upload paths before either Vite or production static middleware.
+app.use((req, res, next) => {
+  if (req.path === '/uploads' || req.path.startsWith('/uploads/')) {
+    return res.status(404).json({ success: false, error: 'Resource not found.' });
+  }
+  return next();
+});
+// Patron photos are never served from a public static directory. All reads use
+// the authenticated, tenant-scoped endpoint below.
 
 // ----------------------------------------------------
 // Cryptographic Session Engine & Token Verification (Finding 1 & 4)
@@ -380,6 +507,7 @@ export interface UserSession {
   role: 'stand_staff' | 'restaurant_admin' | 'customer' | 'super_admin';
   restaurantCode: string;
   stationId?: string;
+  authVersion?: string;
   iat: number;
   exp: number;
 }
@@ -477,7 +605,7 @@ declare global {
  * Middleware: Enforces valid session token and optional role verification
  */
 function requireAuth(allowedRoles?: string[]) {
-  return (req: Request, res: Response, next: NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
     const authHeader = req.headers.authorization || (req.headers['x-restopass-token'] as string);
     let token = '';
 
@@ -502,6 +630,34 @@ function requireAuth(allowedRoles?: string[]) {
       });
     }
 
+    if (isRedisConfigured()) {
+      const digest = crypto.createHash('sha256').update(token).digest('hex');
+      const revocation = await isSessionTokenRevoked(digest);
+      if (!revocation.available) {
+        return res.status(503).json({ success: false, error: 'Session revocation service is unavailable. Retry shortly.' });
+      }
+      if (revocation.revoked) {
+        return res.status(401).json({ success: false, error: 'Session has been revoked. Please sign in again.' });
+      }
+    }
+
+    if (process.env.NODE_ENV === 'production' && !isActiveStationSession(session, serverDbState)) {
+      return res.status(401).json({ success: false, error: 'Station account is blocked or no longer exists. Please contact the restaurant administrator.' });
+    }
+    if (process.env.NODE_ENV === 'production' && !isActiveCustomerSession(session, serverDbState)) {
+      return res.status(401).json({ success: false, error: 'Customer account is no longer active. Please contact restaurant reception.' });
+    }
+    if (process.env.NODE_ENV === 'production' &&
+        session.role === 'super_admin' &&
+        !isCurrentSuperAdminSession(session)) {
+      return res.status(401).json({ success: false, error: 'Super Admin credentials changed. Please sign in again.' });
+    }
+    if (process.env.NODE_ENV === 'production' &&
+        session.role === 'restaurant_admin' &&
+        !isCurrentRestaurantAdminSession(session)) {
+      return res.status(401).json({ success: false, error: 'Restaurant administrator credentials changed. Please sign in again.' });
+    }
+
     if (allowedRoles && allowedRoles.length > 0 && !allowedRoles.includes(session.role)) {
       return res.status(403).json({
         success: false,
@@ -512,6 +668,60 @@ function requireAuth(allowedRoles?: string[]) {
     req.user = session;
     next();
   };
+}
+
+/**
+ * Photo access is scoped to the subject customer or their own restaurant.
+ * Super-admin access is platform-wide and remains session-authenticated.
+ */
+function canAccessCustomerPhoto(user: UserSession | null | undefined, customer: any): boolean {
+  if (!user || !customer || typeof customer.id !== 'string' ||
+      typeof customer.restaurantCode !== 'string' || !customer.restaurantCode) return false;
+  if (user.role === 'super_admin') return true;
+  if (user.role === 'customer') {
+    return user.userId === customer.id && user.restaurantCode === customer.restaurantCode;
+  }
+  return (user.role === 'stand_staff' || user.role === 'restaurant_admin') &&
+    user.restaurantCode === customer.restaurantCode;
+}
+
+function safeCustomerPhotoUrl(customer: any): string {
+  if (customer && typeof customer.id === 'string' && typeof customer.restaurantCode === 'string' &&
+      typeof customer.photoStorageKey === 'string') {
+    const expectedPrefix = 'patron-photos/' + customer.restaurantCode.toUpperCase() + '/';
+    const keySuffix = customer.photoStorageKey.startsWith(expectedPrefix)
+      ? customer.photoStorageKey.slice(expectedPrefix.length)
+      : '';
+    if (/^[a-f0-9-]{36}\.(jpg|png|webp)$/.test(keySuffix)) {
+      return '/api/customers/' + encodeURIComponent(customer.id) + '/photo';
+    }
+  }
+  const candidate = typeof customer?.photoUrl === 'string' ? customer.photoUrl : '';
+  if (/^\/(?:src\/assets\/images|assets)\/[A-Za-z0-9_.-]+$/.test(candidate)) return candidate;
+  return '/src/assets/images/avatar_student_male_1790979380050.jpg';
+}
+
+function getSessionTokenTtlSeconds(token: string): number {
+  try {
+    if (!token.startsWith('rp_sess_')) return 0;
+    const [encodedPayload] = token.slice('rp_sess_'.length).split('.');
+    const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+    return Math.max(0, Math.ceil((Number(payload.exp) - Date.now()) / 1000));
+  } catch {
+    return 0;
+  }
+}
+
+async function revokePresentedSessionToken(token: string): Promise<boolean> {
+  const ttlSeconds = getSessionTokenTtlSeconds(token);
+  if (!ttlSeconds) return true;
+  if (isRedisConfigured()) {
+    const digest = crypto.createHash('sha256').update(token).digest('hex');
+    const persisted = await revokeSessionToken(digest, ttlSeconds);
+    if (!persisted) return false;
+  }
+  revokedTokens.add(token);
+  return true;
 }
 
 // ----------------------------------------------------
@@ -528,6 +738,24 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+// Readiness is stricter than liveness: configured durable dependencies must answer.
+app.get('/api/ready', async (_req, res) => {
+  const checks: Record<string, boolean> = {
+    applicationState: Boolean(serverDbState),
+    database: !isPostgresConfigured(),
+    cache: !isRedisConfigured(),
+  };
+  if (isPostgresConfigured()) checks.database = await checkPostgresReady();
+  if (isRedisConfigured()) checks.cache = await checkRedisReady();
+
+  const ready = Object.values(checks).every(Boolean);
+  return res.status(ready ? 200 : 503).json({
+    status: ready ? 'ready' : 'not_ready',
+    checks,
+    serverTime: new Date().toISOString(),
+  });
+});
+
 // Safe public restaurants endpoint for initial portal dropdown (No sensitive customer/financial data)
 app.get('/api/public/restaurants', apiRateLimiter, (_req, res) => {
   const restaurants = serverDbState?.restaurants || [];
@@ -541,12 +769,380 @@ app.get('/api/public/restaurants', apiRateLimiter, (_req, res) => {
   res.json({ success: true, restaurants: safeList });
 });
 
+// Public customer registration. Payment is deliberately excluded from this request;
+// the customer must visit reception for payment confirmation before partial activation.
+// Rate-limited, minimal status lookup so a customer can set a PIN on a new device
+// without downloading the tenant's customer database or exposing personal details.
+app.post('/api/customer/registration/status', apiRateLimiter, (req, res) => {
+  const phone = typeof req.body?.phone === 'string' ? req.body.phone.trim() : '';
+  const restaurantCode = typeof req.body?.restaurantCode === 'string' ? req.body.restaurantCode.trim().toUpperCase() : '';
+  if (phone.length < 7 || phone.length > 32 || !restaurantCode) {
+    return res.status(400).json({ success: false, error: 'Enter your registered phone number and dining facility.' });
+  }
+  const normalizePhone = (value: string) => value.replace(/[^0-9]/g, '').replace(/^250/, '0');
+  const phoneKey = normalizePhone(phone);
+  const customer = (serverDbState?.customers || []).find((c: any) =>
+    c.restaurantCode === restaurantCode && normalizePhone(String(c.phone || '')) === phoneKey
+  );
+  if (!customer) return res.status(404).json({ success: false, error: 'No registration was found for those details.' });
+
+  let status = 'ready_for_login';
+  if (customer.registrationStatus === 'rejected' || customer.provisionalStatus === 'rejected' || customer.activationStatus === 'suspended') {
+    status = 'rejected';
+  } else if (customer.registrationStatus === 'pending_reception_payment' || customer.receptionPaymentStatus === 'unpaid') {
+    status = 'pending_reception_payment';
+  } else if (customer.registrationStatus === 'pending_boss_approval' && !customer.hasCustomPin) {
+    status = 'needs_pin_setup';
+  } else if (customer.provisionalStatus === 'pending_approval' && customer.registrationStatus !== 'pending_boss_approval') {
+    status = 'pending_boss_approval';
+  } else if (!customer.hasCustomPin || customer.activationStatus === 'ready_for_activation') {
+    status = 'needs_pin_setup';
+  }
+  return res.json({ success: true, status, memberNo: customer.memberNo });
+});
+
+// Reception-only payment confirmation for an existing self-registration.
+// The server creates the boss approval record and grants exactly four provisional grace plates.
+app.post('/api/reception/customer/payment-confirm', apiRateLimiter, requireAuth(['stand_staff', 'restaurant_admin', 'super_admin']), async (req, res) => {
+  if (!serverDbState) return res.status(503).json({ success: false, error: 'Registration service is unavailable.' });
+  const user = req.user!;
+  const body = req.body || {};
+  const customerId = typeof body.customerId === 'string' ? body.customerId.trim() : '';
+  const packageId = typeof body.packageId === 'string' ? body.packageId.trim() : '';
+  const paymentMethod = typeof body.paymentMethod === 'string' ? body.paymentMethod : '';
+  const paymentReferenceInput = typeof body.paymentReference === 'string' ? body.paymentReference.trim().toUpperCase() : '';
+  const staffName = typeof body.registeredByStaffName === 'string' ? body.registeredByStaffName.trim().slice(0, 120) : user.username;
+  const stationId = typeof body.stationId === 'string' ? body.stationId.trim().slice(0, 120) : '';
+  const stationName = typeof body.stationName === 'string' ? body.stationName.trim().slice(0, 120) : 'Reception Desk';
+
+  if (!customerId || !packageId || !['cash', 'mtn_momo', 'bank_transfer'].includes(paymentMethod)) {
+    return res.status(400).json({ success: false, error: 'Select a valid customer, meal package and payment method.' });
+  }
+  if (paymentMethod !== 'cash' && (!paymentReferenceInput || paymentReferenceInput.length > 100)) {
+    return res.status(400).json({ success: false, error: 'A valid transaction reference is required for this payment method.' });
+  }
+
+  const customer = (serverDbState.customers || []).find((c: any) => c.id === customerId);
+  if (!customer) return res.status(404).json({ success: false, error: 'Registered customer not found.' });
+  if (user.role !== 'super_admin' && customer.restaurantCode !== user.restaurantCode) {
+    return res.status(403).json({ success: false, error: 'You cannot confirm payment for another restaurant.' });
+  }
+  if (customer.registrationStatus !== 'pending_reception_payment' || customer.receptionPaymentStatus === 'confirmed') {
+    return res.status(409).json({ success: false, error: 'This registration is not awaiting reception payment confirmation.' });
+  }
+  const pkg = (serverDbState.packages || []).find((p: any) =>
+    p.id === packageId && p.restaurantCode === customer.restaurantCode
+  );
+  if (!pkg || !Number.isInteger(pkg.platesCount) || pkg.platesCount < 1 || !Number.isFinite(pkg.priceRwf) || pkg.priceRwf <= 0) {
+    return res.status(400).json({ success: false, error: 'The selected meal package is unavailable.' });
+  }
+
+  const paymentReference = paymentReferenceInput || `CASH-${crypto.randomUUID()}`;
+  const duplicateRef = (serverDbState.pendingApprovals || []).some((a: any) =>
+    a.restaurantCode === customer.restaurantCode && String(a.paymentReference || '').toUpperCase() === paymentReference
+  ) || (serverDbState.payments || []).some((p: any) =>
+    p.restaurantCode === customer.restaurantCode && String(p.reference || '').toUpperCase() === paymentReference
+  );
+  if (duplicateRef) return res.status(409).json({ success: false, error: 'This payment reference has already been recorded.' });
+
+  const now = new Date().toISOString();
+  const approvalId = `appr_reg_${crypto.randomUUID()}`;
+  const branch = (serverDbState.branches || []).find((b: any) => b.id === customer.branchId && b.restaurantCode === customer.restaurantCode);
+  const approval = {
+    id: approvalId,
+    restaurantCode: customer.restaurantCode,
+    branchId: branch?.id || customer.branchId || '',
+    branchName: branch?.name || customer.branchName || '',
+    type: 'new_customer',
+    customerId: customer.id,
+    customerName: customer.name,
+    customerPhone: customer.phone,
+    customerPhoto: customer.photoUrl,
+    memberNo: customer.memberNo,
+    packageId: pkg.id,
+    packageName: pkg.name,
+    platesRequested: pkg.platesCount,
+    amountRwf: pkg.priceRwf,
+    paymentMethod,
+    paymentReference,
+    registeredByStaffId: user.userId,
+    registeredByStaffName: staffName,
+    stationId,
+    stationName,
+    gracePlatesAllowed: 4,
+    gracePlatesConsumed: 0,
+    createdAt: now,
+    status: 'pending',
+    requiresSuperAdminCoSign: pkg.platesCount > 120,
+    coSignStatus: pkg.platesCount > 120 ? 'pending_super_admin' : 'not_required',
+  };
+
+  const previousCustomer = { ...customer };
+  if (!Array.isArray(serverDbState.pendingApprovals)) serverDbState.pendingApprovals = [];
+  serverDbState.pendingApprovals.unshift(approval);
+  customer.registrationStatus = 'pending_boss_approval';
+  customer.receptionPaymentStatus = 'confirmed';
+  customer.receptionPaymentConfirmedAt = now;
+  customer.receptionPaymentConfirmedBy = staffName;
+  customer.receptionPaymentReference = paymentReference;
+  customer.provisionalStatus = 'pending_approval';
+  customer.activationStatus = 'partial_active';
+  customer.cardStatus = 'active';
+  customer.gracePlatesAllowed = 4;
+  customer.gracePlatesConsumed = 0;
+  customer.gracePlatesRemaining = 4;
+  customer.pendingApprovalId = approvalId;
+
+  if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
+  serverDbState.auditLogs.unshift({
+    id: `audit_${crypto.randomUUID()}`,
+    timestamp: now,
+    restaurantCode: customer.restaurantCode,
+    branchId: approval.branchId,
+    branchName: approval.branchName,
+    actorRole: user.role,
+    actorName: staffName,
+    action: 'REGISTRATION_PAYMENT_CONFIRMED',
+    details: `Reception confirmed ${pkg.priceRwf} RWF for customer #${customer.memberNo} via ${paymentMethod.toUpperCase()} (Ref: ${paymentReference}). Account partially activated with up to 4 grace plates; awaiting boss approval.`,
+  });
+  if (!Array.isArray(serverDbState.notifications)) serverDbState.notifications = [];
+  const bossNotificationId = `notif_${crypto.randomUUID()}`;
+  const customerNotificationId = `notif_${crypto.randomUUID()}`;
+  serverDbState.notifications.unshift(
+    {
+      id: bossNotificationId,
+      restaurantCode: customer.restaurantCode,
+      target: 'all',
+      senderRole: 'system',
+      senderName: `${staffName} (${stationName})`,
+      type: 'system_broadcast',
+      title: `Payment Confirmed: New Customer #${customer.memberNo}`,
+      message: `Reception confirmed payment for ${customer.name}. Review and approve the registration to activate the full account and issue the physical card.`,
+      priority: 'important',
+      timestamp: now,
+      readByCustomerIds: [],
+      actionTab: 'approvals',
+    },
+    {
+      id: customerNotificationId,
+      restaurantCode: customer.restaurantCode,
+      target: customer.id,
+      targetName: `${customer.name} (#${customer.memberNo})`,
+      senderRole: 'system',
+      senderName: stationName,
+      type: 'topup_success',
+      title: 'Payment Confirmed — PIN Setup Available',
+      message: 'Your reception payment is confirmed. Set your personal PIN to access the limited onboarding dashboard. Your full account and physical card will be enabled after boss approval.',
+      priority: 'important',
+      timestamp: now,
+      readByCustomerIds: [],
+      actionTab: 'my_card',
+    }
+  );
+
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    serverDbState.notifications = serverDbState.notifications.filter((n: any) => n.id !== bossNotificationId && n.id !== customerNotificationId);
+    serverDbState.pendingApprovals = serverDbState.pendingApprovals.filter((a: any) => a.id !== approvalId);
+    Object.assign(customer, previousCustomer);
+    return res.status(503).json({ success: false, error: 'Payment confirmation could not be saved. Do not retry with a new reference; contact support.' });
+  }
+  return res.json({ success: true, approval, customer: { id: customer.id, registrationStatus: customer.registrationStatus, gracePlatesRemaining: customer.gracePlatesRemaining } });
+});
+
+app.post('/api/public/customer/registration', apiRateLimiter, async (req, res) => {
+  if (!serverDbState) {
+    return res.status(503).json({ success: false, error: 'Registration service is not initialized. Please try again shortly.' });
+  }
+  const body = req.body || {};
+  const restaurantCode = typeof body.restaurantCode === 'string' ? body.restaurantCode.trim().toUpperCase() : '';
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  const phone = typeof body.phone === 'string' ? body.phone.trim() : '';
+  const idType = typeof body.idType === 'string' ? body.idType.trim() : '';
+  const idNumber = typeof body.idNumber === 'string' ? body.idNumber.trim() : '';
+  const isStudent = body.isStudent === true;
+  const registrationNumber = typeof body.registrationNumber === 'string' ? body.registrationNumber.trim() : '';
+  const institution = typeof body.institution === 'string' ? body.institution.trim() : '';
+  const programme = typeof body.programme === 'string' ? body.programme.trim() : '';
+  const year = Number(body.year);
+
+  if (!restaurantCode || name.length < 2 || name.length > 120 || phone.length < 7 || phone.length > 32 ||
+      !['student_id', 'national_id', 'passport'].includes(idType) || idNumber.length < 3 || idNumber.length > 80) {
+    return res.status(400).json({ success: false, error: 'Please provide valid name, phone number and identity details.' });
+  }
+  if (isStudent && (!registrationNumber || registrationNumber.length > 80 || !institution || institution.length > 120 || !programme || programme.length > 120 || !Number.isInteger(year) || year < 1 || year > 12)) {
+    return res.status(400).json({ success: false, error: 'Please complete the student institution, programme, year and registration number.' });
+  }
+
+  const restaurant = (serverDbState.restaurants || []).find((r: any) => r.code === restaurantCode && r.status !== 'inactive');
+  if (!restaurant) return res.status(404).json({ success: false, error: 'The selected dining facility is unavailable.' });
+
+  const normalizePhone = (value: string) => value.replace(/[^0-9]/g, '').replace(/^250/, '0');
+  const phoneKey = normalizePhone(phone);
+  const normalizedId = idNumber.replace(/[\s-]/g, '').toUpperCase();
+  const idHash = crypto.createHash('sha256').update(`ID_SALT_RESTOPASS_RWANDA:${idType}:${normalizedId}`).digest('hex');
+  const customers = serverDbState.customers || [];
+  const duplicate = customers.find((c: any) =>
+    c.restaurantCode === restaurantCode &&
+    (normalizePhone(String(c.phone || '')) === phoneKey ||
+      c.idHash === idHash ||
+      (isStudent && c.isStudent && String(c.studentProfile?.registrationNumber || '').trim().toLowerCase() === registrationNumber.toLowerCase()))
+  );
+  if (duplicate) {
+    return res.status(409).json({ success: false, error: 'This phone number or identity is already registered at this dining facility. Please visit reception if you need help.' });
+  }
+
+  const branches = (serverDbState.branches || []).filter((b: any) => b.restaurantCode === restaurantCode && b.status !== 'inactive');
+  const branchId = typeof body.branchId === 'string' && branches.some((b: any) => b.id === body.branchId)
+    ? body.branchId : branches[0]?.id;
+  const branch = branches.find((b: any) => b.id === branchId);
+  const maxNo = customers.filter((c: any) => c.restaurantCode === restaurantCode)
+    .reduce((max: number, c: any) => Math.max(max, Number.parseInt(c.memberNo, 10) || 0), 28490);
+  const memberNo = String(maxNo + 1);
+  const now = new Date().toISOString();
+  const customerId = `cust_${crypto.randomUUID()}`;
+  const customer = {
+    id: customerId,
+    memberNo,
+    restaurantCode,
+    branchId: branch?.id,
+    branchName: branch?.name || restaurant.name,
+    name,
+    phone,
+    photoUrl: '/src/assets/images/avatar_student_male_1790979380050.jpg',
+    idType,
+    idHash,
+    idNumberMasked: normalizedId.length > 5 ? `${normalizedId.slice(0, 5)}****` : '****',
+    isStudent,
+    studentProfile: isStudent ? { institution, programme, year, registrationNumber } : undefined,
+    cardVersion: 1,
+    keyVersion: 1,
+    cardStatus: 'locked',
+    pinHash: '',
+    hasCustomPin: false,
+    provisionalStatus: 'pending_approval',
+    activationStatus: 'pending_reception_payment',
+    registrationStatus: 'pending_reception_payment',
+    receptionPaymentStatus: 'unpaid',
+    gracePlatesAllowed: 0,
+    gracePlatesConsumed: 0,
+    gracePlatesRemaining: 0,
+    cardReadyForPrint: false,
+    failedLoginAttempts: 0,
+    createdAt: now,
+    onboardingToken: `OB-${crypto.randomBytes(12).toString('hex').toUpperCase()}`,
+    consentSigned: true,
+  };
+  serverDbState.customers.push(customer);
+  if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
+  serverDbState.auditLogs.unshift({
+    id: `audit_${crypto.randomUUID()}`,
+    timestamp: now,
+    restaurantCode,
+    branchId: branch?.id,
+    branchName: branch?.name,
+    actorRole: 'customer',
+    actorName: name,
+    action: 'CUSTOMER_SELF_REGISTERED',
+    details: `Customer #${memberNo} submitted an online registration. Awaiting reception payment confirmation.`,
+  });
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    serverDbState.customers = customers.filter((c: any) => c.id !== customerId);
+    return res.status(503).json({ success: false, error: 'Registration could not be saved. Please retry or visit reception.' });
+  }
+  return res.status(201).json({
+    success: true,
+    customer: { id: customerId, memberNo, name, phone, restaurantCode, registrationStatus: 'pending_reception_payment' },
+    nextStep: 'Visit reception to pay and have your payment confirmed.',
+  });
+});
+
+/**
+ * Production restaurant administrator credentials are tenant-specific. The
+ * environment variable contains a JSON object keyed by restaurant code:
+ * { "RW01": { "username": "...", "password": "..." } }.
+ * The legacy global boss password is never accepted in production.
+ */
+function resolveRestaurantAdminAccount(
+  restaurantCode: string,
+  raw = process.env.RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS
+): { username: string; password: string } | null {
+  if (!raw || raw.length > 32768) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const accountKey = restaurantCode.trim().toUpperCase();
+    if (!Object.prototype.hasOwnProperty.call(parsed, accountKey)) return null;
+    const account = parsed[accountKey];
+    if (!account || typeof account !== 'object' || Array.isArray(account)) return null;
+    const username = typeof account.username === 'string' ? account.username.trim() : '';
+    const password = typeof account.password === 'string' ? account.password : '';
+    if (username.length < 3 || username.length > 128 || password.length < 16 || password.length > 1024) return null;
+    return { username, password };
+  } catch {
+    return null;
+  }
+}
+
+function verifyRestaurantAdminCredentials(
+  restaurantCode: string,
+  username: string,
+  password: string,
+  raw = process.env.RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS,
+  isProduction = process.env.NODE_ENV === 'production'
+): boolean {
+  const account = resolveRestaurantAdminAccount(restaurantCode, raw);
+  if (account) {
+    return timingSafeCompare((username || '').trim().toLowerCase(), account.username.toLowerCase()) &&
+      timingSafeCompare(password || '', account.password);
+  }
+  // Development-only convenience for local demo. Never used in production.
+  return !isProduction && typeof password === 'string' && password.length >= 6;
+}
+
+function getSuperAdminAuthVersion(password: string): string {
+  return crypto.createHmac('sha256', MASTER_KEY)
+    .update(`RESTOPASS_SUPERADMIN_AUTH:${password}`)
+    .digest('hex');
+}
+
+/** Password rotation immediately invalidates existing production Super Admin sessions. */
+function isCurrentSuperAdminSession(
+  session: UserSession,
+  raw: NodeJS.ProcessEnv = process.env
+): boolean {
+  if (!session || session.role !== 'super_admin') return false;
+  const password = raw.RESTOPASS_SUPERADMIN_PASSWORD || raw.SUPERADMIN_PASSWORD;
+  if (!password) return raw.NODE_ENV !== 'production';
+  const expectedVersion = getSuperAdminAuthVersion(password);
+  return typeof session.authVersion === 'string' && timingSafeCompare(session.authVersion, expectedVersion);
+}
+
+function getRestaurantAdminAuthVersion(restaurantCode: string, account: { username: string; password: string }): string {
+  return crypto.createHmac('sha256', MASTER_KEY)
+    .update(`RESTOPASS_ADMIN_AUTH:${restaurantCode.trim().toUpperCase()}:${account.username.toLowerCase()}:${account.password}`)
+    .digest('hex');
+}
+
+/** Rejects pre-migration sessions and immediately invalidates tokens after credential rotation. */
+function isCurrentRestaurantAdminSession(
+  session: UserSession,
+  raw = process.env.RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS
+): boolean {
+  if (!session || session.role !== 'restaurant_admin') return false;
+  const account = resolveRestaurantAdminAccount(session.restaurantCode, raw);
+  if (!account || session.username.trim().toLowerCase() !== account.username.toLowerCase()) return false;
+  const expectedVersion = getRestaurantAdminAuthVersion(session.restaurantCode, account);
+  return typeof session.authVersion === 'string' && timingSafeCompare(session.authVersion, expectedVersion);
+}
+
 // ----------------------------------------------------
 // Authentication Routes (Finding 4)
 // ----------------------------------------------------
 
 // POST /api/auth/login
-app.post('/api/auth/login', authRateLimiter, (req, res) => {
+app.post('/api/auth/login', authRateLimiter, async (req, res) => {
   const { role, username, password, pin, restaurantCode, stationId } = req.body;
 
   if (!role) {
@@ -575,6 +1171,7 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
       username: safeSuperUsername,
       role: 'super_admin',
       restaurantCode: 'ALL',
+      ...(configuredSuperAdminPassword ? { authVersion: getSuperAdminAuthVersion(configuredSuperAdminPassword) } : {}),
     });
     return res.json({
       success: true,
@@ -594,22 +1191,33 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
       return res.status(400).json({ success: false, error: 'Restaurant code is required' });
     }
     const isProd = process.env.NODE_ENV === 'production';
-    const configuredBossPassword = process.env.RESTOPASS_BOSS_PASSWORD || process.env.BOSS_PASSWORD;
-    const validPassword = configuredBossPassword
-      ? timingSafeCompare(password || '', configuredBossPassword)
-      : (!isProd && typeof password === 'string' && password.length >= 6);
+    const currentResto = (serverDbState?.restaurants || []).find((r: any) => r.code === restaurantCode);
+    if (!currentResto || currentResto.status === 'suspended' || currentResto.status === 'expired') {
+      return res.status(403).json({ success: false, error: 'Restaurant is unavailable or not authorized for administrator access.' });
+    }
+    const configuredAdminAccount = resolveRestaurantAdminAccount(restaurantCode);
+    if (isProd && !configuredAdminAccount) {
+      console.error(`[SECURITY ERROR] Restaurant admin login blocked: no tenant-specific account is configured for ${restaurantCode}.`);
+      return res.status(503).json({ success: false, error: 'Restaurant administrator account is not configured for this tenant. Contact the platform operator.' });
+    }
+    const validPassword = verifyRestaurantAdminCredentials(
+      restaurantCode,
+      username || '',
+      password || '',
+      process.env.RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS,
+      isProd
+    );
 
     if (!validPassword) {
       return res.status(401).json({ success: false, error: 'Invalid Restaurant Administrator credentials' });
     }
-
-    const currentResto = (serverDbState?.restaurants || []).find((r: any) => r.code === restaurantCode);
-    const safeBossUsername = (username || `admin_${restaurantCode}@example.local`).trim();
+    const safeBossUsername = configuredAdminAccount?.username || (username || `admin_${restaurantCode}@example.local`).trim();
     const token = createSessionToken({
       userId: `admin_${restaurantCode}`,
       username: safeBossUsername,
       role: 'restaurant_admin',
       restaurantCode,
+      ...(configuredAdminAccount ? { authVersion: getRestaurantAdminAuthVersion(restaurantCode, configuredAdminAccount) } : {}),
     });
     return res.json({
       success: true,
@@ -636,9 +1244,11 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
     );
 
     let validPin = false;
-    if (matchingStaffUser?.pin) {
-      validPin = timingSafeCompare(entered, matchingStaffUser.pin);
-    } else if (configuredStaffPin) {
+    if (matchingStaffUser) {
+      // Production credentials are stored as scrypt hashes. Never compare against
+      // a removed plaintext PIN, and never authenticate a blocked station account.
+      validPin = verifyStationUserCredentials(entered, matchingStaffUser);
+    } else if (configuredStaffPin && !isProd) {
       validPin = timingSafeCompare(entered, configuredStaffPin);
     } else if (!isProd) {
       validPin = timingSafeCompare(entered, '1234') || (entered.length >= 4);
@@ -655,6 +1265,7 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
       role: 'stand_staff',
       restaurantCode,
       stationId: stationId || 'stand_1',
+      ...(matchingStaffUser ? { authVersion: getStationUserAuthVersion(matchingStaffUser) } : {}),
     });
     return res.json({
       success: true,
@@ -671,30 +1282,49 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
 
   // 4. Customer Meal Pass Authentication
   if (role === 'customer') {
-    const customers = serverDbState?.customers || [];
-    const cust = customers.find(
-      (c: any) =>
-        c.memberNo === username ||
-        c.phone === username ||
-        c.id === username
-    );
+    const customerIdentifier = typeof username === 'string' ? username.trim() : '';
+    const cust = findCustomerForLogin(serverDbState, customerIdentifier, restaurantCode);
 
+    // Use the dedicated customer-authentication error to avoid account enumeration.
     if (!cust) {
-      return res.status(404).json({ success: false, error: 'Customer record not found' });
+      return res.status(401).json({ success: false, error: 'Invalid phone number or PIN' });
+    }
+    if (cust.lockedUntil && new Date(cust.lockedUntil).getTime() > Date.now()) {
+      return res.status(423).json({ success: false, error: 'Account temporarily locked. Please try again later or visit cafeteria reception.' });
+    }
+    if (cust.provisionalStatus === 'pending_approval' ||
+        cust.provisionalStatus === 'rejected' ||
+        cust.activationStatus === 'ready_for_activation' ||
+        cust.activationStatus === 'suspended') {
+      return res.status(403).json({ success: false, error: 'Customer account is not active. Please contact cafeteria management.' });
     }
 
-    const validPin = verifyServerCustomerPin(pin || '', cust) || (!cust.hasCustomPin && (pin === '1234' || pin === '123456'));
+    const previousPinHash = cust.pinHash;
+    const validPin = verifyServerCustomerPin(pin || '', cust) ||
+      (process.env.NODE_ENV !== 'production' && !cust.hasCustomPin && (pin === '1234' || pin === '123456'));
     if (!validPin) {
-      return res.status(401).json({ success: false, error: 'Invalid Member No or PIN' });
+      cust.failedLoginAttempts = (cust.failedLoginAttempts || 0) + 1;
+      if (cust.failedLoginAttempts >= 5) {
+        cust.lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+      }
+      await queueDbSave(serverDbState);
+      return res.status(401).json({ success: false, error: 'Invalid phone number or PIN' });
     }
 
-    const targetCust = cust;
+    cust.failedLoginAttempts = 0;
+    cust.lockedUntil = null;
+    cust.lastLoginAt = new Date().toISOString();
+    if (cust.pinHash !== previousPinHash) {
+      console.info('[Auth] Upgraded legacy customer PIN hash to scrypt.');
+    }
+    await queueDbSave(serverDbState);
 
     const token = createSessionToken({
-      userId: targetCust.id,
-      username: targetCust.memberNo,
+      userId: cust.id,
+      username: cust.memberNo,
       role: 'customer',
-      restaurantCode: targetCust.restaurantCode,
+      restaurantCode: cust.restaurantCode,
+      authVersion: getCustomerAuthVersion(cust),
     });
 
     return res.json({
@@ -702,10 +1332,10 @@ app.post('/api/auth/login', authRateLimiter, (req, res) => {
       token,
       user: {
         role: 'customer',
-        username: targetCust.memberNo,
-        restaurantCode: targetCust.restaurantCode,
-        userLabel: `${targetCust.name} (#${targetCust.memberNo})`,
-        customerId: targetCust.id,
+        username: cust.memberNo,
+        restaurantCode: cust.restaurantCode,
+        userLabel: `${cust.name} (#${cust.memberNo})`,
+        customerId: cust.id,
       },
     });
   }
@@ -722,17 +1352,11 @@ app.get('/api/auth/session', apiRateLimiter, requireAuth(), (req, res) => {
 });
 
 // POST /api/auth/logout: Revoke session token
-app.post('/api/auth/logout', (req, res) => {
+app.post('/api/auth/logout', async (req, res) => {
   const authHeader = req.headers.authorization || (req.headers['x-restopass-token'] as string);
-  let token = '';
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    token = authHeader.substring(7).trim();
-  } else if (authHeader) {
-    token = authHeader.trim();
-  }
-
-  if (token) {
-    revokedTokens.add(token);
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7).trim() : (authHeader || '').trim();
+  if (token && !(await revokePresentedSessionToken(token))) {
+    return res.status(503).json({ success: false, error: 'Could not persist session revocation. Retry logout.' });
   }
   return res.json({ success: true, message: 'Logged out successfully' });
 });
@@ -741,38 +1365,177 @@ app.post('/api/auth/logout', (req, res) => {
 // Customer Non-SMS Authentication, Activation & Recovery Endpoints (Section 4)
 // ----------------------------------------------------
 
-function computeServerCustomerPinHash(pin: string, customerId: string, memberNo: string): string {
-  const salt = `RESTOPASS_CUST_SALT:${customerId}:${memberNo}`;
-  const saltedPayload = `RESTOPASS_SALTED_PIN_V1:${salt}:${pin.trim()}`;
-  return crypto.createHash('sha256').update(saltedPayload).digest('hex');
+function computeServerCustomerPinHash(pin: string, _customerId: string, _memberNo: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(pin.trim(), salt, 64, {
+    N: 16384,
+    r: 8,
+    p: 1,
+    maxmem: 64 * 1024 * 1024,
+  }).toString('hex');
+  return `scrypt$16384$8$1$${salt}$${derived}`;
 }
 
 function verifyServerCustomerPin(enteredPin: string, customer: any): boolean {
   if (!enteredPin || !customer) return false;
   const cleanEntered = enteredPin.trim();
-  const expected = (customer.pinHash || '1234').trim();
-  if (timingSafeCompare(cleanEntered, expected)) return true;
-  const computedHash = computeServerCustomerPinHash(cleanEntered, customer.id, customer.memberNo);
-  if (timingSafeCompare(computedHash, expected)) return true;
-  const plainHash = crypto.createHash('sha256').update(cleanEntered).digest('hex');
-  if (timingSafeCompare(plainHash, expected)) return true;
+  const expected = typeof customer.pinHash === 'string' ? customer.pinHash.trim() : '';
+  if (!expected) return false;
+
+  if (expected.startsWith('scrypt$')) {
+    const parts = expected.split('$');
+    if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
+    const cost = Number(parts[1]);
+    const blockSize = Number(parts[2]);
+    const parallelization = Number(parts[3]);
+    const salt = parts[4];
+    const storedHash = parts[5];
+    if (cost !== 16384 || blockSize !== 8 || parallelization !== 1 ||
+        !/^[a-f0-9]{32}$/.test(salt) || !/^[a-f0-9]{128}$/.test(storedHash)) {
+      return false;
+    }
+    const actual = crypto.scryptSync(cleanEntered, salt, 64, {
+      N: cost,
+      r: blockSize,
+      p: parallelization,
+      maxmem: 64 * 1024 * 1024,
+    }).toString('hex');
+    return timingSafeCompare(actual, storedHash);
+  }
+
+  // Legacy SHA-256 PIN formats are accepted only to migrate existing accounts.
+  // Successful verification immediately replaces the weak hash with scrypt.
+  const legacySalts = [
+    `RESTOPASS_CUST_SALT:${customer.id}:${customer.memberNo}`,
+    `RESTOPASS_CUST_PIN_SALT_${customer.id}_${customer.memberNo}`,
+  ];
+  const legacyHashes = legacySalts.map((salt) =>
+    crypto.createHash('sha256')
+      .update(`RESTOPASS_SALTED_PIN_V1:${salt}:${cleanEntered}`)
+      .digest('hex')
+  );
+  legacyHashes.push(crypto.createHash('sha256').update(cleanEntered).digest('hex'));
+
+  if (legacyHashes.some((hash) => timingSafeCompare(hash, expected))) {
+    customer.pinHash = computeServerCustomerPinHash(cleanEntered, customer.id, customer.memberNo);
+    customer.hasCustomPin = true;
+    return true;
+  }
   return false;
 }
 
-// POST /api/customer/auth/login: Authenticate phone number + 6+ digit PIN (Rate-limited, lockout, generic error)
-app.post('/api/customer/auth/login', authRateLimiter, (req, res) => {
-  const { phone, pin, username } = req.body;
-  const cleanPhone = (phone || username || '').trim();
-  const cleanPin = (pin || '').trim();
+/**
+ * Verifies a station user's PIN/password after legacy credentials have been
+ * migrated to scrypt. Status and authType are enforced server-side.
+ */
+function verifyStationUserCredentials(entered: string, stationUser: any): boolean {
+  if (!entered || !stationUser || stationUser.status !== 'active') return false;
+  const authType = stationUser.authType || 'both';
+  const acceptsPin = authType === 'pin8' || authType === 'both';
+  const acceptsPassword = authType === 'password' || authType === 'both';
+  const pinValid = acceptsPin && verifyServerCustomerPin(entered, { pinHash: stationUser.pinHash });
+  const passwordValid = acceptsPassword && verifyServerCustomerPin(entered, { pinHash: stationUser.passwordHash });
+  return Boolean(pinValid || passwordValid);
+}
 
-  const customers = serverDbState?.customers || [];
-  const cust = customers.find(
-    (c: any) =>
-      c.phone === cleanPhone ||
-      (c.phone && c.phone.replace(/\s+/g, '') === cleanPhone.replace(/\s+/g, '')) ||
-      c.memberNo === cleanPhone ||
-      c.id === cleanPhone
+/** Existing production staff sessions are invalidated immediately when an account is blocked or deleted. */
+function normalizeCustomerPhoneForLookup(value: string): string {
+  const digits = String(value || '').replace(/[^0-9]/g, '');
+  if (digits.startsWith('250') && digits.length === 12) return digits.slice(3);
+  if (digits.startsWith('0') && digits.length === 10) return digits.slice(1);
+  return digits;
+}
+
+/**
+ * Customer login identifiers are tenant-scoped. A phone number may legitimately
+ * exist in more than one restaurant, so a global first-match lookup is unsafe.
+ */
+function findCustomerForLogin(state: any, identifier: string, restaurantCode: string): any | null {
+  const cleanIdentifier = typeof identifier === 'string' ? identifier.trim() : '';
+  const tenantCode = typeof restaurantCode === 'string' ? restaurantCode.trim().toUpperCase() : '';
+  if (!cleanIdentifier || !tenantCode) return null;
+
+  const normalizedPhone = normalizeCustomerPhoneForLookup(cleanIdentifier);
+  return (state?.customers || []).find((customer: any) => {
+    if (String(customer?.restaurantCode || '').trim().toUpperCase() !== tenantCode) return false;
+    return customer.memberNo === cleanIdentifier ||
+      customer.id === cleanIdentifier ||
+      (normalizedPhone.length >= 7 &&
+        normalizeCustomerPhoneForLookup(String(customer.phone || '')) === normalizedPhone);
+  }) || null;
+}
+
+function getCustomerAuthVersion(customer: any): string {
+  return crypto.createHmac('sha256', MASTER_KEY)
+    .update([
+      'RESTOPASS_CUSTOMER_AUTH',
+      String(customer?.restaurantCode || '').trim().toUpperCase(),
+      String(customer?.id || ''),
+      String(customer?.pinHash || ''),
+    ].join(':'))
+    .digest('hex');
+}
+
+/** Customer sessions stop working after deletion, suspension, rejection or PIN rotation. */
+function isActiveCustomerSession(
+  session: UserSession,
+  state: any,
+  isProduction = process.env.NODE_ENV === 'production'
+): boolean {
+  if (session.role !== 'customer') return true;
+  const customer = (state?.customers || []).find(
+    (item: any) => item.id === session.userId && item.restaurantCode === session.restaurantCode
   );
+  if (!customer ||
+      customer.activationStatus === 'suspended' ||
+      customer.provisionalStatus === 'rejected' ||
+      customer.registrationStatus === 'rejected') return false;
+  if (!isProduction) return true;
+  const expectedVersion = getCustomerAuthVersion(customer);
+  return typeof session.authVersion === 'string' && timingSafeCompare(session.authVersion, expectedVersion);
+}
+
+function getStationUserAuthVersion(stationUser: any): string {
+  return crypto.createHmac('sha256', MASTER_KEY)
+    .update([
+      'RESTOPASS_STATION_AUTH',
+      String(stationUser?.restaurantCode || '').trim().toUpperCase(),
+      String(stationUser?.id || '').trim(),
+      String(stationUser?.username || '').trim().toLowerCase(),
+      String(stationUser?.authType || 'both'),
+      String(stationUser?.pinHash || ''),
+      String(stationUser?.passwordHash || ''),
+    ].join(':'))
+    .digest('hex');
+}
+
+function isActiveStationSession(
+  session: UserSession,
+  state: any,
+  isProduction = process.env.NODE_ENV === 'production'
+): boolean {
+  if (session.role !== 'stand_staff') return true;
+  const account = (state?.stationUsers || []).find(
+    (item: any) =>
+      item.restaurantCode === session.restaurantCode &&
+      (item.username === session.username || item.id === session.username)
+  );
+  if (!account || account.status !== 'active') return false;
+  if (!isProduction) return true;
+  const expectedVersion = getStationUserAuthVersion(account);
+  return typeof session.authVersion === 'string' && timingSafeCompare(session.authVersion, expectedVersion);
+}
+
+// POST /api/customer/auth/login: Authenticate phone number + 6+ digit PIN (Rate-limited, lockout, generic error)
+app.post('/api/customer/auth/login', authRateLimiter, async (req, res) => {
+  const { phone, pin, username, restaurantCode } = req.body;
+  const rawIdentifier = typeof phone === 'string' ? phone : (typeof username === 'string' ? username : '');
+  const cleanIdentifier = rawIdentifier.trim();
+  const cleanPin = typeof pin === 'string' ? pin.trim() : '';
+
+  // Phone numbers and student/member identifiers are unique only within a
+  // restaurant. Never authenticate against the first global match.
+  const cust = findCustomerForLogin(serverDbState, cleanIdentifier, restaurantCode);
 
   // Generic error to prevent phone-number enumeration
   if (!cust) {
@@ -788,11 +1551,25 @@ app.post('/api/customer/auth/login', authRateLimiter, (req, res) => {
     });
   }
 
-  // Approval status checks
-  if (cust.provisionalStatus === 'pending_approval') {
+  // Registration lifecycle checks. Reception-confirmed customers may set a PIN
+  // and use the limited onboarding dashboard while awaiting final boss approval.
+  if (cust.registrationStatus === 'pending_reception_payment' ||
+      (cust.provisionalStatus === 'pending_approval' && cust.receptionPaymentStatus !== 'confirmed' && cust.registrationStatus !== 'approved')) {
     return res.status(403).json({
       success: false,
-      error: 'Your registration is pending restaurant boss approval. You can eat grace meals at the stand with your Member ID.',
+      error: 'Your registration is saved. Please visit reception to pay and confirm your payment before setting a PIN.',
+    });
+  }
+  if (cust.registrationStatus === 'pending_boss_approval' && !cust.hasCustomPin) {
+    return res.status(403).json({
+      success: false,
+      error: 'Reception has confirmed your payment. Set your personal PIN first to access your limited onboarding dashboard.',
+    });
+  }
+  if (cust.provisionalStatus === 'pending_approval' && cust.registrationStatus !== 'pending_boss_approval') {
+    return res.status(403).json({
+      success: false,
+      error: 'Your registration is awaiting restaurant boss approval.',
     });
   }
   if (cust.provisionalStatus === 'rejected') {
@@ -807,14 +1584,18 @@ app.post('/api/customer/auth/login', authRateLimiter, (req, res) => {
       error: 'Account approved! Please complete your one-time activation at cafeteria reception to set your personal PIN.',
     });
   }
+  if (cust.activationStatus === 'suspended') {
+    return res.status(403).json({ success: false, error: 'Customer account is suspended. Please contact cafeteria management.' });
+  }
 
+  const previousPinHash = cust.pinHash;
   const isPinValid = verifyServerCustomerPin(cleanPin, cust);
   if (!isPinValid) {
     cust.failedLoginAttempts = (cust.failedLoginAttempts || 0) + 1;
     if (cust.failedLoginAttempts >= 5) {
       cust.lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
     }
-    queueDbSave(serverDbState);
+    await queueDbSave(serverDbState);
     return res.status(401).json({ success: false, error: 'Invalid phone number or PIN' });
   }
 
@@ -822,13 +1603,15 @@ app.post('/api/customer/auth/login', authRateLimiter, (req, res) => {
   cust.failedLoginAttempts = 0;
   cust.lockedUntil = null;
   cust.lastLoginAt = new Date().toISOString();
-  queueDbSave(serverDbState);
+  if (cust.pinHash !== previousPinHash) console.info('[Auth] Upgraded legacy customer PIN hash to scrypt.');
+  await queueDbSave(serverDbState); // Persists lockout reset and any legacy PIN-hash upgrade.
 
   const token = createSessionToken({
     userId: cust.id,
     username: cust.phone || cust.memberNo,
     role: 'customer',
     restaurantCode: cust.restaurantCode,
+    authVersion: getCustomerAuthVersion(cust),
   });
 
   return res.json({
@@ -847,15 +1630,12 @@ app.post('/api/customer/auth/login', authRateLimiter, (req, res) => {
 });
 
 // POST /api/customer/auth/logout: Revoke current session
-app.post('/api/customer/auth/logout', (req, res) => {
+app.post('/api/customer/auth/logout', async (req, res) => {
   const authHeader = req.headers.authorization || (req.headers['x-restopass-token'] as string);
-  let token = '';
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    token = authHeader.substring(7).trim();
-  } else if (authHeader) {
-    token = authHeader.trim();
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7).trim() : (authHeader || '').trim();
+  if (token && !(await revokePresentedSessionToken(token))) {
+    return res.status(503).json({ success: false, error: 'Could not persist session revocation. Retry logout.' });
   }
-  if (token) revokedTokens.add(token);
   return res.json({ success: true, message: 'Logged out successfully' });
 });
 
@@ -938,7 +1718,7 @@ app.post(
 );
 
 // POST /api/customer/activation/complete: Customer privately sets their 6+ digit PIN
-app.post('/api/customer/activation/complete', authRateLimiter, (req, res) => {
+app.post('/api/customer/activation/complete', authRateLimiter, async (req, res) => {
   const { phoneOrMember, activationCode, newPin } = req.body;
   const cleanIdentifier = (phoneOrMember || '').trim();
   const cleanPin = (newPin || '').trim();
@@ -958,33 +1738,56 @@ app.post('/api/customer/activation/complete', authRateLimiter, (req, res) => {
   );
   if (!cust) return res.status(400).json({ success: false, error: 'Invalid activation credentials or code.' });
 
-  const requests = serverDbState?.activationRequests || [];
-  const codeHash = crypto.createHash('sha256').update(cleanCode).digest('hex');
-  const actReq = requests.find(
-    (r: any) =>
-      r.customerId === cust.id &&
-      !r.used &&
-      (r.activationCode === cleanCode || r.codeHash === codeHash) &&
-      new Date(r.expiresAt).getTime() > Date.now()
-  );
-
-  if (!actReq) {
-    return res.status(400).json({ success: false, error: 'Invalid, expired, or already used activation code.' });
+  const canSetPinAfterReceptionPayment =
+    cust.registrationStatus === 'pending_boss_approval' &&
+    cust.receptionPaymentStatus === 'confirmed' &&
+    !cust.hasCustomPin;
+  let actReq: any = null;
+  if (!canSetPinAfterReceptionPayment) {
+    const requests = serverDbState?.activationRequests || [];
+    const codeHash = crypto.createHash('sha256').update(cleanCode).digest('hex');
+    actReq = requests.find(
+      (r: any) =>
+        r.customerId === cust.id &&
+        !r.used &&
+        (r.activationCode === cleanCode || r.codeHash === codeHash) &&
+        new Date(r.expiresAt).getTime() > Date.now()
+    );
+    if (!actReq) {
+      return res.status(400).json({ success: false, error: 'Invalid, expired, or already used activation code.' });
+    }
   }
 
+  const previousCustomerAuth = {
+    pinHash: cust.pinHash,
+    hasCustomPin: cust.hasCustomPin,
+    pinSetAt: cust.pinSetAt,
+    activationStatus: cust.activationStatus,
+    cardReadyForPrint: cust.cardReadyForPrint,
+    failedLoginAttempts: cust.failedLoginAttempts,
+    lockedUntil: cust.lockedUntil,
+  };
+  const previousActivationRequest = actReq ? { used: actReq.used, usedAt: actReq.usedAt } : null;
   const pinHash = computeServerCustomerPinHash(cleanPin, cust.id, cust.memberNo);
   cust.pinHash = pinHash;
   cust.hasCustomPin = true;
   cust.pinSetAt = new Date().toISOString();
-  cust.activationStatus = 'active';
+  cust.activationStatus = cust.registrationStatus === 'pending_boss_approval' ? 'partial_active' : 'active';
   cust.failedLoginAttempts = 0;
   cust.lockedUntil = null;
-  cust.cardReadyForPrint = true;
+  cust.cardReadyForPrint = cust.registrationStatus === 'approved';
 
-  actReq.used = true;
-  actReq.usedAt = new Date().toISOString();
+  if (actReq) {
+    actReq.used = true;
+    actReq.usedAt = new Date().toISOString();
+  }
 
-  queueDbSave(serverDbState);
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    Object.assign(cust, previousCustomerAuth);
+    if (actReq && previousActivationRequest) Object.assign(actReq, previousActivationRequest);
+    return res.status(503).json({ success: false, error: 'PIN setup could not be saved. Please retry.' });
+  }
 
   const token = createSessionToken({
     userId: cust.id,
@@ -1002,6 +1805,8 @@ app.post('/api/customer/activation/complete', authRateLimiter, (req, res) => {
       memberNo: cust.memberNo,
       phone: cust.phone,
       restaurantCode: cust.restaurantCode,
+      registrationStatus: cust.registrationStatus,
+      activationStatus: cust.activationStatus,
     },
   });
 });
@@ -1102,36 +1907,123 @@ app.post('/api/customer/recovery/complete', authRateLimiter, (req, res) => {
 });
 
 // ----------------------------------------------------
-// S3 / Cloudflare R2 / DigitalOcean Spaces / Local Photo Upload
+// Private, authenticated patron-photo storage and delivery
 // ----------------------------------------------------
 
-// POST /api/upload/photo: Upload patron photos to cloud object storage (or local uploads/)
-app.post('/api/upload/photo', apiRateLimiter, requireAuth(), async (req, res) => {
-  const { photoBase64, filenameHint } = req.body;
-  if (!photoBase64 || typeof photoBase64 !== 'string') {
-    return res.status(400).json({
-      success: false,
-      error: 'Missing required "photoBase64" data URL string.',
-    });
-  }
+// Uploads are attached to an existing customer record; callers cannot choose a
+// storage key, tenant prefix, object URL, or filename.
+app.post(
+  '/api/upload/photo',
+  photoUploadRateLimiter,
+  requireAuth(['customer', 'stand_staff', 'restaurant_admin', 'super_admin']),
+  async (req, res) => {
+    const { customerId, photoBase64 } = req.body || {};
+    if (typeof customerId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(customerId) ||
+        typeof photoBase64 !== 'string') {
+      return res.status(400).json({ success: false, error: 'A valid customerId and photoBase64 data URL are required.' });
+    }
 
-  try {
-    const uploadResult = await uploadBase64Photo(photoBase64, filenameHint || 'patron');
-    return res.json({
-      success: true,
-      url: uploadResult.url,
-      key: uploadResult.key,
-      storageType: uploadResult.storageType,
-      sizeBytes: uploadResult.sizeBytes,
-    });
-  } catch (err: any) {
-    console.error('[Upload Photo Error]', err.message);
-    return res.status(400).json({
-      success: false,
-      error: err.message || 'Failed to process and store patron photo.',
-    });
+    const customer = (serverDbState?.customers || []).find((item: any) => item.id === customerId);
+    if (!customer) return res.status(404).json({ success: false, error: 'Customer not found.' });
+    const user = req.user!;
+    if (!canAccessCustomerPhoto(user, customer)) {
+      return res.status(403).json({ success: false, error: 'You are not authorized to upload a photo for this customer.' });
+    }
+
+    try {
+      const previousPhotoKey = customer.photoStorageKey;
+      const previousPhotoStorageType = customer.photoStorageType;
+      const previousPhotoUrl = customer.photoUrl;
+      const previousApprovalPhotos = (serverDbState.pendingApprovals || [])
+        .filter((approval: any) => approval.customerId === customer.id)
+        .map((approval: any) => ({ approval, customerPhoto: approval.customerPhoto }));
+      const uploaded = await uploadBase64Photo(photoBase64, customer.restaurantCode);
+      const photoUrl = `/api/customers/${encodeURIComponent(customer.id)}/photo`;
+      customer.photoStorageKey = uploaded.key;
+      customer.photoStorageType = uploaded.storageType;
+      customer.photoUrl = photoUrl;
+      for (const approval of serverDbState.pendingApprovals || []) {
+        if (approval.customerId === customer.id) approval.customerPhoto = photoUrl;
+      }
+      if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
+      serverDbState.auditLogs.push({
+        id: `audit_photo_${crypto.randomUUID()}`,
+        restaurantCode: customer.restaurantCode,
+        userId: user.userId,
+        actorName: user.username || user.userId,
+        actorRole: user.role,
+        action: 'CUSTOMER_PHOTO_UPLOADED',
+        details: `Updated private portrait for customer #${customer.memberNo || customer.id}.`,
+        timestamp: new Date().toISOString(),
+      });
+
+      const auditEntryId = serverDbState.auditLogs[serverDbState.auditLogs.length - 1]?.id;
+      if (!(await queueDbSave(serverDbState))) {
+        customer.photoStorageKey = previousPhotoKey;
+        customer.photoStorageType = previousPhotoStorageType;
+        customer.photoUrl = previousPhotoUrl;
+        for (const previous of previousApprovalPhotos) previous.approval.customerPhoto = previous.customerPhoto;
+        if (auditEntryId) serverDbState.auditLogs = serverDbState.auditLogs.filter((entry: any) => entry.id !== auditEntryId);
+        await deletePrivatePatronPhoto(uploaded.key, uploaded.storageType).catch(() => undefined);
+        return res.status(503).json({ success: false, error: 'Photo metadata could not be persisted. The uploaded object was discarded; retry the upload.' });
+      }
+      if (previousPhotoKey && previousPhotoKey !== uploaded.key) {
+        await deletePrivatePatronPhoto(previousPhotoKey, previousPhotoStorageType).catch((cleanupError: any) => {
+          console.warn('[Photo Storage] Previous portrait cleanup failed:', cleanupError?.message || cleanupError);
+        });
+      }
+      return res.status(201).json({
+        success: true,
+        photoUrl,
+        sizeBytes: uploaded.sizeBytes,
+      });
+    } catch (err: any) {
+      console.error('[Upload Photo Error]', err?.message || err);
+      return res.status(400).json({
+        success: false,
+        error: err?.message || 'Failed to process and store patron photo.',
+      });
+    }
   }
-});
+);
+
+// Photo bytes are returned only after session validation and tenant/subject checks.
+// Never redirect to S3 or expose a bucket/CDN URL.
+app.get(
+  '/api/customers/:customerId/photo',
+  photoReadRateLimiter,
+  requireAuth(),
+  async (req, res) => {
+    const customerId = req.params.customerId;
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(customerId)) {
+      return res.status(404).json({ success: false, error: 'Photo not found.' });
+    }
+    const customer = (serverDbState?.customers || []).find((item: any) => item.id === customerId);
+    if (!customer || !canAccessCustomerPhoto(req.user, customer) ||
+        typeof customer.photoStorageKey !== 'string' ||
+        !customer.photoStorageKey.startsWith(`patron-photos/${String(customer.restaurantCode).toUpperCase()}/`)) {
+      return res.status(404).json({ success: false, error: 'Photo not found.' });
+    }
+
+    try {
+      const photo = await getPrivatePatronPhoto(customer.photoStorageKey, customer.photoStorageType);
+      if (!photo) return res.status(404).json({ success: false, error: 'Photo not found.' });
+      res.set({
+        'Content-Type': photo.mimeType,
+        'Content-Length': String(photo.buffer.length),
+        'Cache-Control': 'private, no-store, max-age=0',
+        'Pragma': 'no-cache',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; sandbox",
+        'Content-Disposition': 'inline',
+      });
+      return res.status(200).send(photo.buffer);
+    } catch (err: any) {
+      console.error('[Read Patron Photo Error]', err?.message || err);
+      return res.status(503).json({ success: false, error: 'Private photo storage is temporarily unavailable.' });
+    }
+  }
+);
 
 // ----------------------------------------------------
 // Authoritative Cryptographic QR & License Engine (Finding 1 & 4)
@@ -1288,7 +2180,7 @@ app.post(
         memberNo,
         customerId: customer.id,
         customerName: customer.name,
-        customerPhoto: customer.photoUrl,
+        customerPhoto: safeCustomerPhotoUrl(customer),
         isCard: true,
       });
     }
@@ -1381,7 +2273,7 @@ app.post(
         memberNo,
         customerId: customer.id,
         customerName: customer.name,
-        customerPhoto: customer.photoUrl,
+        customerPhoto: safeCustomerPhotoUrl(customer),
         step: scannedStep,
         isCard: false,
       });
@@ -1612,6 +2504,67 @@ function checkServerStudentEntitlement(
     };
   }
 
+  const lifecycleCustomer = (serverDbState?.customers || []).find((c: any) => c.id === customerId);
+  const lifecycleSub = (serverDbState?.customerSubscriptions || []).find((sub: any) => sub.customerId === customerId);
+  const lifecycleNow = Date.now();
+  if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'complimentary') {
+    const freeEnd = new Date(lifecycleCustomer.freeAccessExpiresAt || lifecycleSub?.currentPeriodEnd || 0).getTime();
+    if (!freeEnd || lifecycleNow > freeEnd) {
+      lifecycleCustomer.customerAccessStatus = 'payment_required';
+      if (lifecycleSub) lifecycleSub.status = 'expired';
+    }
+  }
+  if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'active' && (lifecycleSub?.status === 'active' || lifecycleSub?.status === 'grace_period')) {
+    const paidEnd = new Date(lifecycleSub.currentPeriodEnd || 0).getTime();
+    const graceEnd = new Date(lifecycleSub.gracePeriodEnd || paidEnd + (settings?.graceDays || 3) * 86400000).getTime();
+    if (graceEnd && lifecycleNow > graceEnd) {
+      lifecycleSub.status = 'expired';
+      lifecycleCustomer.customerAccessStatus = 'payment_required';
+    } else if (paidEnd && lifecycleNow > paidEnd) {
+      lifecycleSub.status = 'grace_period';
+    }
+  }
+  if (lifecycleCustomer?.registrationStatus && (
+      lifecycleCustomer.customerAccessStatus === 'pending_super_admin_activation' ||
+      lifecycleCustomer.customerAccessStatus === 'payment_required' ||
+      lifecycleCustomer.customerAccessStatus === 'expired'
+    )) {
+    return {
+      allowed: false,
+      feature,
+      status: lifecycleCustomer.customerAccessStatus,
+      inGracePeriod: false,
+      enforcementEnabled: true,
+      reason: lifecycleCustomer.customerAccessStatus === 'pending_super_admin_activation'
+        ? 'Super Admin must activate the complimentary month before digital dashboard access begins.'
+        : 'Your dashboard access period has expired. Pay the monthly access fee to continue.',
+    };
+  }
+
+  if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'complimentary' && lifecycleSub?.status === 'complimentary') {
+    return {
+      allowed: true,
+      feature,
+      status: 'complimentary',
+      inGracePeriod: false,
+      enforcementEnabled: true,
+      expiresAt: lifecycleSub.currentPeriodEnd,
+      reason: 'Super Admin activated the one-month complimentary dashboard period.',
+    };
+  }
+  if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'active' &&
+      (lifecycleSub?.status === 'active' || lifecycleSub?.status === 'grace_period')) {
+    return {
+      allowed: true,
+      feature,
+      status: lifecycleSub.status,
+      inGracePeriod: lifecycleSub.status === 'grace_period',
+      enforcementEnabled: true,
+      expiresAt: lifecycleSub.currentPeriodEnd,
+      gracePeriodEnd: lifecycleSub.gracePeriodEnd,
+    };
+  }
+
   if (!settings?.enabled) {
     return {
       allowed: true,
@@ -1731,186 +2684,184 @@ app.get('/api/customer/subscription', apiRateLimiter, requireAuth(), (req, res) 
   });
 });
 
-// POST /api/customer/subscription/checkout: Initiates Mobile Money checkout (strictly 500 RWF)
-app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
-  ensureServerDbDefaults(serverDbState);
-  const { phoneNumber, provider } = req.body;
-  const user = req.user!;
+// POST /api/customer/subscription/checkout
+// Deliberately fail closed until the MTN Collections adapter is implemented.
+// The previous local-instruction flow did not initiate a provider transaction.
+app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['customer']), (_req, res) => {
+  return res.status(503).json({
+    success: false,
+    code: 'MTN_COLLECTIONS_NOT_CONFIGURED',
+    error: 'Mobile Money checkout is temporarily unavailable. No payment has been requested or collected.',
+  });
+});
 
-  const cleanPhone = (phoneNumber || '').trim();
-  if (!cleanPhone || cleanPhone.length < 8) {
-    return res.status(400).json({ success: false, error: 'Valid mobile money phone number is required' });
+// POST /api/payments/mobile-money/callback
+// Deliberately disabled until callbacks are reconciled against MTN's server-to-server
+// transaction-status API. A shared secret or client-supplied status is not payment proof.
+app.post('/api/payments/mobile-money/callback', apiRateLimiter, (_req, res) => {
+  return res.status(503).json({
+    success: false,
+    code: 'MTN_CALLBACK_VERIFICATION_NOT_CONFIGURED',
+    error: 'Payment callback processing is disabled until server-side MTN transaction verification is implemented.',
+  });
+});
+
+// Super Admin verifies an offline access-fee payment and activates a paid 30-day renewal.
+app.post('/api/superadmin/customer/subscription/activate-paid', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
+  if (!serverDbState) return res.status(503).json({ success: false, error: 'Subscription service is unavailable.' });
+  const body = req.body || {};
+  const customerId = typeof body.customerId === 'string' ? body.customerId.trim() : '';
+  const paymentMethod = typeof body.paymentMethod === 'string' ? body.paymentMethod : '';
+  const referenceInput = typeof body.paymentReference === 'string' ? body.paymentReference.trim().toUpperCase() : '';
+  const verificationNote = typeof body.verificationNote === 'string' ? body.verificationNote.trim().slice(0, 500) : '';
+  if (!customerId || !['cash', 'mtn_momo', 'bank_transfer'].includes(paymentMethod)) {
+    return res.status(400).json({ success: false, error: 'Select a customer and valid payment method.' });
+  }
+  if (paymentMethod !== 'cash' && (!referenceInput || referenceInput.length > 100)) {
+    return res.status(400).json({ success: false, error: 'A payment transaction reference is required.' });
   }
 
-  const customer = (serverDbState.customers || []).find((c: any) => c.id === user.userId || c.memberNo === user.username);
-  if (!customer) {
-    return res.status(404).json({ success: false, error: 'Customer record not found' });
+  const customer = (serverDbState.customers || []).find((c: any) => c.id === customerId);
+  if (!customer) return res.status(404).json({ success: false, error: 'Customer not found.' });
+  if (customer.registrationStatus !== 'approved') {
+    return res.status(409).json({ success: false, error: 'The Restaurant Boss must approve the registration before paid digital access can be activated.' });
   }
 
-  const internalReference = `SUB-MOMO-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-  const now = new Date().toISOString();
-
-  let sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === customer.id);
-  if (!sub) {
-    sub = {
-      id: `sub_${customer.id}_${Date.now()}`,
-      customerId: customer.id,
-      memberNo: customer.memberNo,
-      restaurantCode: customer.restaurantCode,
-      status: 'pending_payment',
-      planName: 'Student Digital Pass',
-      priceRwf: 500, // Strictly 500 RWF integer safe
-      currency: 'RWF',
-      paymentMethod: provider || 'mtn_momo',
-      lastPaymentRef: internalReference,
-      createdAt: now,
-      updatedAt: now,
-    };
-    serverDbState.customerSubscriptions.push(sub);
-  } else {
-    sub.status = 'pending_payment';
-    sub.lastPaymentRef = internalReference;
-    sub.paymentMethod = provider || 'mtn_momo';
-    sub.updatedAt = now;
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const existingSub = (serverDbState.customerSubscriptions || []).find((sub: any) => sub.customerId === customerId);
+  if (customer.customerAccessStatus === 'active' && existingSub) {
+    const currentGraceEnd = new Date(existingSub.gracePeriodEnd || existingSub.currentPeriodEnd || 0).getTime();
+    if (existingSub.status === 'expired' || (currentGraceEnd > 0 && currentGraceEnd <= nowMs)) {
+      customer.customerAccessStatus = 'payment_required';
+      existingSub.status = 'expired';
+    }
+  }
+  if (customer.customerAccessStatus === 'complimentary' &&
+      new Date(customer.freeAccessExpiresAt || existingSub?.currentPeriodEnd || 0).getTime() > nowMs) {
+    return res.status(409).json({ success: false, error: 'The complimentary access period is still active.' });
+  }
+  if (existingSub && ['active', 'grace_period'].includes(existingSub.status) &&
+      new Date(existingSub.gracePeriodEnd || existingSub.currentPeriodEnd || 0).getTime() > nowMs) {
+    return res.status(409).json({ success: false, error: 'The current paid access period has not expired yet.' });
+  }
+  if (!['payment_required', 'expired', 'complimentary'].includes(customer.customerAccessStatus || '')) {
+    return res.status(409).json({ success: false, error: 'This customer is not currently due for a paid access renewal.' });
   }
 
+  const restaurant = (serverDbState.restaurants || []).find((r: any) => r.code === customer.restaurantCode);
+  const settingsPrice = Number(serverDbState.studentSubscriptionSettings?.priceRwf) || 500;
+  const amountRwf = Number(restaurant?.studentSubscriptionPriceRwf ?? restaurant?.termsOverride?.studentSubscriptionPriceRwf ?? settingsPrice);
+  if (!Number.isInteger(amountRwf) || amountRwf <= 0) {
+    return res.status(409).json({ success: false, error: 'The monthly access fee is not configured correctly.' });
+  }
+  const paymentReference = referenceInput || `CASH-ACCESS-${crypto.randomUUID()}`;
+  if ((serverDbState.studentSubscriptionPayments || []).some((p: any) =>
+    p.restaurantCode === customer.restaurantCode &&
+    String(p.providerTransactionId || p.internalReference || '').toUpperCase() === paymentReference
+  )) {
+    return res.status(409).json({ success: false, error: 'This payment reference has already been used.' });
+  }
+
+  const previousCustomer = { ...customer };
+  const previousSub = existingSub ? { ...existingSub } : null;
+  const paymentId = `spay_${crypto.randomUUID()}`;
+  const subscriptionId = existingSub?.id || `sub_${customer.id}_${crypto.randomUUID()}`;
+  const internalReference = `MANUAL-ACCESS-${crypto.randomUUID()}`;
+  const periodEnd = new Date(nowMs + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const graceEnd = new Date(nowMs + 33 * 24 * 60 * 60 * 1000).toISOString();
+  const subscription = existingSub || {
+    id: subscriptionId,
+    customerId: customer.id,
+    memberNo: customer.memberNo,
+    restaurantCode: customer.restaurantCode,
+    status: 'active',
+    planName: 'Student Digital Pass',
+    priceRwf: amountRwf,
+    currency: 'RWF',
+    createdAt: now,
+    updatedAt: now,
+  };
+  Object.assign(subscription, {
+    status: 'active',
+    planName: 'Student Digital Pass',
+    priceRwf: amountRwf,
+    currency: 'RWF',
+    currentPeriodStart: now,
+    currentPeriodEnd: periodEnd,
+    gracePeriodEnd: graceEnd,
+    cancelAtPeriodEnd: false,
+    paymentMethod,
+    lastPaymentRef: paymentReference,
+    complimentaryReason: undefined,
+    complimentaryGrantedBy: undefined,
+    updatedAt: now,
+  });
+  if (!existingSub) {
+    if (!Array.isArray(serverDbState.customerSubscriptions)) serverDbState.customerSubscriptions = [];
+    serverDbState.customerSubscriptions.push(subscription);
+  }
+
+  if (!Array.isArray(serverDbState.studentSubscriptionPayments)) serverDbState.studentSubscriptionPayments = [];
   const payment = {
-    id: `spay_${Date.now()}`,
-    subscriptionId: sub.id,
+    id: paymentId,
+    subscriptionId,
     customerId: customer.id,
     memberNo: customer.memberNo,
     restaurantCode: customer.restaurantCode,
     internalReference,
-    provider: provider || 'mtn_momo',
-    phoneNumber: cleanPhone,
-    amountRwf: 500, // Strictly 500 RWF integer safe
+    provider: paymentMethod,
+    phoneNumber: customer.phone,
+    providerTransactionId: paymentReference,
+    amountRwf,
     currency: 'RWF',
-    status: 'pending',
+    status: 'verified',
     initiatedAt: now,
+    verifiedAt: now,
   };
   serverDbState.studentSubscriptionPayments.unshift(payment);
+  customer.customerAccessStatus = 'active';
 
-  await queueDbSave(serverDbState);
-
-  const providerLabel = provider === 'airtel_money' ? 'Airtel Money (*500#)' : 'MTN Mobile Money (*182#)';
-  return res.json({
-    success: true,
-    payment,
-    amountRwf: 500,
-    currency: 'RWF',
-    instructions: `Please approve the 500 RWF prompt sent via ${providerLabel} to ${cleanPhone}. Access will activate instantly upon confirmation.`,
+  if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
+  const auditId = `audit_${crypto.randomUUID()}`;
+  serverDbState.auditLogs.unshift({
+    id: auditId,
+    timestamp: now,
+    restaurantCode: customer.restaurantCode,
+    actorRole: 'super_admin',
+    actorName: req.user!.username,
+    action: 'STUDENT_SUBSCRIPTION_MANUAL_PAYMENT_VERIFIED',
+    details: `Verified ${amountRwf.toLocaleString()} RWF ${paymentMethod.toUpperCase()} access renewal for #${customer.memberNo}. Ref: ${paymentReference}. Note: ${verificationNote || 'No additional note'}.`,
   });
-});
-
-// POST /api/payments/mobile-money/callback: Webhook callback from Mobile Money provider with Idempotency
-app.post('/api/payments/mobile-money/callback', apiRateLimiter, async (req, res) => {
-  ensureServerDbDefaults(serverDbState);
-
-  // Webhook security guard for production cloud environments
-  const webhookSecret = process.env.MOMO_WEBHOOK_SECRET || process.env.PAYMENT_WEBHOOK_SECRET;
-  if (webhookSecret) {
-    const authHeader = req.headers['x-callback-token'] || req.headers['authorization'] || req.headers['x-webhook-secret'];
-    const expected = `Bearer ${webhookSecret}`;
-    const provided = typeof authHeader === 'string' ? authHeader.trim() : '';
-    const isValid = timingSafeCompare(provided, webhookSecret) || timingSafeCompare(provided, expected);
-    if (!isValid) {
-      console.warn('[Security Warning] Rejected unauthorized Mobile Money webhook callback attempt');
-      return res.status(401).json({ success: false, error: 'Unauthorized webhook callback' });
-    }
-  }
-
-  const { internalReference, providerTransactionId, amountRwf, currency, status } = req.body;
-
-  if (!internalReference) {
-    return res.status(400).json({ success: false, error: 'internalReference is required' });
-  }
-
-  const payment = (serverDbState.studentSubscriptionPayments || []).find(
-    (p: any) => p.internalReference === internalReference
-  );
-  if (!payment) {
-    return res.status(404).json({ success: false, error: 'Payment record not found' });
-  }
-
-  // Idempotency: Duplicate callbacks must not re-activate or extend access
-  if (payment.status === 'verified') {
-    const sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.id === payment.subscriptionId);
-    return res.json({ success: true, message: 'Payment already processed (idempotent)', subscription: sub });
-  }
-
-  // Verify amount: Strictly 500 RWF
-  if (typeof amountRwf === 'number' && amountRwf !== 500) {
-    payment.status = 'failed';
-    payment.failureReason = `Amount mismatch: Expected 500 RWF, received ${amountRwf}`;
-    await queueDbSave(serverDbState);
-    return res.status(400).json({ success: false, error: 'Payment amount mismatch. Expected exactly 500 RWF.' });
-  }
-
-  if (currency && currency !== 'RWF') {
-    payment.status = 'failed';
-    payment.failureReason = `Currency mismatch: Expected RWF, received ${currency}`;
-    await queueDbSave(serverDbState);
-    return res.status(400).json({ success: false, error: 'Currency mismatch. Expected RWF.' });
-  }
-
-  if (status === 'failed') {
-    payment.status = 'failed';
-    payment.failureReason = req.body.failureReason || 'Customer declined or insufficient funds';
-    await queueDbSave(serverDbState);
-    return res.json({ success: true, message: 'Marked payment as failed' });
-  }
-
-  const nowMs = Date.now();
-  const periodEndMs = nowMs + 30 * 24 * 3600 * 1000;
-  const graceDays = serverDbState.studentSubscriptionSettings?.graceDays || 3;
-  const graceEndMs = periodEndMs + graceDays * 24 * 3600 * 1000;
-
-  payment.status = 'verified';
-  payment.verifiedAt = new Date(nowMs).toISOString();
-  payment.providerTransactionId = providerTransactionId || `MPAY_${Date.now()}`;
-
-  let sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.id === payment.subscriptionId);
-  if (!sub) {
-    sub = {
-      id: payment.subscriptionId,
-      customerId: payment.customerId,
-      memberNo: payment.memberNo,
-      restaurantCode: payment.restaurantCode,
-      status: 'active',
-      planName: 'Student Digital Pass',
-      priceRwf: 500,
-      currency: 'RWF',
-      currentPeriodStart: new Date(nowMs).toISOString(),
-      currentPeriodEnd: new Date(periodEndMs).toISOString(),
-      gracePeriodEnd: new Date(graceEndMs).toISOString(),
-      cancelAtPeriodEnd: false,
-      paymentMethod: payment.provider,
-      lastPaymentRef: payment.internalReference,
-      createdAt: new Date(nowMs).toISOString(),
-      updatedAt: new Date(nowMs).toISOString(),
-    };
-    serverDbState.customerSubscriptions.push(sub);
-  } else {
-    sub.status = 'active';
-    sub.priceRwf = 500;
-    sub.currency = 'RWF';
-    sub.currentPeriodStart = new Date(nowMs).toISOString();
-    sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
-    sub.gracePeriodEnd = new Date(graceEndMs).toISOString();
-    sub.cancelAtPeriodEnd = false;
-    sub.paymentMethod = payment.provider;
-    sub.lastPaymentRef = payment.internalReference;
-    sub.updatedAt = new Date(nowMs).toISOString();
-  }
-
-  await queueDbSave(serverDbState);
-
-  return res.json({
-    success: true,
-    status: 'active',
-    subscription: sub,
-    message: 'Mobile Money payment verified and student subscription activated successfully.',
+  if (!Array.isArray(serverDbState.notifications)) serverDbState.notifications = [];
+  const notificationId = `notif_${crypto.randomUUID()}`;
+  serverDbState.notifications.unshift({
+    id: notificationId,
+    restaurantCode: customer.restaurantCode,
+    target: customer.id,
+    targetName: `${customer.name} (#${customer.memberNo})`,
+    senderRole: 'system',
+    senderName: req.user!.username,
+    type: 'system_broadcast',
+    title: 'Dashboard Access Renewed',
+    message: `Your ${amountRwf.toLocaleString()} RWF access fee has been verified. Your digital dashboard is active until ${new Date(periodEnd).toLocaleDateString()}.`,
+    priority: 'important',
+    timestamp: now,
+    readByCustomerIds: [],
+    actionTab: 'my_card',
   });
+
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    Object.assign(customer, previousCustomer);
+    if (previousSub) Object.assign(subscription, previousSub);
+    else serverDbState.customerSubscriptions = (serverDbState.customerSubscriptions || []).filter((sub: any) => sub.id !== subscriptionId);
+    serverDbState.studentSubscriptionPayments = serverDbState.studentSubscriptionPayments.filter((p: any) => p.id !== paymentId);
+    serverDbState.auditLogs = serverDbState.auditLogs.filter((a: any) => a.id !== auditId);
+    serverDbState.notifications = serverDbState.notifications.filter((n: any) => n.id !== notificationId);
+    return res.status(503).json({ success: false, error: 'Payment activation could not be saved. Please retry after checking the payment reference.' });
+  }
+  return res.json({ success: true, subscription, payment, customer: { id: customer.id, customerAccessStatus: customer.customerAccessStatus } });
 });
 
 // POST /api/customer/subscription/cancel: Cancels future subscription renewal
@@ -1997,57 +2948,94 @@ app.patch('/api/admin/settings/student-subscriptions', apiRateLimiter, requireAu
 app.post('/api/admin/customers/:customerId/entitlements', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
   ensureServerDbDefaults(serverDbState);
   const { customerId } = req.params;
-  const { reason, durationDays } = req.body;
-
-  if (!reason || !reason.trim()) {
-    return res.status(400).json({ success: false, error: 'A mandatory reason is required to grant complimentary access' });
+  const { reason, durationDays } = req.body || {};
+  if (typeof reason !== 'string' || !reason.trim()) {
+    return res.status(400).json({ success: false, error: 'A mandatory reason is required to grant complimentary access.' });
   }
-
   const customer = (serverDbState.customers || []).find((c: any) => c.id === customerId);
-  if (!customer) {
-    return res.status(404).json({ success: false, error: 'Customer not found' });
+  if (!customer) return res.status(404).json({ success: false, error: 'Customer not found.' });
+  if (customer.registrationStatus && customer.registrationStatus !== 'approved') {
+    return res.status(409).json({ success: false, error: 'The Restaurant Boss must approve the registration before complimentary access can be activated.' });
   }
 
   const nowMs = Date.now();
-  const days = typeof durationDays === 'number' ? durationDays : 30;
-  const periodEndMs = nowMs + days * 24 * 3600 * 1000;
-  const graceEndMs = periodEndMs + 3 * 24 * 3600 * 1000;
-
-  let sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === customerId);
-  if (!sub) {
-    sub = {
-      id: `sub_${customerId}_${Date.now()}`,
-      customerId: customer.id,
-      memberNo: customer.memberNo,
-      restaurantCode: customer.restaurantCode,
-      status: 'complimentary',
-      planName: 'Complimentary Student Pass',
-      priceRwf: 0,
-      currency: 'RWF',
-      currentPeriodStart: new Date(nowMs).toISOString(),
-      currentPeriodEnd: new Date(periodEndMs).toISOString(),
-      gracePeriodEnd: new Date(graceEndMs).toISOString(),
-      cancelAtPeriodEnd: false,
-      paymentMethod: 'complimentary',
-      complimentaryReason: reason.trim(),
-      complimentaryGrantedBy: req.user!.username,
-      createdAt: new Date(nowMs).toISOString(),
-      updatedAt: new Date(nowMs).toISOString(),
-    };
-    serverDbState.customerSubscriptions.push(sub);
-  } else {
-    sub.status = 'complimentary';
-    sub.currentPeriodStart = new Date(nowMs).toISOString();
-    sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
-    sub.gracePeriodEnd = new Date(graceEndMs).toISOString();
-    sub.complimentaryReason = reason.trim();
-    sub.complimentaryGrantedBy = req.user!.username;
-    sub.updatedAt = new Date(nowMs).toISOString();
+  const now = new Date(nowMs).toISOString();
+  const days = customer.registrationStatus === 'approved' ? 30 : (typeof durationDays === 'number' ? Math.min(365, Math.max(1, durationDays)) : 30);
+  const periodEnd = new Date(nowMs + days * 24 * 3600 * 1000).toISOString();
+  const graceEnd = new Date(nowMs + (days * 24 * 3600 * 1000) + 3 * 24 * 3600 * 1000).toISOString();
+  const previousCustomer = { ...customer };
+  const existingSub = (serverDbState.customerSubscriptions || []).find((sub: any) => sub.customerId === customerId);
+  const previousSub = existingSub ? { ...existingSub } : null;
+  const subscription = existingSub || {
+    id: `sub_${customerId}_${crypto.randomUUID()}`,
+    customerId: customer.id,
+    memberNo: customer.memberNo,
+    restaurantCode: customer.restaurantCode,
+    createdAt: now,
+  };
+  Object.assign(subscription, {
+    status: 'complimentary',
+    planName: 'Complimentary Student Pass',
+    priceRwf: 0,
+    currency: 'RWF',
+    currentPeriodStart: now,
+    currentPeriodEnd: periodEnd,
+    gracePeriodEnd: graceEnd,
+    cancelAtPeriodEnd: false,
+    paymentMethod: 'complimentary',
+    complimentaryReason: reason.trim(),
+    complimentaryGrantedBy: req.user!.username,
+    updatedAt: now,
+  });
+  if (!existingSub) {
+    if (!Array.isArray(serverDbState.customerSubscriptions)) serverDbState.customerSubscriptions = [];
+    serverDbState.customerSubscriptions.push(subscription);
+  }
+  if (customer.registrationStatus === 'approved') {
+    customer.customerAccessStatus = 'complimentary';
+    customer.freeAccessStartedAt = now;
+    customer.freeAccessExpiresAt = periodEnd;
   }
 
-  await queueDbSave(serverDbState);
+  if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
+  const auditId = `audit_${crypto.randomUUID()}`;
+  serverDbState.auditLogs.unshift({
+    id: auditId,
+    timestamp: now,
+    restaurantCode: customer.restaurantCode,
+    actorRole: 'super_admin',
+    actorName: req.user!.username,
+    action: 'COMPLIMENTARY_STUDENT_SUBSCRIPTION_GRANTED',
+    details: `Granted ${days}-day complimentary dashboard access to #${customer.memberNo}. Reason: ${reason.trim()}.`,
+  });
+  if (!Array.isArray(serverDbState.notifications)) serverDbState.notifications = [];
+  const notificationId = `notif_${crypto.randomUUID()}`;
+  serverDbState.notifications.unshift({
+    id: notificationId,
+    restaurantCode: customer.restaurantCode,
+    target: customer.id,
+    targetName: `${customer.name} (#${customer.memberNo})`,
+    senderRole: 'system',
+    senderName: req.user!.username,
+    type: 'system_broadcast',
+    title: 'Complimentary Dashboard Access Activated',
+    message: `Your ${days}-day complimentary dashboard access is active until ${new Date(periodEnd).toLocaleDateString()}.`,
+    priority: 'important',
+    timestamp: now,
+    readByCustomerIds: [],
+    actionTab: 'my_card',
+  });
 
-  return res.json({ success: true, subscription: sub });
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    Object.assign(customer, previousCustomer);
+    if (previousSub) Object.assign(subscription, previousSub);
+    else serverDbState.customerSubscriptions = (serverDbState.customerSubscriptions || []).filter((sub: any) => sub.id !== subscription.id);
+    serverDbState.auditLogs = serverDbState.auditLogs.filter((item: any) => item.id !== auditId);
+    serverDbState.notifications = serverDbState.notifications.filter((item: any) => item.id !== notificationId);
+    return res.status(503).json({ success: false, error: 'Complimentary access could not be saved. Please retry.' });
+  }
+  return res.json({ success: true, subscription, customer: { id: customer.id, customerAccessStatus: customer.customerAccessStatus, freeAccessExpiresAt: customer.freeAccessExpiresAt } });
 });
 
 // DELETE /api/admin/customers/:customerId/entitlements/:entitlementId: Revokes complimentary access
@@ -2076,23 +3064,60 @@ app.delete('/api/admin/customers/:customerId/entitlements/:entitlementId', apiRa
 /**
  * Sanitizes and scopes database state according to caller's role (Finding 1)
  */
+const SENSITIVE_CLIENT_FIELDS = new Set([
+  'pin', 'pinhash', 'pinsalt', 'password', 'passwordhash', 'passwordsalt',
+  'idhash', 'onboardingtoken', 'activationtoken', 'activationcode',
+  'recoverycode', 'verificationcode', 'temporarycode', 'onetimecode', 'otp',
+  'pairingkey', 'pairingsecret', 'secret', 'apisecret', 'apikey',
+  'accesskey', 'secretaccesskey', 'accesstoken', 'refreshtoken',
+  'magicauthtoken', 'tokenhash', 'qrsecret', 'privatekey', 'photostoragekey', 'photostoragetype',
+]);
+
+/**
+ * Never send authentication material, PINs, recovery codes or replay state
+ * to browser clients, including tenant administrators and platform admins.
+ */
+function sanitizeSensitiveState(value: any): any {
+  if (Array.isArray(value)) return value.map(sanitizeSensitiveState);
+  if (!value || typeof value !== 'object') return value;
+  const sanitized: Record<string, any> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (SENSITIVE_CLIENT_FIELDS.has(key.toLowerCase())) continue;
+    if (key === 'usedTokens' || key === 'revokedTokens') continue;
+    if (key.toLowerCase() === 'photourl' || key.toLowerCase() === 'customerphoto') {
+      const candidate = typeof item === 'string' ? item : '';
+      const isPrivateRoute = /^\/api\/customers\/[A-Za-z0-9_-]{1,128}\/photo$/.test(candidate);
+      const isBundledAsset = /^\/(?:src\/assets\/images|assets)\/[A-Za-z0-9_.-]+$/.test(candidate);
+      sanitized[key] = isPrivateRoute || isBundledAsset
+        ? candidate
+        : '/src/assets/images/avatar_student_male_1790979380050.jpg';
+      continue;
+    }
+    sanitized[key] = sanitizeSensitiveState(item);
+  }
+  return sanitized;
+}
+
 function scopeStateForUser(state: any, user: UserSession): any {
   if (!state) return null;
+  const checkpointList = state.balanceCheckpoints || state.checkpoints || [];
 
-  // Super Admin receives complete state
+  // Super Admin receives complete state with the client-facing checkpoint alias.
   if (user.role === 'super_admin') {
-    return state;
+    return { ...state, checkpoints: checkpointList, deletionTombstones: state.deletionTombstones || [] };
   }
 
   // Restaurant Admin: Scoped exclusively to their restaurantCode
   if (user.role === 'restaurant_admin') {
     const rCode = user.restaurantCode;
+    const tenantCustomerIds = new Set((state.customers || []).filter((c: any) => c.restaurantCode === rCode).map((c: any) => c.id));
     return {
       currentRestaurantCode: rCode,
+      deletionTombstones: (state.deletionTombstones || []).filter((item: any) => item.restaurantCode === rCode),
       restaurants: (state.restaurants || []).filter((r: any) => r.code === rCode),
       customers: (state.customers || []).filter((c: any) => c.restaurantCode === rCode),
       ledgerEntries: (state.ledgerEntries || []).filter((l: any) => l.restaurantCode === rCode),
-      checkpoints: (state.checkpoints || []).filter((cp: any) => cp.restaurantCode === rCode),
+      checkpoints: checkpointList.filter((cp: any) => tenantCustomerIds.has(cp.customerId)),
       scanEvents: (state.scanEvents || []).filter((s: any) => s.restaurantCode === rCode),
       scanPoints: (state.scanPoints || []).filter((sp: any) => sp.restaurantCode === rCode),
       transfers: (state.transfers || []).filter((tr: any) => tr.restaurantCode === rCode),
@@ -2120,6 +3145,7 @@ function scopeStateForUser(state: any, user: UserSession): any {
       },
       customerSubscriptions: (state.customerSubscriptions || []).filter((cs: any) => cs.restaurantCode === rCode),
       studentSubscriptionPayments: (state.studentSubscriptionPayments || []).filter((sp: any) => sp.restaurantCode === rCode),
+      subscriptionPayments: (state.subscriptionPayments || []).filter((sp: any) => sp.restaurantCode === rCode),
       activationRequests: (state.activationRequests || []).filter((ar: any) => ar.restaurantCode === rCode),
       pinRecoveryRequests: (state.pinRecoveryRequests || []).filter((pr: any) => pr.restaurantCode === rCode),
       customTranslations: state.customTranslations || {},
@@ -2131,6 +3157,7 @@ function scopeStateForUser(state: any, user: UserSession): any {
     const rCode = user.restaurantCode;
     return {
       currentRestaurantCode: rCode,
+      deletionTombstones: (state.deletionTombstones || []).filter((item: any) => item.restaurantCode === rCode),
       restaurants: (state.restaurants || []).filter((r: any) => r.code === rCode),
       customers: (state.customers || []).filter((c: any) => c.restaurantCode === rCode),
       ledgerEntries: (state.ledgerEntries || []).filter((l: any) => l.restaurantCode === rCode),
@@ -2175,10 +3202,11 @@ function scopeStateForUser(state: any, user: UserSession): any {
           pinHash: undefined, // Redact sensitive hash
         })),
       ledgerEntries: dashEnt.allowed ? (state.ledgerEntries || []).filter((l: any) => l.customerId === custId) : [],
+      checkpoints: dashEnt.allowed ? checkpointList.filter((cp: any) => cp.customerId === custId) : [],
       menuItems: (state.menuItems || []).filter((m: any) => m.restaurantCode === rCode),
       packages: (state.packages || []).filter((p: any) => p.restaurantCode === rCode),
       notifications: dashEnt.allowed
-        ? (state.notifications || []).filter((n: any) => !n.targetCustomerId || n.targetCustomerId === custId)
+        ? (state.notifications || []).filter((n: any) => n.target === 'all' || n.target === custId || n.targetCustomerId === custId)
         : [],
       studentSubscriptionSettings: state.studentSubscriptionSettings || {
         enabled: false,
@@ -2206,7 +3234,7 @@ app.get('/api/state', apiRateLimiter, requireAuth(), (req, res) => {
     });
   }
 
-  const scopedState = scopeStateForUser(serverDbState, req.user!);
+  const scopedState = sanitizeSensitiveState(scopeStateForUser(serverDbState, req.user!));
   res.json({
     success: true,
     hasServerState: true,
@@ -2219,7 +3247,7 @@ app.get('/api/state', apiRateLimiter, requireAuth(), (req, res) => {
 app.post(
   '/api/state',
   apiRateLimiter,
-  requireAuth(['super_admin', 'restaurant_admin']),
+  requireAuth(['super_admin']),
   async (req, res) => {
     const incoming = req.body;
     if (!incoming || typeof incoming !== 'object') {
@@ -2236,24 +3264,13 @@ app.post(
       return res.status(400).json({ success: false, error: 'Invalid payload: customers must be an array' });
     }
 
-    if (user.role === 'super_admin') {
-      serverDbState = incoming;
-    } else if (user.role === 'restaurant_admin') {
-      // Restaurant admin can only update entities matching their restaurantCode
-      const rCode = user.restaurantCode;
-      if (!serverDbState) {
-        serverDbState = incoming;
-      } else {
-        // Replace or merge only scoped collections
-        const incomingCusts = (incoming.customers || []).filter((c: any) => c.restaurantCode === rCode);
-        const otherCusts = (serverDbState.customers || []).filter((c: any) => c.restaurantCode !== rCode);
-        serverDbState.customers = [...otherCusts, ...incomingCusts];
-
-        const incomingLedgers = (incoming.ledgerEntries || []).filter((l: any) => l.restaurantCode === rCode);
-        const otherLedgers = (serverDbState.ledgerEntries || []).filter((l: any) => l.restaurantCode !== rCode);
-        serverDbState.ledgerEntries = [...otherLedgers, ...incomingLedgers];
-      }
+    // Full-state replacement is a break-glass platform operation. Tenant administrators
+    // must use the validated incremental sync route and cannot replace financial records.
+    if (user.role !== 'super_admin') {
+      return res.status(403).json({ success: false, error: 'Full-state replacement is restricted to platform super administrators.' });
     }
+    serverDbState = incoming;
+    ensureServerDbDefaults(serverDbState);
 
     const savedOk = await queueDbSave(serverDbState);
     if (!savedOk) {
@@ -2269,6 +3286,311 @@ app.post(
     });
   }
 );
+
+// POST /api/customer/transfer: Server-authoritative PIN-verified plate transfer.
+app.post('/api/customer/transfer', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
+  if (!serverDbState) return res.status(503).json({ success: false, error: 'Server state is not initialized.' });
+  ensureServerDbDefaults(serverDbState);
+  const user = req.user!;
+  const customer = (serverDbState.customers || []).find((item: any) => item.id === user.userId);
+  if (!customer || customer.restaurantCode !== user.restaurantCode) {
+    return res.status(401).json({ success: false, error: 'Customer session is no longer valid.' });
+  }
+  if (customer.activationStatus === 'suspended' || customer.provisionalStatus === 'pending_approval' || customer.provisionalStatus === 'rejected') {
+    return res.status(403).json({ success: false, error: 'Customer account is not eligible for transfers.' });
+  }
+  if (customer.lockedUntil && new Date(customer.lockedUntil).getTime() > Date.now()) {
+    return res.status(423).json({ success: false, error: 'Account temporarily locked. Please try again later.' });
+  }
+
+  const recipientIdentifier = typeof req.body?.recipientIdentifier === 'string' ? req.body.recipientIdentifier.trim() : '';
+  const pin = typeof req.body?.pin === 'string' ? req.body.pin.trim() : '';
+  const plates = Number(req.body?.plates);
+  const idempotencyKey = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
+  if (!recipientIdentifier || !/^\d{6,}$/.test(pin) || !Number.isSafeInteger(plates) || plates <= 0 ||
+      !/^[A-Za-z0-9_-]{16,128}$/.test(idempotencyKey)) {
+    return res.status(400).json({ success: false, error: 'Valid recipient, 6+ digit PIN, positive whole plate amount, and idempotency key are required.' });
+  }
+
+  const transferId = `tr_${crypto.createHash('sha256').update(`${customer.id}:${idempotencyKey}`).digest('hex').slice(0, 40)}`;
+
+  const previousPinHash = customer.pinHash;
+  const previousAttempts = customer.failedLoginAttempts;
+  const previousLockedUntil = customer.lockedUntil;
+  if (!verifyServerCustomerPin(pin, customer)) {
+    customer.failedLoginAttempts = (customer.failedLoginAttempts || 0) + 1;
+    if (customer.failedLoginAttempts >= 5) customer.lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    await queueDbSave(serverDbState);
+    return res.status(401).json({ success: false, error: 'Incorrect security PIN.' });
+  }
+
+  customer.failedLoginAttempts = 0;
+  customer.lockedUntil = null;
+  const entitlement = checkServerStudentEntitlement(customer.id, 'digital_plate_transfer');
+  if (!entitlement.allowed) {
+    await queueDbSave(serverDbState);
+    return res.status(402).json({ success: false, requiresSubscription: true, error: entitlement.reason || 'An active customer subscription is required.' });
+  }
+
+  const normalizedIdentifier = recipientIdentifier.replace(/[\s-]/g, '');
+  const recipient = (serverDbState.customers || []).find((item: any) =>
+    item.restaurantCode === customer.restaurantCode &&
+    (item.memberNo === recipientIdentifier ||
+      (typeof item.phone === 'string' && item.phone.replace(/[\s-]/g, '') === normalizedIdentifier))
+  );
+  if (!recipient || recipient.id === customer.id ||
+      recipient.activationStatus === 'suspended' ||
+      recipient.provisionalStatus === 'pending_approval' ||
+      recipient.provisionalStatus === 'rejected') {
+    await queueDbSave(serverDbState);
+    return res.status(400).json({ success: false, error: 'Recipient not found or not eligible in this restaurant.' });
+  }
+
+  const existingTransfer = (serverDbState.transfers || []).find((item: any) => item.id === transferId);
+  if (existingTransfer) {
+    const sameRequest =
+      existingTransfer.senderCustomerId === customer.id &&
+      existingTransfer.recipientCustomerId === recipient.id &&
+      Number(existingTransfer.plates) === plates &&
+      existingTransfer.idempotencyKey === idempotencyKey;
+    if (!sameRequest) {
+      return res.status(409).json({ success: false, code: 'IDEMPOTENCY_CONFLICT', error: 'This transfer key was already used for different transfer details.' });
+    }
+    return res.json({
+      success: true,
+      idempotent: true,
+      transfer: existingTransfer,
+      senderBalance: getServerCustomerBalance(serverDbState, customer.id),
+      recipientBalance: getServerCustomerBalance(serverDbState, recipient.id),
+    });
+  }
+
+  const availableBalance = getServerCustomerBalance(serverDbState, customer.id);
+  if (availableBalance < plates) {
+    await queueDbSave(serverDbState);
+    return res.status(400).json({ success: false, error: `Insufficient plates. Available balance: ${availableBalance}.` });
+  }
+
+  const now = new Date().toISOString();
+  const transfer = {
+    id: transferId, idempotencyKey, restaurantCode: customer.restaurantCode,
+    senderCustomerId: customer.id, recipientCustomerId: recipient.id,
+    senderMemberNo: customer.memberNo, recipientMemberNo: recipient.memberNo,
+    senderName: customer.name, recipientName: recipient.name,
+    plates, timestamp: now, status: 'completed',
+  };
+  const ledgerOut = {
+    id: `led_${transferId}_out`, idempotencyKey: `transfer:${transferId}:out`,
+    customerId: customer.id, restaurantCode: customer.restaurantCode,
+    type: 'transfer_out', platesDelta: -plates, timestamp: now,
+    reason: `Transfer to #${recipient.memberNo}`, reference: transferId,
+  };
+  const ledgerIn = {
+    id: `led_${transferId}_in`, idempotencyKey: `transfer:${transferId}:in`,
+    customerId: recipient.id, restaurantCode: recipient.restaurantCode,
+    type: 'transfer_in', platesDelta: plates, timestamp: now,
+    reason: `Transfer from #${customer.memberNo}`, reference: transferId,
+  };
+
+  const auditLog = {
+    id: `audit_${transferId}`,
+    restaurantCode: customer.restaurantCode,
+    actorRole: 'customer',
+    actorName: customer.name,
+    userId: customer.id,
+    action: 'PLATES_TRANSFERRED',
+    details: `Transferred ${plates} plates to #${recipient.memberNo}`,
+    timestamp: now,
+  };
+  const notifications = [
+    {
+      id: `notif_${transferId}_sender`,
+      restaurantCode: customer.restaurantCode,
+      target: customer.id,
+      senderRole: 'system',
+      senderName: 'RestoPass Transfer',
+      type: 'plate_transfer',
+      title: `Sent ${plates} plates`,
+      message: `You transferred ${plates} plates to #${recipient.memberNo}.`,
+      priority: 'normal',
+      timestamp: now,
+      readByCustomerIds: [],
+    },
+    {
+      id: `notif_${transferId}_recipient`,
+      restaurantCode: recipient.restaurantCode,
+      target: recipient.id,
+      senderRole: 'system',
+      senderName: 'RestoPass Transfer',
+      type: 'plate_transfer',
+      title: `Received ${plates} plates`,
+      message: `You received ${plates} plates from #${customer.memberNo}.`,
+      priority: 'normal',
+      timestamp: now,
+      readByCustomerIds: [],
+    },
+  ];
+
+  if (isPostgresConfigured()) {
+    const committed = await commitPlateTransferPostgres({
+      transfer, ledgerOut, ledgerIn, auditLog, notifications,
+    });
+    if (!committed.ok) {
+      const status = committed.code === 'INSUFFICIENT_BALANCE' ? 400
+        : committed.code === 'CUSTOMER_NOT_FOUND' ? 404
+        : committed.code === 'NOT_READY' ? 503
+        : committed.code === 'IDEMPOTENCY_CONFLICT' ? 409 : 500;
+      return res.status(status).json({
+        success: false,
+        code: committed.code,
+        error: committed.message,
+      });
+    }
+
+    if (!committed.idempotent) {
+      serverDbState.ledgerEntries = [...(serverDbState.ledgerEntries || []), ledgerOut, ledgerIn];
+      serverDbState.transfers = [transfer, ...(serverDbState.transfers || [])];
+      serverDbState.auditLogs = [auditLog, ...(serverDbState.auditLogs || [])];
+      serverDbState.notifications = [...notifications, ...(serverDbState.notifications || [])];
+    }
+    return res.json({
+      success: true,
+      idempotent: committed.idempotent,
+      transfer: committed.transfer,
+      senderBalance: committed.senderBalance,
+      recipientBalance: committed.recipientBalance,
+    });
+  }
+
+  // Standalone mode is a single local process; Node's synchronous validation above
+  // completes before the first await, then this atomic snapshot persists the operation.
+  const oldLedger = serverDbState.ledgerEntries;
+  const oldTransfers = serverDbState.transfers;
+  const oldAuditLogs = serverDbState.auditLogs;
+  const oldNotifications = serverDbState.notifications;
+  serverDbState.ledgerEntries = [...(oldLedger || []), ledgerOut, ledgerIn];
+  serverDbState.transfers = [transfer, ...(oldTransfers || [])];
+  serverDbState.auditLogs = [auditLog, ...(oldAuditLogs || [])];
+  serverDbState.notifications = [...notifications, ...(oldNotifications || [])];
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    serverDbState.ledgerEntries = oldLedger;
+    serverDbState.transfers = oldTransfers;
+    serverDbState.auditLogs = oldAuditLogs;
+    serverDbState.notifications = oldNotifications;
+    customer.failedLoginAttempts = previousAttempts;
+    customer.lockedUntil = previousLockedUntil;
+    customer.pinHash = previousPinHash;
+    return res.status(500).json({ success: false, error: 'Transfer could not be committed. No transfer was confirmed.' });
+  }
+
+  return res.json({
+    success: true, transfer,
+    senderBalance: getServerCustomerBalance(serverDbState, customer.id),
+    recipientBalance: getServerCustomerBalance(serverDbState, recipient.id),
+  });
+});
+
+/**
+ * Apply authenticated soft-deletion requests. Financial and audit collections
+ * are deliberately excluded: ledger, payment, transfer and audit history remain
+ * immutable. Tombstones are retained so stale offline snapshots cannot resurrect
+ * an account or operational record.
+ */
+function applySyncDeletionTombstones(state: any, incoming: any, user: UserSession): number {
+  if (!state || !Array.isArray(incoming) || incoming.length === 0) return 0;
+  if (user.role !== 'restaurant_admin' && user.role !== 'super_admin') return 0;
+
+  const allowedCollections: Record<string, string> = {
+    customers: 'customers',
+    stationUsers: 'stationUsers',
+    branches: 'branches',
+    packages: 'packages',
+    menuItems: 'menuItems',
+    scanPoints: 'scanPoints',
+    cashierSessions: 'cashierSessions',
+  };
+  if (!Array.isArray(state.deletionTombstones)) state.deletionTombstones = [];
+  if (!Array.isArray(state.auditLogs)) state.auditLogs = [];
+
+  const allowedRestoCode = user.role === 'super_admin' ? null : user.restaurantCode;
+  const existingKeys = new Set(
+    state.deletionTombstones.map((item: any) =>
+      `${item.collection}:${item.restaurantCode}:${item.recordId}`
+    )
+  );
+  let applied = 0;
+
+  // Existing markers do not consume the per-request application budget; otherwise
+  // the same first 200 old markers would starve newer offline deletions forever.
+  for (const request of incoming) {
+    if (applied >= 200) break;
+    if (!request || typeof request !== 'object') continue;
+    const collection = request.collection;
+    const recordId = typeof request.recordId === 'string' ? request.recordId.trim() : '';
+    const restaurantCode = typeof request.restaurantCode === 'string' ? request.restaurantCode.trim() : '';
+    if (!allowedCollections[collection] || !recordId || recordId.length > 128 || !restaurantCode || restaurantCode.length > 32) continue;
+    if (allowedRestoCode && restaurantCode !== allowedRestoCode) continue;
+
+    const key = `${collection}:${restaurantCode}:${recordId}`;
+    if (existingKeys.has(key)) {
+      // Reapply an existing tombstone to protect against stale offline replays.
+      state[allowedCollections[collection]] = (state[allowedCollections[collection]] || []).filter(
+        (item: any) => !(item.id === recordId && item.restaurantCode === restaurantCode)
+      );
+      continue;
+    }
+
+    const current = (state[allowedCollections[collection]] || []).find(
+      (item: any) => item.id === recordId && item.restaurantCode === restaurantCode
+    );
+    // Never let a tenant admin delete a record that belongs to another tenant.
+    if (allowedRestoCode && current && current.restaurantCode !== allowedRestoCode) continue;
+    if (SEED_EXPENSE_IDS.has(recordId) || SEED_NOTIFICATION_IDS.has(recordId) ||
+        SEED_BRANCH_IDS.has(recordId) || SEED_USER_IDS.has(recordId)) continue;
+
+    const deletedAt = new Date().toISOString();
+    state.deletionTombstones.push({
+      id: `tombstone_${crypto.createHash('sha256').update(key).digest('hex').slice(0, 32)}`,
+      collection,
+      recordId,
+      restaurantCode,
+      deletedAt,
+      deletedBy: user.username || user.userId,
+    });
+    state[allowedCollections[collection]] = (state[allowedCollections[collection]] || []).filter(
+      (item: any) => !(item.id === recordId && item.restaurantCode === restaurantCode)
+    );
+    state.auditLogs.push({
+      id: `audit_tombstone_${crypto.createHash('sha256').update(key).digest('hex').slice(0, 32)}`,
+      restaurantCode,
+      userId: user.userId,
+      actorName: user.username || user.userId,
+      actorRole: user.role,
+      action: `${collection.toUpperCase()}_SOFT_DELETED`,
+      details: `Soft-deleted ${collection} record ${recordId}; financial and audit history retained.`,
+      timestamp: deletedAt,
+    });
+    existingKeys.add(key);
+    applied++;
+  }
+  return applied;
+}
+
+/**
+ * Prevent tenant-scoped records from being reassigned by a colliding or forged
+ * ID during incremental sync. Tenant admins must submit an explicit matching
+ * restaurantCode; an existing record's tenant is immutable through generic sync.
+ */
+function canMergeTenantScopedRecord(existing: any, incoming: any, allowedRestoCode: string | null): boolean {
+  if (!incoming || typeof incoming !== 'object') return false;
+  if (allowedRestoCode && incoming.restaurantCode !== allowedRestoCode) return false;
+  if (existing?.restaurantCode && existing.restaurantCode !== incoming.restaurantCode) return false;
+  // Platform-wide records (for example plan templates) may have no tenant.
+  // Tenant-owned records may never lose or change their restaurantCode.
+  if (existing?.restaurantCode && !incoming.restaurantCode) return false;
+  return true;
+}
 
 // POST /api/sync: Authenticated, validated incremental synchronization with Idempotency (Findings 5 & 6)
 app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
@@ -2291,26 +3613,42 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
       const existingCustomersMap = new Map((serverDbState.customers || []).map((c: any) => [c.id, c]));
       for (const inc of incomingCustomers) {
         const prev: any = existingCustomersMap.get(inc.id);
+        if (prev && !canMergeTenantScopedRecord(prev, inc, allowedRestoCode)) continue;
         if (prev) {
           if (user.role === 'customer') {
             // Customers can only toggle their own card lock status or update PIN metadata, never privilege/version fields
+            // Customer sync may only lock/unlock their own card. PIN changes must
+            // go through the server-side activation/recovery flows.
             existingCustomersMap.set(inc.id, {
               ...prev,
               cardStatus: inc.cardStatus === 'locked' || inc.cardStatus === 'active' ? inc.cardStatus : prev.cardStatus,
-              hasCustomPin: inc.hasCustomPin ?? prev.hasCustomPin,
-              pinSetAt: inc.pinSetAt ?? prev.pinSetAt,
-              pinHash: inc.pinHash ?? prev.pinHash,
             });
           } else {
             existingCustomersMap.set(inc.id, {
               ...prev,
               ...inc,
-              pinHash: inc.pinHash ?? prev.pinHash,
+              // Credential, identity-proof and anti-replay fields are server-managed.
+              pinHash: prev.pinHash,
+              hasCustomPin: prev.hasCustomPin,
+              pinSetAt: prev.pinSetAt,
+              idHash: prev.idHash,
+              idNumberMasked: prev.idNumberMasked,
+              onboardingToken: prev.onboardingToken,
+              keyVersion: prev.keyVersion,
+              cardVersion: prev.cardVersion,
+              failedLoginAttempts: prev.failedLoginAttempts,
+              lockedUntil: prev.lockedUntil,
+              // Private photo object identifiers are server-managed; clients may
+              // never redirect a customer record to another tenant's object.
+              photoStorageKey: prev.photoStorageKey,
+              photoStorageType: prev.photoStorageType,
             });
           }
         } else if (user.role !== 'customer') {
-          // Only staff/admins may create new customer records
-          existingCustomersMap.set(inc.id, inc);
+          // Only staff/admins may create new customer records. Photo object
+          // references are issued exclusively by the private upload endpoint.
+          const { photoStorageKey: _untrustedPhotoKey, photoStorageType: _untrustedPhotoType, ...safeIncomingCustomer } = inc;
+          existingCustomersMap.set(inc.id, safeIncomingCustomer);
         }
       }
       serverDbState.customers = Array.from(existingCustomersMap.values());
@@ -2323,9 +3661,10 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         for (const inc of fullState[key]) {
           if (!inc || !inc.id) continue;
           if (SEED_EXPENSE_IDS.has(inc.id) || SEED_NOTIFICATION_IDS.has(inc.id) || SEED_BRANCH_IDS.has(inc.id) || SEED_USER_IDS.has(inc.id)) continue;
-          if (allowedRestoCode && inc.restaurantCode && inc.restaurantCode !== allowedRestoCode) continue;
+          if (allowedRestoCode && inc.restaurantCode !== allowedRestoCode) continue;
           if (user.role === 'customer' && inc.customerId && inc.customerId !== user.userId) continue;
           const prev = map.get(inc.id);
+          if (prev && !canMergeTenantScopedRecord(prev, inc, allowedRestoCode)) continue;
           if (prev) {
             if (allowUpdate) {
               map.set(inc.id, { ...prev, ...inc });
@@ -2337,6 +3676,17 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         serverDbState[key] = Array.from(map.values());
       };
 
+      // Customers cannot submit financial ledger entries through generic state sync.
+      // This prevents bypassing PIN verification, entitlement checks, recipient validation,
+      // and server-side transaction controls by forging transfer_out/transfer_in rows.
+      if (user.role === 'customer' && Array.isArray(fullState.ledgerEntries) && fullState.ledgerEntries.length > 0) {
+        return res.status(403).json({
+          success: false,
+          code: 'CUSTOMER_LEDGER_WRITE_FORBIDDEN',
+          error: 'Customer ledger changes must use an authorized server-side transaction endpoint.',
+        });
+      }
+
       // 2. Merge ledger entries with Idempotency, Role Authorization, and Schema Validation (append-only)
       const existingLedgerIds = new Set((serverDbState.ledgerEntries || []).map((l: any) => l.id));
       const existingIdempotencyKeys = new Set(
@@ -2346,27 +3696,30 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
       );
 
       const incomingLedgers = (fullState.ledgerEntries || []).filter((l: any) => {
-        if (!l || !l.id || !l.customerId) return false;
+        if (!l || typeof l.id !== 'string' || !l.id || typeof l.customerId !== 'string' || !l.customerId) return false;
+        if (!allowedRestoCode && user.role !== 'super_admin') return false;
         if (allowedRestoCode && l.restaurantCode !== allowedRestoCode) return false;
-        // Schema check: amountRwf must be a valid finite number if present
-        if (l.amountRwf !== undefined && (typeof l.amountRwf !== 'number' || !Number.isFinite(l.amountRwf))) return false;
-        if (typeof l.platesDelta !== 'number' || !Number.isFinite(l.platesDelta) || l.platesDelta === 0) return false;
+        const ledgerCustomer = (serverDbState.customers || []).find(
+          (customer: any) => customer.id === l.customerId && customer.restaurantCode === l.restaurantCode
+        );
+        if (!ledgerCustomer) return false;
 
-        // Role-based ledger write guard:
-        // Customers can NEVER push 'purchase', 'adjustment', 'reversal', 'scan', 'extra', or 'undo' entries,
-        // and can NEVER credit their own account (platesDelta > 0 for customerId === user.userId).
-        if (user.role === 'customer') {
-          if (l.type !== 'transfer_out' && l.type !== 'transfer_in') return false;
-          if (l.type === 'transfer_out' && (l.customerId !== user.userId || l.platesDelta >= 0)) return false;
-          if (l.type === 'transfer_in' && (l.customerId === user.userId || l.platesDelta <= 0)) return false;
-        }
-        if (user.role === 'stand_staff') {
-          if (l.type === 'adjustment' || l.type === 'reversal') return false;
-        }
+        const allowedTypes = new Set(['purchase', 'scan', 'extra', 'undo', 'transfer_out', 'transfer_in', 'adjustment', 'reversal']);
+        if (!allowedTypes.has(l.type)) return false;
+        if (l.amountRwf !== undefined && (!Number.isSafeInteger(l.amountRwf) || l.amountRwf < 0)) return false;
+        if (!Number.isSafeInteger(l.platesDelta) || l.platesDelta === 0) return false;
 
-        // Idempotency check: Reject duplicate transactions / replay syncs
+        // Cashier/station staff may submit only negative meal-consumption events.
+        // Positive credits, adjustments, reversals and transfers require server/admin authority.
+        if (user.role === 'stand_staff' &&
+            (!['scan', 'extra'].includes(l.type) || l.platesDelta >= 0)) return false;
+        if (user.role === 'customer') return false;
+
+        // Idempotency check also catches duplicates within the same submitted batch.
         if (existingLedgerIds.has(l.id)) return false;
         if (l.idempotencyKey && existingIdempotencyKeys.has(l.idempotencyKey)) return false;
+        existingLedgerIds.add(l.id);
+        if (l.idempotencyKey) existingIdempotencyKeys.add(l.idempotencyKey);
         return true;
       });
 
@@ -2415,19 +3768,20 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         serverDbState.scanEvents = [...incomingScans, ...(serverDbState.scanEvents || [])];
       }
 
-      // 4. Merge notifications & operational collections with role guards
-      mergeScopedCollection('notifications', true);
-      mergeScopedCollection('transfers', false);
-      mergeScopedCollection('auditLogs', false);
-      mergeScopedCollection('customerSubscriptions', true);
-      mergeScopedCollection('studentSubscriptionPayments', true);
-
+      // 4. Merge operational collections with role guards.
+      // Customer-originated notifications, transfer records, audit events and subscription
+      // states are server-authoritative and must not be accepted from client fullState.
       if (user.role !== 'customer') {
-        mergeScopedCollection('pendingApprovals', true);
+        mergeScopedCollection('notifications', true);
+        if (user.role === 'restaurant_admin' || user.role === 'super_admin') {
+          mergeScopedCollection('transfers', false);
+        }
+        mergeScopedCollection('auditLogs', false);
+        mergeScopedCollection('pendingApprovals', user.role !== 'stand_staff');
         mergeScopedCollection('payments', false);
         mergeScopedCollection('shifts', true);
         mergeScopedCollection('activationRequests', true);
-        mergeScopedCollection('pinRecoveryRequests', true);
+        mergeScopedCollection('pinRecoveryRequests', user.role !== 'stand_staff');
       }
 
       if (user.role === 'restaurant_admin' || user.role === 'super_admin') {
@@ -2446,13 +3800,25 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
             if (!incR || !incR.code) continue;
             if (allowedRestoCode && incR.code !== allowedRestoCode) continue;
             const prevR: any = rMap.get(incR.code);
-            rMap.set(incR.code, prevR ? { ...prevR, ...incR } : incR);
+            rMap.set(incR.code, prevR ? {
+              ...prevR,
+              ...incR,
+              // Contract/licensing authority remains platform-controlled.
+              status: prevR.status,
+              planId: prevR.planId,
+              currentLicenseId: prevR.currentLicenseId,
+              termsOverride: prevR.termsOverride,
+              highestTimeSeen: Math.max(Number(prevR.highestTimeSeen || 0), Number(incR.highestTimeSeen || 0)),
+            } : incR);
           }
           serverDbState.restaurants = Array.from(rMap.values());
         }
       }
 
       if (user.role === 'super_admin') {
+        mergeScopedCollection('customerSubscriptions', true);
+        mergeScopedCollection('studentSubscriptionPayments', true);
+        mergeScopedCollection('subscriptionPayments', true);
         mergeScopedCollection('plans', true);
         mergeScopedCollection('licenses', true);
         if (fullState.studentSubscriptionSettings) {
@@ -2470,6 +3836,9 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
       }
     }
 
+    // Apply authenticated soft-deletion requests after normal sync merging.
+    applySyncDeletionTombstones(serverDbState, fullState.deletionTombstones, user);
+
     const savedOk = await queueDbSave(serverDbState);
     if (!savedOk) {
       return res.status(500).json({
@@ -2481,7 +3850,7 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
     const scopedState = scopeStateForUser(serverDbState, user);
     return res.json({
       success: true,
-      serverState: scopedState,
+      serverState: sanitizeSensitiveState(scopedState),
       serverTime: new Date().toISOString(),
     });
   }
@@ -2489,7 +3858,7 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
   const scopedState = scopeStateForUser(serverDbState, user);
   return res.json({
     success: true,
-    serverState: scopedState,
+    serverState: sanitizeSensitiveState(scopedState),
     serverTime: new Date().toISOString(),
   });
 });
@@ -2508,26 +3877,80 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 // ----------------------------------------------------
 async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
+  const deploymentMode = (process.env.RESTOPASS_DEPLOYMENT_MODE || 'standalone').toLowerCase();
   let viteLoaded = false;
+
+  if (!['cloud', 'standalone'].includes(deploymentMode)) {
+    throw new Error('RESTOPASS_DEPLOYMENT_MODE must be either cloud or standalone.');
+  }
+  if (isProduction && deploymentMode === 'cloud' && !isPostgresConfigured()) {
+    throw new Error('Cloud production mode requires DATABASE_URL. Refusing to start with local JSON persistence.');
+  }
+  if (isProduction && deploymentMode === 'cloud' && !process.env.REDIS_URL) {
+    throw new Error('Cloud production mode requires REDIS_URL for distributed replay protection.');
+  }
 
   // Cloud Relational Database Initialization
   if (isPostgresConfigured()) {
     console.log('[Server Authority] PostgreSQL detected. Connecting and initializing schema...');
     try {
       const initialized = await initPostgres(serverDbState);
-      if (initialized) {
-        const pgState = await loadStateFromPostgres();
-        if (pgState && isValidAppState(pgState)) {
-          serverDbState = pgState;
-          ensureServerDbDefaults(serverDbState);
-          console.log('[Server Authority] Authoritative state loaded from PostgreSQL.');
-        }
+      if (!initialized) {
+        throw new Error('PostgreSQL is configured but initialization failed. Refusing to start with a non-authoritative local JSON database.');
       }
+      const pgState = await loadStateFromPostgres();
+      if (!pgState || !isValidAppState(pgState)) {
+        throw new Error('PostgreSQL is configured but authoritative state could not be loaded. Refusing split-brain fallback.');
+      }
+      serverDbState = pgState;
+      ensureServerDbDefaults(serverDbState);
+      console.log('[Server Authority] Authoritative state loaded from PostgreSQL.');
     } catch (pgBootErr) {
-      console.error('[Server Authority] PostgreSQL startup initialization failed, falling back to db.json:', pgBootErr);
+      console.error('[Server Authority] PostgreSQL startup initialization failed:', pgBootErr);
+      if (isProduction) throw pgBootErr;
+      console.warn('[Server Authority] Development-only fallback to local db.json is active.');
     }
   } else {
     console.log('[Server Authority] Running in standalone local storage mode (Offline Reception Laptop compatible).');
+  }
+
+  // A first standalone boot has no db.json yet. Initialize a clean, valid empty
+  // state so readiness is truthful and the first restaurant can be onboarded.
+  // Never replace an existing but unreadable database file with empty data.
+  if (!serverDbState) {
+    if (fs.existsSync(DB_FILE)) {
+      throw new Error('Local database file exists but could not be loaded or recovered from backup. Refusing to replace it with empty state.');
+    }
+    if (isPostgresConfigured() && isProduction) {
+      throw new Error('Production database authority did not load. Refusing to initialize standalone state.');
+    }
+    serverDbState = { restaurants: [], customers: [] };
+    ensureServerDbDefaults(serverDbState);
+    if (!atomicSaveDb(serverDbState)) {
+      throw new Error('Could not persist the initial empty standalone database state. Refusing to start unready.');
+    }
+    console.log('[Server Authority] Initialized a new empty standalone database.');
+  }
+
+  // Hash legacy station credentials only after the authoritative state has loaded.
+  // Persist the migration before the server begins accepting authentication requests.
+  if (serverDbState && normalizeStationUserCredentials(serverDbState)) {
+    let credentialsPersisted = false;
+    if (isPostgresConfigured()) credentialsPersisted = await saveStateToPostgres(serverDbState);
+    if (!credentialsPersisted && (!isPostgresConfigured() || !isProduction)) {
+      credentialsPersisted = atomicSaveDb(serverDbState);
+    }
+    if (!credentialsPersisted) {
+      throw new Error('Station credential migration could not be persisted; refusing to start with an ambiguous credential state.');
+    }
+    console.log('[Server Authority] Legacy station credentials migrated to scrypt hashes.');
+  }
+
+  if (isProduction && deploymentMode === 'cloud') {
+    const redisReady = await checkRedisReady();
+    if (!redisReady) {
+      throw new Error('Redis is configured but not ready. Refusing to start cloud production without distributed replay protection.');
+    }
   }
 
   if (!isProduction) {
@@ -2546,15 +3969,25 @@ async function startServer() {
   }
 
   if (isProduction || !viteLoaded) {
-    const staticDir = fs.existsSync(path.resolve(process.cwd(), 'dist'))
-      ? path.resolve(process.cwd(), 'dist')
-      : process.cwd();
-    app.use(express.static(staticDir));
+    const distDir = path.resolve(process.cwd(), 'dist');
+    const publicDir = path.resolve(process.cwd(), 'public');
+    if (isProduction && !fs.existsSync(path.join(distDir, 'index.html'))) {
+      throw new Error('[FATAL DEPLOYMENT ERROR] Production frontend bundle is missing. Refusing to serve the application working directory.');
+    }
+    const staticDir = fs.existsSync(path.join(distDir, 'index.html')) ? distDir : publicDir;
+    // Legacy public uploads must never become reachable through static hosting,
+    // including if a pre-hardening volume or build artifact still contains them.
+    app.use((req, res, next) => {
+      if (req.path === '/uploads' || req.path.startsWith('/uploads/')) {
+        return res.status(404).json({ success: false, error: 'Resource not found.' });
+      }
+      return next();
+    });
+    app.use(express.static(staticDir, { dotfiles: 'deny', index: false }));
     app.get('*', (_req, res) => {
-      const htmlFile = fs.existsSync(path.join(staticDir, 'index.html'))
-        ? path.join(staticDir, 'index.html')
-        : path.resolve(process.cwd(), 'index.html');
-      res.sendFile(htmlFile);
+      const htmlFile = path.resolve(process.cwd(), 'index.html');
+      if (fs.existsSync(htmlFile)) return res.sendFile(htmlFile);
+      return res.status(404).send('Application bundle not found.');
     });
   }
 
@@ -2593,4 +4026,22 @@ export {
   getServerDbState,
   setServerDbState,
   validateProductionSecrets,
+  sanitizeSensitiveState,
+  normalizeStationUserCredentials,
+  verifyServerCustomerPin,
+  verifyStationUserCredentials,
+  isActiveStationSession,
+  getStationUserAuthVersion,
+  isActiveCustomerSession,
+  getCustomerAuthVersion,
+  findCustomerForLogin,
+  getSuperAdminAuthVersion,
+  isCurrentSuperAdminSession,
+  applySyncDeletionTombstones,
+  canMergeTenantScopedRecord,
+  resolveRestaurantAdminAccount,
+  verifyRestaurantAdminCredentials,
+  getRestaurantAdminAuthVersion,
+  isCurrentRestaurantAdminSession,
+  canAccessCustomerPhoto,
 };

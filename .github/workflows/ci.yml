@@ -2,33 +2,189 @@ name: RestoPass CI Security & Quality Gate
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, hardening/production-readiness, 'fix/**' ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, hardening/production-readiness ]
 
 jobs:
   test-and-verify:
     name: Build, Lint & Automated Test Suite
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/restopass_test
+      TEST_REDIS_URL: redis://localhost:6379
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: restopass_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d restopass_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci --include=optional || npm install
+        run: npm ci --include=optional
+
+      - name: Dependency vulnerability audit
+        run: npm audit --audit-level=high
 
       - name: Typecheck / Lint
         run: npm run lint
 
       - name: Execute Security & Integrity Tests
         run: npm test
+
+      - name: Validate encrypted PostgreSQL backup tooling
+        run: |
+          bash -n deploy/backup-postgres.sh deploy/verify-postgres-backup.sh
+          temp_dir="$(mktemp -d)"
+          trap 'rm -rf "$temp_dir"' EXIT
+          key="$(openssl rand -hex 32)"
+          printf 'RestoPass backup encryption test' > "$temp_dir/plain"
+          RESTOPASS_BACKUP_ENCRYPTION_KEY="$key" openssl enc -aes-256-cbc -salt -pbkdf2 -iter 600000 -pass env:RESTOPASS_BACKUP_ENCRYPTION_KEY -in "$temp_dir/plain" -out "$temp_dir/encrypted"
+          RESTOPASS_BACKUP_ENCRYPTION_KEY="$key" openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass env:RESTOPASS_BACKUP_ENCRYPTION_KEY -in "$temp_dir/encrypted" -out "$temp_dir/restored"
+          cmp "$temp_dir/plain" "$temp_dir/restored"
+          hmac_key="$(printf 'RESTOPASS_BACKUP_HMAC:%s' "$key" | sha256sum | awk '{print $1}')"
+          hmac="$(openssl dgst -sha256 -hmac "$hmac_key" "$temp_dir/encrypted" | awk '{print $NF}')"
+          test "${#hmac}" -eq 64
+
+      - name: Exercise PostgreSQL encrypted backup and isolated restore
+        run: |
+          docker run --rm --network host \
+            -e PGHOST=127.0.0.1 \
+            -e PGPORT=5432 \
+            -e PGUSER=postgres \
+            -e PGPASSWORD=postgres \
+            -v "$PWD/deploy/test-postgres-backup-restore.sh:/test-postgres-backup-restore.sh:ro" \
+            postgres:16-alpine sh -ec 'apk add --no-cache openssl coreutils; sh /test-postgres-backup-restore.sh'
+
+      - name: Validate encrypted private patron-photo backup tooling
+        run: |
+          bash -n deploy/lib/photo-backup.sh deploy/backup-patron-photos.sh deploy/restore-patron-photos.sh deploy/test-private-photo-backup.sh
+          bash deploy/test-private-photo-backup.sh
+
+      - name: Validate paired off-site backup orchestration
+        run: |
+          bash -n deploy/backup-all.sh deploy/verify-patron-photo-backup.sh deploy/verify-latest-paired-backup.sh deploy/install-backup-schedule.sh deploy/test-paired-backup-scripts.sh
+          bash deploy/test-paired-backup-scripts.sh
+
+      - name: Validate production Docker Compose configuration
+        run: |
+          export POSTGRES_PASSWORD="$(openssl rand -hex 32)"
+          export REDIS_PASSWORD="$(openssl rand -hex 32)"
+          export SESSION_SECRET="$(openssl rand -hex 32)"
+          export RESTOPASS_MASTER_SECRET="$(openssl rand -hex 32)"
+          export RESTOPASS_SUPERADMIN_PASSWORD="$(openssl rand -hex 24)"
+          export RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS='{"RW01":{"username":"manager@rw01.test","password":"ci_unique_admin_password_rw01_2026"}}'
+          docker compose -f deploy/docker-compose.prod.yml config --quiet
+
+      - name: Runtime-test production Compose stack with PostgreSQL and Redis
+        run: |
+          export POSTGRES_DB=restopass_ci
+          export POSTGRES_USER=restopass_ci
+          export POSTGRES_PASSWORD="$(openssl rand -hex 32)"
+          export REDIS_PASSWORD="$(openssl rand -hex 32)"
+          export SESSION_SECRET="$(openssl rand -hex 32)"
+          export RESTOPASS_MASTER_SECRET="$(openssl rand -hex 32)"
+          export RESTOPASS_SUPERADMIN_PASSWORD="$(openssl rand -hex 24)"
+          export RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS='{"RW01":{"username":"manager@rw01.test","password":"ci_unique_admin_password_rw01_2026"}}'
+          compose=(docker compose -p restopass-ci -f deploy/docker-compose.prod.yml)
+          cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          "${compose[@]}" up -d --build
+          ready=0
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:3000/api/ready >/tmp/restopass-compose-ready.json; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Cloud Compose stack did not become ready."
+            "${compose[@]}" ps
+            "${compose[@]}" logs --no-color
+            exit 1
+          fi
+          grep -q '"status":"ready"' /tmp/restopass-compose-ready.json
+          table_count="$("${compose[@]}" exec -T postgres sh -ec 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema();"')"
+          if ! [[ "$table_count" =~ ^[0-9]+$ ]] || (( table_count < 10 )); then
+            echo "Cloud PostgreSQL schema is incomplete: $table_count tables."
+            exit 1
+          fi
+          "${compose[@]}" restart app
+          restarted=0
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/api/ready >/tmp/restopass-compose-restart.json; then
+              restarted=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$restarted" -ne 1 ]; then
+            echo "Cloud application failed readiness after restart."
+            "${compose[@]}" logs --no-color app
+            exit 1
+          fi
+          grep -q '"status":"ready"' /tmp/restopass-compose-restart.json
+
+      - name: Build production Docker image
+        run: docker build --pull --tag restopass-ci:${{ github.sha }} .
+
+      - name: Smoke-test production Docker container
+        run: |
+          docker run --detach --name restopass-app-smoke \
+            --publish 127.0.0.1:3300:3000 \
+            --env NODE_ENV=production \
+            --env RESTOPASS_DEPLOYMENT_MODE=standalone \
+            --env PORT=3000 \
+            --env SESSION_SECRET="$(openssl rand -hex 32)" \
+            --env RESTOPASS_MASTER_SECRET="$(openssl rand -hex 32)" \
+            --env RESTOPASS_SUPERADMIN_PASSWORD="$(openssl rand -hex 24)" \
+            --env 'RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS={"RW01":{"username":"manager@rw01.test","password":"ci_unique_admin_password_rw01_2026"}}' \
+            restopass-ci:${{ github.sha }}
+          cleanup() { docker logs restopass-app-smoke || true; docker rm --force restopass-app-smoke >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3300/api/ready >/tmp/restopass-ready.json; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Production container did not become ready."
+            cat /tmp/restopass-ready.json || true
+            exit 1
+          fi
+          grep -q '"status":"ready"' /tmp/restopass-ready.json
+          curl --fail --silent http://127.0.0.1:3300/api/health >/dev/null
 
       - name: Build Production Bundle
         run: npm run build

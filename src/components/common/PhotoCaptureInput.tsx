@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { PrivatePhoto } from './PrivatePhoto';
 import { Camera, Upload, RefreshCw, X, Check, Image as ImageIcon, User, AlertCircle } from 'lucide-react';
 
 interface PhotoCaptureInputProps {
@@ -236,7 +237,7 @@ export const PhotoCaptureInput: React.FC<PhotoCaptureInputProps> = ({
         /* CURRENT PHOTO PREVIEW & CAPTURE CONTROLS */
         <div className="flex flex-col sm:flex-row items-center gap-4">
           <div className="relative group shrink-0">
-            <img
+            <PrivatePhoto
               src={photoUrl || '/src/assets/images/avatar_student_male_1790979380050.jpg'}
               alt="Customer avatar"
               className="w-20 h-20 rounded-2xl object-cover border-2 border-emerald-500/80 shadow-md bg-slate-900"

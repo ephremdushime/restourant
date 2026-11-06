@@ -1,12 +1,10 @@
 /**
- * RestoPass S3-Compatible Object Storage Service
- * 
- * Supports AWS S3, DigitalOcean Spaces, Cloudflare R2, and MinIO for patron photo persistence.
- * Falls back to local directory persistence (public/uploads/patron-photos/) when S3 is unconfigured,
- * guaranteeing offline reception laptop compatibility.
+ * Private patron-photo storage.
+ *
+ * Objects are never assigned public URLs. S3-compatible buckets must remain
+ * private; local fallback is stored under data/private, outside the web root.
  */
-
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -19,51 +17,7 @@ export interface StorageConfig {
   endpoint?: string;
   accessKeyId: string;
   secretAccessKey: string;
-  publicUrlPrefix?: string;
   forcePathStyle?: boolean;
-}
-
-export function getObjectStorageConfig(): StorageConfig | null {
-  const bucket = process.env.S3_BUCKET || process.env.AWS_S3_BUCKET || process.env.SPACES_BUCKET;
-  const accessKeyId = process.env.S3_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY;
-
-  if (!bucket || !accessKeyId || !secretAccessKey) {
-    return null;
-  }
-
-  return {
-    bucket,
-    region: process.env.S3_REGION || process.env.AWS_REGION || 'us-east-1',
-    endpoint: process.env.S3_ENDPOINT || process.env.SPACES_ENDPOINT,
-    accessKeyId,
-    secretAccessKey,
-    publicUrlPrefix: process.env.S3_PUBLIC_URL_PREFIX || process.env.CDN_URL,
-    forcePathStyle: process.env.S3_FORCE_PATH_STYLE === 'true',
-  };
-}
-
-export function isObjectStorageConfigured(): boolean {
-  return getObjectStorageConfig() !== null;
-}
-
-export function getS3Client(): S3Client | null {
-  if (!isObjectStorageConfigured()) return null;
-
-  if (!s3ClientInstance) {
-    const config = getObjectStorageConfig()!;
-    s3ClientInstance = new S3Client({
-      region: config.region,
-      endpoint: config.endpoint,
-      credentials: {
-        accessKeyId: config.accessKeyId,
-        secretAccessKey: config.secretAccessKey,
-      },
-      forcePathStyle: config.forcePathStyle,
-    });
-  }
-
-  return s3ClientInstance;
 }
 
 export interface UploadResult {
@@ -73,120 +27,197 @@ export interface UploadResult {
   sizeBytes: number;
 }
 
-/**
- * Uploads a binary buffer to S3 or local directory
- */
+export interface StoredPhoto {
+  buffer: Buffer;
+  mimeType: string;
+}
+
+const MIME_EXTENSIONS: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+};
+const EXTENSION_MIMES: Record<string, string> = {
+  jpg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+};
+
+export function getObjectStorageConfig(): StorageConfig | null {
+  const bucket = process.env.S3_BUCKET || process.env.AWS_S3_BUCKET || process.env.SPACES_BUCKET;
+  const accessKeyId = process.env.S3_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY;
+  if (!bucket || !accessKeyId || !secretAccessKey) return null;
+  return {
+    bucket,
+    region: process.env.S3_REGION || process.env.AWS_REGION || 'us-east-1',
+    endpoint: process.env.S3_ENDPOINT || process.env.SPACES_ENDPOINT,
+    accessKeyId,
+    secretAccessKey,
+    forcePathStyle: process.env.S3_FORCE_PATH_STYLE === 'true',
+  };
+}
+
+export function isObjectStorageConfigured(): boolean {
+  return getObjectStorageConfig() !== null;
+}
+
+export function getS3Client(): S3Client | null {
+  const config = getObjectStorageConfig();
+  if (!config) return null;
+  if (!s3ClientInstance) {
+    s3ClientInstance = new S3Client({
+      region: config.region,
+      endpoint: config.endpoint,
+      credentials: { accessKeyId: config.accessKeyId, secretAccessKey: config.secretAccessKey },
+      forcePathStyle: config.forcePathStyle,
+    });
+  }
+  return s3ClientInstance;
+}
+
+function privatePhotoDirectory(): string {
+  const configured = process.env.RESTOPASS_PRIVATE_UPLOAD_DIR?.trim();
+  return path.resolve(configured || path.join(process.cwd(), 'data', 'private', 'patron-photos'));
+}
+
+function normalizeTenantCode(restaurantCode: string): string {
+  const normalized = String(restaurantCode || '').trim().toUpperCase();
+  if (!/^[A-Z0-9_-]{1,32}$/.test(normalized)) throw new Error('Invalid restaurant scope for photo storage.');
+  return normalized;
+}
+
+function validatePhotoKey(key: string): { tenantCode: string; filename: string; extension: string } {
+  if (typeof key !== 'string' || key.length > 160) throw new Error('Invalid photo key.');
+  const match = /^patron-photos\/([A-Z0-9_-]{1,32})\/([a-f0-9-]{36})\.(jpg|png|webp)$/.exec(key);
+  if (!match) throw new Error('Invalid photo key.');
+  return { tenantCode: match[1], filename: match[2] + '.' + match[3], extension: match[3] };
+}
+
+function assertImageSignature(buffer: Buffer, mimeType: string): void {
+  const valid =
+    (mimeType === 'image/jpeg' && buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) ||
+    (mimeType === 'image/png' && buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) ||
+    (mimeType === 'image/webp' && buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP');
+  if (!valid) throw new Error('Photo content does not match an allowed JPEG, PNG, or WebP image format.');
+}
+
 export async function uploadPatronPhoto(
   buffer: Buffer,
   mimeType: string,
-  filenameHint = 'patron'
+  restaurantCode: string
 ): Promise<UploadResult> {
-  const allowedMimes: Record<string, string> = {
-    'image/jpeg': 'jpg',
-    'image/png': 'png',
-    'image/webp': 'webp',
-  };
-  const ext = allowedMimes[mimeType];
-  if (!ext) {
-    throw new Error(`Unsupported image format (${mimeType}). Only JPEG, PNG, and WebP images are allowed.`);
+  const extension = MIME_EXTENSIONS[mimeType];
+  if (!extension) throw new Error('Only JPEG, PNG, and WebP images are allowed.');
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0 || buffer.length > 5 * 1024 * 1024) {
+    throw new Error('Photo must be between 1 byte and 5MB.');
   }
+  assertImageSignature(buffer, mimeType);
 
-  // Prevent path traversal by sanitizing filename hint
-  const safeHint = (filenameHint || 'patron').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32) || 'patron';
-  const randomSuffix = crypto.randomBytes(8).toString('hex');
-  const filename = `${safeHint}-${Date.now()}-${randomSuffix}.${ext}`;
-  const key = `patron-photos/${filename}`;
-
+  const tenantCode = normalizeTenantCode(restaurantCode);
+  const filename = crypto.randomUUID() + '.' + extension;
+  const key = `patron-photos/${tenantCode}/${filename}`;
   const config = getObjectStorageConfig();
   const s3 = getS3Client();
 
   if (config && s3) {
-    try {
-      const putParams: any = {
-        Bucket: config.bucket,
-        Key: key,
-        Body: buffer,
-        ContentType: mimeType,
-      };
-      // Modern S3 buckets with Object Ownership: Bucket Owner Enforced reject ACLs.
-      // Only attach ACL when explicitly configured via S3_OBJECT_ACL environment variable.
-      if (process.env.S3_OBJECT_ACL) {
-        putParams.ACL = process.env.S3_OBJECT_ACL;
-      }
-
-      const command = new PutObjectCommand(putParams);
-      await s3.send(command);
-
-      // Determine public CDN or bucket URL
-      let url: string;
-      if (config.publicUrlPrefix) {
-        url = `${config.publicUrlPrefix.replace(/\/$/, '')}/${key}`;
-      } else if (config.endpoint) {
-        // e.g. DigitalOcean Spaces: https://{bucket}.{region}.digitaloceanspaces.com/{key}
-        const endpointUrl = new URL(config.endpoint);
-        url = `${endpointUrl.protocol}//${config.bucket}.${endpointUrl.host}/${key}`;
-      } else {
-        // Standard AWS S3 URL
-        url = `https://${config.bucket}.s3.${config.region}.amazonaws.com/${key}`;
-      }
-
-      console.log(`[Object Storage] Uploaded patron photo to cloud storage: ${url}`);
-      return {
-        url,
-        key,
-        storageType: 's3',
-        sizeBytes: buffer.length,
-      };
-    } catch (err: any) {
-      console.warn('[Object Storage] S3 upload failed, falling back to local disk:', err.message);
-    }
+    // Never fall back to local storage after a configured remote-store failure:
+    // that would create an untracked split-brain object location.
+    await s3.send(new PutObjectCommand({
+      Bucket: config.bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: mimeType,
+      CacheControl: 'private, no-store',
+    }));
+    return { url: '', key, storageType: 's3', sizeBytes: buffer.length };
   }
 
-  // Fallback to local disk (Offline reception laptop mode)
-  const localDir = path.resolve(process.cwd(), 'public/uploads/patron-photos');
-  if (!fs.existsSync(localDir)) {
-    fs.mkdirSync(localDir, { recursive: true });
+  const directory = path.join(privatePhotoDirectory(), tenantCode);
+  await fs.promises.mkdir(directory, { recursive: true, mode: 0o700 });
+  await fs.promises.chmod(privatePhotoDirectory(), 0o700).catch(() => undefined);
+  await fs.promises.chmod(directory, 0o700).catch(() => undefined);
+  const destination = path.join(directory, filename);
+  const handle = await fs.promises.open(destination, 'wx', 0o600);
+  try {
+    await handle.writeFile(buffer);
+    await handle.sync();
+  } finally {
+    await handle.close();
   }
-
-  const localFilePath = path.join(localDir, filename);
-  fs.writeFileSync(localFilePath, buffer);
-
-  const localUrl = `/uploads/patron-photos/${filename}`;
-  console.log(`[Object Storage] Stored patron photo locally: ${localUrl}`);
-  return {
-    url: localUrl,
-    key,
-    storageType: 'local',
-    sizeBytes: buffer.length,
-  };
+  return { url: '', key, storageType: 'local', sizeBytes: buffer.length };
 }
 
-/**
- * Uploads a base64 Data URL (e.g. data:image/jpeg;base64,...)
- */
+export async function deletePrivatePatronPhoto(
+  key: string,
+  storageType?: 's3' | 'local'
+): Promise<void> {
+  const parsed = validatePhotoKey(key);
+  const config = getObjectStorageConfig();
+  const s3 = getS3Client();
+  if (storageType === 's3' || (storageType !== 'local' && config && s3)) {
+    if (!config || !s3) throw new Error('S3 storage is not configured to remove this private photo.');
+    await s3.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }));
+    return;
+  }
+  const filePath = path.join(privatePhotoDirectory(), parsed.tenantCode, parsed.filename);
+  try {
+    await fs.promises.unlink(filePath);
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+}
+
+export async function getPrivatePatronPhoto(key: string, storageType?: 's3' | 'local'): Promise<StoredPhoto | null> {
+  const parsed = validatePhotoKey(key);
+  const config = getObjectStorageConfig();
+
+  if (storageType === 's3' || (storageType !== 'local' && config)) {
+    const s3 = getS3Client();
+    if (!config || !s3) throw new Error('S3 storage is not configured to read this private photo.');
+    const response = await s3.send(new GetObjectCommand({ Bucket: config.bucket, Key: key }));
+    if (!response.Body) return null;
+    const chunks: Buffer[] = [];
+    for await (const chunk of response.Body as any) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.concat(chunks);
+    if (buffer.length > 5 * 1024 * 1024) throw new Error('Stored photo exceeds the allowed size.');
+    const mimeType = EXTENSION_MIMES[parsed.extension];
+    assertImageSignature(buffer, mimeType);
+    return { buffer, mimeType };
+  }
+
+  const filePath = path.join(privatePhotoDirectory(), parsed.tenantCode, parsed.filename);
+  try {
+    const stat = await fs.promises.stat(filePath);
+    if (!stat.isFile() || stat.size <= 0 || stat.size > 5 * 1024 * 1024) return null;
+    const buffer = await fs.promises.readFile(filePath);
+    const mimeType = EXTENSION_MIMES[parsed.extension];
+    assertImageSignature(buffer, mimeType);
+    return { buffer, mimeType };
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
 export async function uploadBase64Photo(
   dataUrl: string,
-  filenameHint = 'patron'
+  restaurantCode: string
 ): Promise<UploadResult> {
-  const matches = dataUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-  if (!matches || matches.length !== 3) {
-    throw new Error('Invalid base64 data URL format');
+  if (typeof dataUrl !== 'string' || dataUrl.length > 7 * 1024 * 1024) {
+    throw new Error('Invalid or oversized photo data URL.');
   }
-
+  const matches = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/.exec(dataUrl);
+  if (!matches) throw new Error('Invalid photo data URL. Only base64 JPEG, PNG, or WebP is accepted.');
   const mimeType = matches[1];
-  const buffer = Buffer.from(matches[2], 'base64');
-
-  if (buffer.length > 5 * 1024 * 1024) {
-    throw new Error('Photo payload exceeds maximum 5MB size limit');
+  const encoded = matches[2];
+  const buffer = Buffer.from(encoded, 'base64');
+  if (buffer.toString('base64').replace(/=+$/, '') !== encoded.replace(/=+$/, '')) {
+    throw new Error('Invalid base64 photo encoding.');
   }
-
-  return uploadPatronPhoto(buffer, mimeType, filenameHint);
+  return uploadPatronPhoto(buffer, mimeType, restaurantCode);
 }
 
-/**
- * Helper to reset client instance (useful in tests)
- */
 export function resetS3Client(): void {
   s3ClientInstance = null;
 }
-

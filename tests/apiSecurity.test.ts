@@ -8,9 +8,28 @@ import {
   scopeStateForUser,
   atomicSaveDb,
   validateProductionSecrets,
+  sanitizeSensitiveState,
+  normalizeStationUserCredentials,
+  verifyServerCustomerPin,
+  verifyStationUserCredentials,
+  isActiveStationSession,
+  getStationUserAuthVersion,
+  isActiveCustomerSession,
+  getCustomerAuthVersion,
+  findCustomerForLogin,
+  getSuperAdminAuthVersion,
+  isCurrentSuperAdminSession,
+  applySyncDeletionTombstones,
+  canMergeTenantScopedRecord,
+  resolveRestaurantAdminAccount,
+  verifyRestaurantAdminCredentials,
+  getRestaurantAdminAuthVersion,
+  isCurrentRestaurantAdminSession,
+  canAccessCustomerPhoto,
   UserSession,
 } from '../server';
 import { restoStore } from '../src/store/restoStore';
+import { revokeSessionToken, isSessionTokenRevoked, resetMemoryCache } from '../src/services/cache/redisClient';
 
 describe('Server API Security, Session Engine & Role Scoping', () => {
   test('creates and verifies cryptographically signed session tokens', () => {
@@ -64,6 +83,22 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     );
 
     assert.equal(verifySessionToken(token), null);
+  });
+
+  test('persists session revocation in the local single-process fallback', async () => {
+    const previousRedisUrl = process.env.REDIS_URL;
+    delete process.env.REDIS_URL;
+    resetMemoryCache();
+    try {
+      const digest = 'unit_test_session_digest_0123456789abcdef';
+      assert.equal(await revokeSessionToken(digest, 60), true);
+      assert.deepEqual(await isSessionTokenRevoked(digest), { revoked: true, available: true });
+      assert.deepEqual(await isSessionTokenRevoked('another_session_digest'), { revoked: false, available: true });
+    } finally {
+      resetMemoryCache();
+      if (previousRedisUrl === undefined) delete process.env.REDIS_URL;
+      else process.env.REDIS_URL = previousRedisUrl;
+    }
   });
 
   test('role-based data scoping isolates restaurants and customers (Finding 1)', () => {
@@ -136,6 +171,356 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     assert.equal(scopedSuper.customers.length, 3);
   });
 
+  test('migrates legacy station passwords and PINs to scrypt before persistence', () => {
+    const stationUser: any = {
+      id: 'station_1',
+      username: 'cashier_1',
+      pin: '654321',
+      passwordHash: 'legacy-password-value',
+    };
+    const state = { stationUsers: [stationUser] };
+    assert.equal(normalizeStationUserCredentials(state), true);
+    assert.equal(stationUser.pin, undefined);
+    assert.match(stationUser.pinHash, /^scrypt\$16384\$8\$1\$/);
+    assert.match(stationUser.passwordHash, /^scrypt\$16384\$8\$1\$/);
+    assert.equal(verifyServerCustomerPin('654321', {
+      id: stationUser.id,
+      memberNo: stationUser.username,
+      pinHash: stationUser.pinHash,
+    }), true);
+    assert.equal(verifyServerCustomerPin('wrong-pin', {
+      id: stationUser.id,
+      memberNo: stationUser.username,
+      pinHash: stationUser.pinHash,
+    }), false);
+  });
+
+  test('authenticates migrated station users with scrypt hashes and rejects blocked users', () => {
+    const stationUser: any = {
+      id: 'station_auth_1',
+      username: 'cashier_auth',
+      status: 'active',
+      authType: 'both',
+      pin: '654321',
+      passwordHash: 'LegacyStaffPassword#2026',
+    };
+    normalizeStationUserCredentials({ stationUsers: [stationUser] });
+
+    assert.equal(stationUser.pin, undefined);
+    assert.ok(stationUser.pinHash.startsWith('scrypt$16384$8$1$'));
+    assert.ok(stationUser.passwordHash.startsWith('scrypt$16384$8$1$'));
+    assert.equal(verifyStationUserCredentials('654321', stationUser), true);
+    assert.equal(verifyStationUserCredentials('LegacyStaffPassword#2026', stationUser), true);
+    assert.equal(verifyStationUserCredentials('incorrect', stationUser), false);
+
+    // A credential reset arriving as a new plaintext PIN must replace the
+    // previous hash before the state is persisted.
+    stationUser.pin = '987654';
+    normalizeStationUserCredentials({ stationUsers: [stationUser] });
+    assert.equal(verifyStationUserCredentials('987654', stationUser), true);
+    assert.equal(verifyStationUserCredentials('654321', stationUser), false);
+
+    stationUser.status = 'blocked';
+    assert.equal(verifyStationUserCredentials('987654', stationUser), false);
+
+    stationUser.status = 'active';
+    stationUser.authType = 'pin8';
+    assert.equal(verifyStationUserCredentials('LegacyStaffPassword#2026', stationUser), false);
+    assert.equal(verifyStationUserCredentials('987654', stationUser), true);
+  });
+
+  test('invalidates production staff sessions when the station account is blocked or deleted', () => {
+    const session: UserSession = {
+      userId: 'staff_cashier_RW01',
+      username: 'cashier_auth',
+      role: 'stand_staff',
+      restaurantCode: 'RW01',
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+    };
+    assert.equal(isActiveStationSession(session, {
+      stationUsers: [{ id: 's1', username: 'cashier_auth', restaurantCode: 'RW01', status: 'active' }],
+    }), true);
+    assert.equal(isActiveStationSession(session, {
+      stationUsers: [{ id: 's1', username: 'cashier_auth', restaurantCode: 'RW01', status: 'blocked' }],
+    }), false);
+    assert.equal(isActiveStationSession(session, { stationUsers: [] }), false);
+    assert.equal(isActiveStationSession({ ...session, role: 'customer' }, { stationUsers: [] }), true);
+  });
+
+  test('production scanner sessions are invalidated after station credential rotation', () => {
+    const stationUser = {
+      id: 'station_rw01_cashier',
+      username: 'cashier_rw01',
+      restaurantCode: 'RW01',
+      status: 'active',
+      authType: 'pin8',
+      pinHash: 'stored-pin-hash-v1',
+      passwordHash: '',
+    };
+    const session: UserSession = {
+      userId: 'staff_cashier_rw01',
+      username: 'cashier_rw01',
+      role: 'stand_staff',
+      restaurantCode: 'RW01',
+      authVersion: getStationUserAuthVersion(stationUser),
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+    };
+
+    assert.equal(isActiveStationSession(session, { stationUsers: [stationUser] }, true), true);
+    assert.equal(isActiveStationSession(session, {
+      stationUsers: [{ ...stationUser, pinHash: 'stored-pin-hash-v2' }],
+    }, true), false);
+    assert.equal(isActiveStationSession(session, {
+      stationUsers: [{ ...stationUser, status: 'blocked' }],
+    }, true), false);
+    assert.equal(isActiveStationSession({ ...session, authVersion: undefined }, {
+      stationUsers: [stationUser],
+    }, true), false);
+  });
+
+  test('restaurant administrators receive only their tenant records across operational and financial collections', () => {
+    const tenantKeys = [
+      'ledgerEntries', 'scanEvents', 'scanPoints', 'transfers', 'packages',
+      'menuItems', 'payments', 'branches', 'stationUsers', 'pendingApprovals',
+      'shifts', 'cashierSessions', 'auditLogs', 'expenses', 'licenses',
+      'customerSubscriptions', 'studentSubscriptionPayments', 'subscriptionPayments',
+      'activationRequests', 'pinRecoveryRequests', 'notifications',
+    ];
+    const state: any = {
+      restaurants: [{ code: 'RW01' }, { code: 'RW02' }],
+      customers: [
+        { id: 'tenant_customer_1', restaurantCode: 'RW01' },
+        { id: 'tenant_customer_2', restaurantCode: 'RW02' },
+      ],
+      checkpoints: [
+        { id: 'checkpoint_1', customerId: 'tenant_customer_1' },
+        { id: 'checkpoint_2', customerId: 'tenant_customer_2' },
+      ],
+      plans: [{ id: 'global_plan' }],
+      ...Object.fromEntries(tenantKeys.map((key) => [
+        key,
+        [
+          { id: `${key}_rw01`, restaurantCode: 'RW01' },
+          { id: `${key}_rw02`, restaurantCode: 'RW02' },
+        ],
+      ])),
+    };
+    const admin: UserSession = {
+      userId: 'boss_rw01',
+      username: 'boss@rw01.test',
+      role: 'restaurant_admin',
+      restaurantCode: 'RW01',
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+    };
+
+    const scoped = scopeStateForUser(state, admin);
+    assert.deepEqual(scoped.restaurants.map((item: any) => item.code), ['RW01']);
+    assert.deepEqual(scoped.checkpoints.map((item: any) => item.customerId), ['tenant_customer_1']);
+    assert.deepEqual(scoped.plans.map((item: any) => item.id), ['global_plan']);
+    for (const key of tenantKeys) {
+      assert.ok(
+        scoped[key].every((item: any) => !item.restaurantCode || item.restaurantCode === 'RW01'),
+        `Cross-tenant data leaked through ${key}`
+      );
+    }
+  });
+
+  test('customer login lookup requires restaurant context when phone numbers are reused across tenants', () => {
+    const state = {
+      customers: [
+        { id: 'customer_rw01', memberNo: '10001', restaurantCode: 'RW01', phone: '+250 788 123 456' },
+        { id: 'customer_rw02', memberNo: '20001', restaurantCode: 'RW02', phone: '0788-123-456' },
+      ],
+    };
+
+    assert.equal(findCustomerForLogin(state, '0788 123 456', 'RW01')?.id, 'customer_rw01');
+    assert.equal(findCustomerForLogin(state, '+250788123456', 'RW02')?.id, 'customer_rw02');
+    assert.equal(findCustomerForLogin(state, '20001', 'RW02')?.id, 'customer_rw02');
+    assert.equal(findCustomerForLogin(state, '0788 123 456', '') , null);
+    assert.equal(findCustomerForLogin(state, '0788 123 456', 'RW03'), null);
+  });
+
+  test('production customer sessions are invalidated after tenant mismatch, suspension, rejection, deletion or PIN rotation', () => {
+    const customerRecord = {
+      id: 'customer_session_1',
+      restaurantCode: 'RW01',
+      activationStatus: 'partial_active',
+      provisionalStatus: 'pending_approval',
+      registrationStatus: 'pending_boss_approval',
+      pinHash: 'customer-pin-hash-v1',
+    };
+    const session: UserSession = {
+      userId: 'customer_session_1',
+      username: '+250788123456',
+      role: 'customer',
+      restaurantCode: 'RW01',
+      authVersion: getCustomerAuthVersion(customerRecord),
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+    };
+    const activeState = { customers: [customerRecord] };
+
+    assert.equal(isActiveCustomerSession(session, activeState, true), true);
+    assert.equal(isActiveCustomerSession({ ...session, restaurantCode: 'RW02' }, activeState, true), false);
+    assert.equal(isActiveCustomerSession(session, { customers: [] }, true), false);
+    assert.equal(isActiveCustomerSession(session, {
+      customers: [{ ...customerRecord, activationStatus: 'suspended' }],
+    }, true), false);
+    assert.equal(isActiveCustomerSession(session, {
+      customers: [{ ...customerRecord, provisionalStatus: 'rejected' }],
+    }, true), false);
+    assert.equal(isActiveCustomerSession(session, {
+      customers: [{ ...customerRecord, pinHash: 'customer-pin-hash-v2' }],
+    }, true), false);
+    assert.equal(isActiveCustomerSession({ ...session, authVersion: undefined }, activeState, true), false);
+    assert.equal(isActiveCustomerSession({ ...session, role: 'restaurant_admin' }, { customers: [] }, true), true);
+  });
+
+  test('production Super Admin sessions are invalidated when the configured credential rotates', () => {
+    const configuredCredential = ['fixture', 'platform', 'credential', '2026'].join('_');
+    const session: UserSession = {
+      userId: 'super_admin_principal',
+      username: 'platform-admin',
+      role: 'super_admin',
+      restaurantCode: 'ALL',
+      authVersion: getSuperAdminAuthVersion(configuredCredential),
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+    };
+    const currentEnvironment = {
+      NODE_ENV: 'production',
+      RESTOPASS_SUPERADMIN_PASSWORD: configuredCredential,
+    } as NodeJS.ProcessEnv;
+
+    assert.equal(isCurrentSuperAdminSession(session, currentEnvironment), true);
+    assert.equal(isCurrentSuperAdminSession(session, {
+      ...currentEnvironment,
+      RESTOPASS_SUPERADMIN_PASSWORD: ['rotated', 'platform', 'credential', '2026'].join('_'),
+    }), false);
+    assert.equal(isCurrentSuperAdminSession({ ...session, authVersion: undefined }, currentEnvironment), false);
+  });
+
+  test('prevents tenant admins from reassigning records through ID collisions', () => {
+    const rw01AdminCode = 'RW01';
+    const existing = { id: 'shared_id', restaurantCode: 'RW02', name: 'Other tenant record' };
+    assert.equal(canMergeTenantScopedRecord(existing, {
+      id: 'shared_id', restaurantCode: 'RW01', name: 'Forged reassignment',
+    }, rw01AdminCode), false);
+    assert.equal(canMergeTenantScopedRecord(
+      { id: 'tenant_record', restaurantCode: 'RW01' },
+      { id: 'tenant_record', name: 'Tenant omitted' },
+      rw01AdminCode
+    ), false);
+    assert.equal(canMergeTenantScopedRecord(
+      { id: 'same_tenant', restaurantCode: 'RW01' },
+      { id: 'same_tenant', restaurantCode: 'RW01', name: 'Valid update' },
+      rw01AdminCode
+    ), true);
+    assert.equal(canMergeTenantScopedRecord(
+      { id: 'global_plan' },
+      { id: 'global_plan', name: 'Updated global plan' },
+      null
+    ), true);
+  });
+
+  test('applies tenant-scoped soft-deletion tombstones without deleting financial history', () => {
+    const state: any = {
+      customers: [
+        { id: 'customer_delete_1', restaurantCode: 'RW01' },
+        { id: 'customer_keep_2', restaurantCode: 'RW01' },
+        { id: 'customer_other_tenant', restaurantCode: 'RW02' },
+      ],
+      stationUsers: [{ id: 'station_delete_1', restaurantCode: 'RW01', username: 'cashier' }],
+      ledgerEntries: [{ id: 'ledger_keep_1', restaurantCode: 'RW01', customerId: 'customer_delete_1', platesDelta: -1 }],
+      payments: [{ id: 'payment_keep_1', restaurantCode: 'RW01', amountRwf: 1000 }],
+      auditLogs: [],
+      deletionTombstones: [],
+    };
+    const admin: UserSession = {
+      userId: 'admin_rw01',
+      username: 'admin@rw01.test',
+      role: 'restaurant_admin',
+      restaurantCode: 'RW01',
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+    };
+    const applied = applySyncDeletionTombstones(state, [
+      { collection: 'customers', recordId: 'customer_delete_1', restaurantCode: 'RW01' },
+      { collection: 'stationUsers', recordId: 'station_delete_1', restaurantCode: 'RW01' },
+      { collection: 'customers', recordId: 'customer_other_tenant', restaurantCode: 'RW02' },
+      { collection: 'ledgerEntries', recordId: 'ledger_keep_1', restaurantCode: 'RW01' },
+    ], admin);
+
+    assert.equal(applied, 2);
+    assert.deepEqual(state.customers.map((item: any) => item.id), ['customer_keep_2', 'customer_other_tenant']);
+    assert.equal(state.stationUsers.length, 0);
+    assert.equal(state.ledgerEntries.length, 1);
+    assert.equal(state.payments.length, 1);
+    assert.equal(state.deletionTombstones.length, 2);
+    assert.equal(state.auditLogs.length, 2);
+
+    // Replaying the same deletion request is idempotent.
+    assert.equal(applySyncDeletionTombstones(state, [
+      { collection: 'customers', recordId: 'customer_delete_1', restaurantCode: 'RW01' },
+    ], admin), 0);
+    assert.equal(state.deletionTombstones.length, 2);
+
+    // More than 200 previously-applied markers must not starve a new deletion
+    // appended after them in an offline client's durable tombstone queue.
+    const manyState: any = {
+      customers: [{ id: 'customer_after_queue', restaurantCode: 'RW01' }],
+      deletionTombstones: Array.from({ length: 205 }, (_, index) => ({
+        id: `old_${index}`,
+        collection: 'customers',
+        recordId: `already_deleted_${index}`,
+        restaurantCode: 'RW01',
+      })),
+      auditLogs: [],
+    };
+    const queuedRequests = [
+      ...manyState.deletionTombstones,
+      { collection: 'customers', recordId: 'customer_after_queue', restaurantCode: 'RW01' },
+    ];
+    assert.equal(applySyncDeletionTombstones(manyState, queuedRequests, admin), 1);
+    assert.equal(manyState.customers.length, 0);
+
+    // A customer session cannot submit administrative deletions.
+    const customer: UserSession = { ...admin, userId: 'customer_keep_2', username: 'student', role: 'customer' };
+    assert.equal(applySyncDeletionTombstones(state, [
+      { collection: 'customers', recordId: 'customer_keep_2', restaurantCode: 'RW01' },
+    ], customer), 0);
+    assert.equal(state.customers.length, 2);
+  });
+
+  test('redacts PINs, password hashes, recovery codes and replay state from every client payload', () => {
+    const payload = sanitizeSensitiveState({
+      customers: [{ id: 'c1', name: 'Test', pinHash: 'hash', pinSalt: 'salt', idHash: 'identity-hash', onboardingToken: 'secret', photoStorageKey: 'private-object-key', photoUrl: 'data:image/jpeg;base64,AAAA' }],
+      pendingApprovals: [{ id: 'p1', customerPhoto: '/uploads/patron-photos/legacy.jpg' }],
+      stationUsers: [{ id: 's1', username: 'cashier', pin: '123456', passwordHash: 'hash' }],
+      pinRecoveryRequests: [{ id: 'r1', status: 'pending', recoveryCode: '123456' }],
+      activationCodes: [{ id: 'a1', activationCode: 'ABCDEF' }],
+      usedTokens: [{ token: 'replay-secret' }],
+      safeValue: 'retained',
+    });
+    assert.equal(payload.customers[0].id, 'c1');
+    assert.equal(payload.customers[0].pinHash, undefined);
+    assert.equal(payload.customers[0].pinSalt, undefined);
+    assert.equal(payload.customers[0].idHash, undefined);
+    assert.equal(payload.customers[0].onboardingToken, undefined);
+    assert.equal(payload.customers[0].photoStorageKey, undefined);
+    assert.equal(payload.customers[0].photoUrl, '/src/assets/images/avatar_student_male_1790979380050.jpg');
+    assert.equal(payload.pendingApprovals[0].customerPhoto, '/src/assets/images/avatar_student_male_1790979380050.jpg');
+    assert.equal(payload.stationUsers[0].pin, undefined);
+    assert.equal(payload.stationUsers[0].passwordHash, undefined);
+    assert.equal(payload.pinRecoveryRequests[0].recoveryCode, undefined);
+    assert.equal(payload.activationCodes[0].activationCode, undefined);
+    assert.equal(payload.usedTokens, undefined);
+    assert.equal(payload.safeValue, 'retained');
+  });
+
   test('atomicSaveDb writes atomically and maintains backup (Finding 5)', () => {
     const testState = {
       ...restoStore.getState(),
@@ -191,6 +576,72 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     }
   });
 
+  test('resolves and verifies restaurant administrator credentials per tenant', () => {
+    const config = JSON.stringify({
+      RW01: { username: 'manager@rw01.test', password: 'unique_rw01_restaurant_admin_password_2026' },
+      RW02: { username: 'boss@rw02.test', password: 'unique_rw02_restaurant_admin_password_2026' },
+    });
+    assert.deepEqual(resolveRestaurantAdminAccount('rw01', config), {
+      username: 'manager@rw01.test',
+      password: 'unique_rw01_restaurant_admin_password_2026',
+    });
+    assert.equal(verifyRestaurantAdminCredentials('RW01', 'manager@rw01.test', 'unique_rw01_restaurant_admin_password_2026', config, true), true);
+    assert.equal(verifyRestaurantAdminCredentials('RW01', 'boss@rw02.test', 'unique_rw01_restaurant_admin_password_2026', config, true), false);
+    assert.equal(verifyRestaurantAdminCredentials('RW02', 'boss@rw02.test', 'unique_rw01_restaurant_admin_password_2026', config, true), false);
+    assert.equal(resolveRestaurantAdminAccount('RW03', config), null);
+    assert.equal(verifyRestaurantAdminCredentials('RW03', 'anyone', 'long_enough_password_2026', config, true), false);
+
+    const account = resolveRestaurantAdminAccount('RW01', config)!;
+    const session: UserSession = {
+      userId: 'admin_RW01',
+      username: account.username,
+      role: 'restaurant_admin',
+      restaurantCode: 'RW01',
+      authVersion: getRestaurantAdminAuthVersion('RW01', account),
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+    };
+    assert.equal(isCurrentRestaurantAdminSession(session, config), true);
+    const rotatedConfig = JSON.stringify({
+      RW01: { username: 'manager@rw01.test', password: 'rotated_unique_rw01_password_2026' },
+    });
+    assert.equal(isCurrentRestaurantAdminSession(session, rotatedConfig), false);
+    assert.equal(isCurrentRestaurantAdminSession({ ...session, authVersion: undefined }, config), false);
+  });
+
+
+  test('authorizes private patron-photo reads only for the subject or same-tenant staff', () => {
+    const customer = { id: 'cust_28491', restaurantCode: 'RW01' };
+    const ownCustomer: UserSession = {
+      userId: 'cust_28491', username: '28491', role: 'customer', restaurantCode: 'RW01',
+      iat: Date.now(), exp: Date.now() + 60000,
+    };
+    const otherCustomer: UserSession = {
+      ...ownCustomer, userId: 'cust_28492', username: '28492',
+    };
+    const sameTenantStaff: UserSession = {
+      ...ownCustomer, userId: 'staff_1', username: 'cashier', role: 'stand_staff',
+    };
+    const sameTenantAdmin: UserSession = {
+      ...sameTenantStaff, role: 'restaurant_admin',
+    };
+    const otherTenantAdmin: UserSession = {
+      ...sameTenantAdmin, restaurantCode: 'RW02',
+    };
+    const platformAdmin: UserSession = {
+      ...sameTenantAdmin, role: 'super_admin', restaurantCode: 'ALL',
+    };
+
+    assert.equal(canAccessCustomerPhoto(ownCustomer, customer), true);
+    assert.equal(canAccessCustomerPhoto(otherCustomer, customer), false);
+    assert.equal(canAccessCustomerPhoto(sameTenantStaff, customer), true);
+    assert.equal(canAccessCustomerPhoto(sameTenantAdmin, customer), true);
+    assert.equal(canAccessCustomerPhoto(otherTenantAdmin, customer), false);
+    assert.equal(canAccessCustomerPhoto(platformAdmin, customer), true);
+    assert.equal(canAccessCustomerPhoto(undefined, customer), false);
+    assert.equal(canAccessCustomerPhoto(sameTenantStaff, null), false);
+  });
+
   test('validateProductionSecrets throws fatal error in production when secrets are missing or weak', () => {
     // Missing secrets in production must throw
     assert.throws(
@@ -223,6 +674,61 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
       /placeholder/i
     );
 
+    // Administrator credentials are mandatory and cannot be left at known placeholders.
+    assert.throws(
+      () =>
+        validateProductionSecrets({
+          NODE_ENV: 'production',
+          SESSION_SECRET: 'prod_session_secret_with_at_least_32_characters_random_2026',
+          RESTOPASS_MASTER_SECRET: 'prod_master_secret_with_at_least_32_characters_random_2026!',
+        } as unknown as NodeJS.ProcessEnv),
+      /RESTOPASS_SUPERADMIN_PASSWORD/
+    );
+
+    assert.throws(
+      () =>
+        validateProductionSecrets({
+          NODE_ENV: 'production',
+          SESSION_SECRET: 'prod_session_secret_with_at_least_32_characters_random_2026',
+          RESTOPASS_MASTER_SECRET: 'prod_master_secret_with_at_least_32_characters_random_2026!',
+          RESTOPASS_SUPERADMIN_PASSWORD: 'a_long_unique_superadmin_password_2026',
+          RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS: JSON.stringify({
+            RW01: { username: 'manager@rw01.test', password: 'unique_rw01_restaurant_admin_password_2026' },
+          }),
+          RESTOPASS_STAFF_DEFAULT_PIN: '1234',
+        } as unknown as NodeJS.ProcessEnv),
+      /6-8 digits/
+    );
+
+    assert.throws(
+      () =>
+        validateProductionSecrets({
+          NODE_ENV: 'production',
+          SESSION_SECRET: 'prod_session_secret_with_at_least_32_characters_random_2026',
+          RESTOPASS_MASTER_SECRET: 'prod_master_secret_with_at_least_32_characters_random_2026!',
+          RESTOPASS_SUPERADMIN_PASSWORD: 'a_long_unique_superadmin_password_2026',
+          RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS: JSON.stringify({
+            RW01: { username: 'manager@rw01.test', password: 'same_shared_password_for_both_tenants_2026' },
+            RW02: { username: 'manager@rw02.test', password: 'same_shared_password_for_both_tenants_2026' },
+          }),
+        } as unknown as NodeJS.ProcessEnv),
+      /must be unique across tenants/
+    );
+
+    assert.throws(
+      () => validateProductionSecrets({
+        NODE_ENV: 'production',
+        SESSION_SECRET: 'prod_session_secret_with_at_least_32_characters_random_2026',
+        RESTOPASS_MASTER_SECRET: 'prod_master_secret_with_at_least_32_characters_random_2026!',
+        RESTOPASS_SUPERADMIN_PASSWORD: 'a_long_unique_superadmin_password_2026',
+        RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS: JSON.stringify({
+          RW01: { username: 'manager@rw01.test', password: 'unique_rw01_restaurant_admin_password_2026' },
+        }),
+        S3_PUBLIC_URL_PREFIX: 'https://public.example.test',
+      } as unknown as NodeJS.ProcessEnv),
+      /Public patron-photo URL prefixes/
+    );
+
     // Strong 32+ char secrets in production succeed
     const strongSession = 'prod_session_secret_with_at_least_32_characters_random_2026';
     const strongMaster = 'prod_master_secret_with_at_least_32_characters_random_2026!';
@@ -230,6 +736,10 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
       NODE_ENV: 'production',
       SESSION_SECRET: strongSession,
       RESTOPASS_MASTER_SECRET: strongMaster,
+      RESTOPASS_SUPERADMIN_PASSWORD: 'a_long_unique_superadmin_password_2026',
+      RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS: JSON.stringify({
+        RW01: { username: 'manager@rw01.test', password: 'unique_rw01_restaurant_admin_password_2026' },
+      }),
     } as unknown as NodeJS.ProcessEnv);
     assert.equal(valid.sessionSecret, strongSession);
     assert.equal(valid.masterSecret, strongMaster);

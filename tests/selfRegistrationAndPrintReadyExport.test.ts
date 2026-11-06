@@ -2,10 +2,10 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { restoStore } from '../src/store/restoStore';
 
-describe('Student Self-Registration, Boss Approval & Print-Ready Export Workflow', () => {
+describe('Reception Registration, Boss Approval & Print-Ready Export Workflow', () => {
   const restoCode = 'RW01';
 
-  it('1. Student submits self-registration online -> stored as pending_approval and not ready for print yet', () => {
+  it('1. Reception records a new customer and payment -> partial activation, not ready for print yet', () => {
     const studentPhone = '+250 788 999 111';
     const studentReg = '21RP999111';
     const platesRequested = 60;
@@ -45,7 +45,7 @@ describe('Student Self-Registration, Boss Approval & Print-Ready Export Workflow
 
     // Customer cannot log into dashboard yet
     const statusBefore = restoStore.checkCustomerPortalStatus(studentPhone, restoCode);
-    assert.equal(statusBefore.status, 'pending_boss_approval');
+    assert.equal(statusBefore.status, 'needs_pin_setup');
   });
 
   it('2. Boss approves registration in Pending Approvals -> triggers cardReadyForPrint and unlocks PIN setup', () => {

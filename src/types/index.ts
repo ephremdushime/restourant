@@ -123,12 +123,21 @@ export interface Customer {
   hasCustomPin?: boolean; // false until customer sets PIN
   pinSetAt?: string;
   provisionalStatus?: 'pending_approval' | 'approved' | 'rejected';
-  activationStatus?: 'pending_approval' | 'ready_for_activation' | 'active' | 'suspended';
+  activationStatus?: 'pending_reception_payment' | 'partial_active' | 'pending_approval' | 'ready_for_activation' | 'active' | 'suspended';
+  registrationStatus?: 'pending_reception_payment' | 'pending_boss_approval' | 'approved' | 'rejected';
+  receptionPaymentStatus?: 'unpaid' | 'confirmed';
+  receptionPaymentConfirmedAt?: string;
+  receptionPaymentConfirmedBy?: string;
+  receptionPaymentReference?: string;
+  gracePlatesAllowed?: number;
+  customerAccessStatus?: 'pending_super_admin_activation' | 'complimentary' | 'payment_required' | 'active' | 'expired';
+  freeAccessStartedAt?: string;
+  freeAccessExpiresAt?: string;
   cardReadyForPrint?: boolean;
   failedLoginAttempts?: number;
   lockedUntil?: string | null;
   lastLoginAt?: string;
-  gracePlatesConsumed?: number; // max 3 consumed while awaiting boss approval
+  gracePlatesConsumed?: number; // mirrored count consumed from a pending paid package (new registrations: max 4)
   gracePlatesRemaining?: number;
   pendingApprovalId?: string;
   createdAt: string;
@@ -273,7 +282,7 @@ export interface PendingApproval {
   registeredByStaffName: string;
   stationId: string;
   stationName: string;
-  gracePlatesAllowed: number; // max 3
+  gracePlatesAllowed: number; // configured per pending approval (new registrations: 4)
   gracePlatesConsumed: number; // plates consumed before boss approved
   createdAt: string;
   status: ApprovalStatus;
@@ -556,7 +565,7 @@ export interface CustomerSubscription {
   currentPeriodEnd?: string;
   gracePeriodEnd?: string;
   cancelAtPeriodEnd?: boolean;
-  paymentMethod?: 'mtn_momo' | 'airtel_money' | 'complimentary';
+  paymentMethod?: 'mtn_momo' | 'airtel_money' | 'cash' | 'bank_transfer' | 'complimentary';
   lastPaymentRef?: string;
   complimentaryReason?: string;
   complimentaryGrantedBy?: string;
@@ -571,7 +580,7 @@ export interface StudentSubscriptionPayment {
   memberNo: string;
   restaurantCode: string;
   internalReference: string;
-  provider: 'mtn_momo' | 'airtel_money';
+  provider: 'mtn_momo' | 'airtel_money' | 'cash' | 'bank_transfer';
   phoneNumber: string;
   providerTransactionId?: string;
   amountRwf: number;

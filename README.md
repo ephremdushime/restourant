@@ -44,18 +44,18 @@ flowchart TB
         Auth["HMAC Session & Role Guard\n(/api/auth, /api/customer/auth)"]
         QR["Cryptographic QR & Replay Guard\n(/api/qr/verify, /api/qr/token)"]
         Sync["Idempotent Append-Only Sync Engine\n(/api/sync, /api/state)"]
-        Sub["Student Entitlement & MoMo Webhook\n(/api/customer/subscription)"]
+        Sub["Student Entitlement API (checkout disabled pending MTN integration)\n(/api/customer/subscription)"]
     end
 
     subgraph Storage["Atomic Persistence Layer"]
-        DB[("data/db.json\n+ Rolling Backup db.backup.json")]
+        DB[("PostgreSQL (cloud)\n/ Atomic JSON (standalone)")]
         Outbox[("Offline Sync Outbox\n& Clock Guard")]
     end
 
     P1 & P2 & P3 & P4 <-->|Bearer rp_sess_ Token| Auth
     P1 <-->|c1 Card / v1 Phone QR| QR
     P1 & P2 & P3 & P4 <-->|Role-Scoped State| Sync
-    P2 & P4 <-->|500 RWF MoMo Pass| Sub
+    P2 & P4 <-->|Subscription entitlement API| Sub
     Auth & QR & Sync & Sub <-->|Serialized Write Mutex| DB
     P1 -.->|Offline Queue| Outbox
     Outbox -.->|Auto-Flush on Reconnect| Sync
@@ -77,7 +77,7 @@ flowchart TB
 ### 2.1 Stand Scanner Station (`stand_staff`)
 - **Hardware & Camera Scanning**: Supports USB/Bluetooth HID barcode guns (auto-focused wedge input), GPU-accelerated browser `BarcodeDetector` camera scanning, and manual Member ID lookup.
 - **Rogue Wi-Fi Terminal Shield**: Only devices paired with a valid station pairing key (`PAIR-XXXX`) and active `CashierSession` can access the scanning screen.
-- **Reception Provisional Desk**: When the restaurant boss is away, cashiers can register new patrons or submit balance top-ups with Mobile Money transaction references, granting up to **3 authorized grace meals** while awaiting boss verification.
+- **Reception Provisional Desk**: When the restaurant boss is away, cashiers can register new patrons or submit cash/mobile-money payment references for manual verification, granting up to **4 grace meals for new registrations** while awaiting Boss approval; existing top-ups retain their configured allowance.
 - **In-Person PIN & Activation Desk**: Issues 15-minute, single-use 6-digit activation and PIN-recovery codes after verifying a patron's physical Student ID or National ID.
 - **Shift Handover & Cash Reconciliation**: Tracks opening float, cash collected, plates served, and variance upon shift closure.
 
@@ -88,7 +88,7 @@ flowchart TB
 - **Self-Service Card Lock**: Patrons can immediately lock/unlock their physical PVC card if misplaced.
 
 ### 2.3 Restaurant Boss / Administrator Portal (`restaurant_admin`)
-- **Boss MoMo Approval Room**: Central queue to inspect pending registrations and top-ups against MTN MoMo / Airtel Money SMS statements, reconcile grace meals automatically, and dispatch 1-tap WhatsApp pass links.
+- **Boss Payment Approval Room**: Central queue to inspect pending registrations and top-ups, manually reconcile payment references against the restaurant's payment records, reconcile grace meals automatically, and dispatch approved customer communications.
 - **CR80 Physical PVC Card Print Studio**: Duplex (`85.60mm × 53.98mm`) front-and-back badge designer and print studio with Kinyarwanda/English property notices.
 - **Executive Monthly Reconciliation**: Tracks monthly prepaid plates & cash intake, used plates & cash value, and remaining patron liability.
 - **Branches, Stations & Security Center**: Manage multiple dining halls, create 8-digit PIN/password cashier accounts, inspect audit logs, and remotely revoke active cashier terminal sessions.
@@ -147,9 +147,9 @@ RestoPass separates **customer account status** from **individual transaction ap
 | :--- | :--- | :--- |
 | **Existing balance: `103` · Customer pays for `60` more** | Customer stays active; usable balance remains `103` while top-up is in the Boss Approval Room. | **`163`** (`103 + 60`) |
 | **Existing balance: `5` · Customer pays for `60` more** | Customer uses their remaining `5` paid credits first (`0` grace meals counted). If `2` meals are eaten while pending, balance becomes `3`. | **`63`** (`3 + 60` — no double-charging) |
-| **Existing balance: `0` · Customer pays for `60` more** | Payment enters Boss Approval Room. Customer can consume up to **3 authorized grace meals** while waiting. | **`60 - graceMealsConsumed`** (e.g. `58` if `2` grace meals used) |
-| **New customer registers & pays for `60`** | Registration + payment enter Boss Approval Room. Customer can consume up to **3 grace meals** immediately. | **`60 - graceMealsConsumed`** (e.g. `57` if `3` grace meals used); account & card activate |
-| **Balance is `0` & `3` grace meals already used** | No further grace meals are authorized until the Boss approves the pending payment (submitting a second pending top-up does **not** reset the grace counter). | Reconciled atomically per approved transaction |
+| **Existing balance: `0` · Customer pays for `60` more** | Payment enters Boss Approval Room. An existing customer can consume grace meals up to that top-up approval's configured allowance while waiting. | **`60 - graceMealsConsumed`** (e.g. `58` if `2` grace meals used) |
+| **New customer registers & pays for `60`** | Registration + payment enter Boss Approval Room. Customer can consume up to **4 grace meals** immediately after reception confirms payment. | **`60 - graceMealsConsumed`** (e.g. `56` if `4` grace meals used); account & card activate |
+| **Balance is `0` & the approval's grace allowance is fully used** | No further grace meals are authorized until the Boss approves the pending payment (submitting a second pending top-up does **not** reset the grace counter). | Reconciled atomically per approved transaction |
 
 ---
 
@@ -162,6 +162,7 @@ Because campus environments cannot rely on paid SMS OTP delivery for every login
 3. **Private Customer PIN Setup (`6+ digits`)**: The patron enters their phone number, the 6-digit activation code, and chooses their own **6+ digit numeric PIN** (`completeCustomerActivation`). Staff never choose or see the customer's PIN.
 4. **Phone + PIN Login with Anti-Enumeration & Lockout**:
    - Patrons sign in using their registered phone number and 6+ digit PIN (`/api/customer/auth/login`).
+- WhatsApp magic links are retired. No URL token may authenticate a customer or bypass the personal PIN.
    - Returns a generic `"Invalid phone number or PIN"` on failure to prevent phone-number enumeration.
    - Temporarily locks the account for **15 minutes** after **5 consecutive failed attempts**.
 5. **Audited PIN Recovery**: If a patron forgets their PIN, staff verify their physical ID and log a recovery request (`requestCustomerPinRecovery`), which a manager approves to issue a single-use reset code (`approveCustomerPinRecovery`). Completing recovery increments `keyVersion`, revoking all prior sessions.
@@ -173,7 +174,7 @@ Because campus environments cannot rely on paid SMS OTP delivery for every login
 RestoPass includes a built-in, super-admin-controlled monetization engine for student digital features (`customer_dashboard`, `digital_plate_transfer`):
 
 - **Disabled by Default at Launch (`enabled: false`)**: All digital features work without restriction until the platform founder explicitly enables the policy.
-- **Integer-Safe Pricing (`500 RWF` / 30 Days)**: When enabled, students can subscribe via MTN Mobile Money (`*182#`) or Airtel Money (`*500#`) for exactly **500 RWF/month**, with an automatic **72-hour (3-day) grace period** after expiration.
+- **Integer-Safe Pricing (`500 RWF` / 30 Days)**: When enabled, the entitlement policy can charge **500 RWF/month** with an automatic **72-hour (3-day) grace period** after expiration. Online payment checkout is disabled; subscriptions must not be marked paid from client-provided references or screenshots.
 - **100% Physical Card Fallback Guarantee**: Even when a student's digital subscription is unsubscribed or expired, their **physical PVC card (`c1`) continues to scan and redeem prepaid meals at all buffet stands without interruption**.
 - **Audited Complimentary Access**: Super Admins can grant or revoke complimentary passes with a mandatory audit reason.
 
@@ -284,10 +285,14 @@ SESSION_SECRET="generate_a_strong_64_hex_char_secret_here_for_session_signing"
 RESTOPASS_MASTER_SECRET="generate_a_strong_64_hex_char_secret_here_for_master_authority"
 VITE_RESTOPASS_MASTER_KEY="generate_a_strong_64_hex_char_secret_here_for_master_authority"
 
-# Optional role password overrides
+# Platform administrator
 RESTOPASS_SUPERADMIN_PASSWORD="your_strong_superadmin_password"
-RESTOPASS_BOSS_PASSWORD="your_strong_restaurant_boss_password"
-RESTOPASS_STAFF_DEFAULT_PIN="1234"
+
+# Required production restaurant-admin credentials; use a unique account per tenant.
+# JSON object keyed by restaurant code. Passwords should be unique 32+ character secrets.
+RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS='{"RW01":{"username":"manager@your-restaurant.rw","password":"REPLACE_WITH_A_UNIQUE_32_CHAR_SECRET"}}'
+
+# Do not configure a shared production staff PIN. Provision a unique PIN per staff account.
 ```
 
 Generate cryptographically strong secrets using Node.js:
@@ -320,11 +325,12 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `GET /api/customer/subscription` | Authenticated | Checks student digital subscription status and entitlement (`500 RWF/month`). |
 | `POST /api/customer/subscription/checkout` | `customer` | Initiates an integer-safe `500 RWF` MTN MoMo / Airtel Money subscription payment. |
 | `POST /api/payments/mobile-money/callback` | Webhook | Processes Mobile Money provider callbacks idempotently and activates 30-day + 72h grace access. |
-| `POST /api/upload/photo` | Authenticated | Uploads patron photos to AWS S3, DigitalOcean Spaces, Cloudflare R2, or local disk fallback. |
+| `POST /api/upload/photo` | Authenticated, customer/tenant scoped | Stores a patron portrait in a private S3-compatible bucket or private local app-data directory; returns an authenticated photo route, never a public object URL. |
+| `GET /api/customers/:customerId/photo` | Authenticated, customer/tenant scoped | Streams the portrait only to the customer, staff/admin in the same restaurant, or platform super-admin. |
 
 ---
 
-## 12. Production Cloud Deployment & Dual-Path Failover Architecture (50,000 DAU)
+## 12. Production Cloud Deployment & Dual-Path Failover Architecture (single-instance pilot)
 
 RestoPass employs a **Canonical Cloud Authority + Dual-Path Failover Architecture**:
 
@@ -343,7 +349,11 @@ RestoPass employs a **Canonical Cloud Authority + Dual-Path Failover Architectur
   - `https://app.restopass.rw/rw03` (UR Huye Dining)
   - Sub-pages: `/rw02/register` (Self-Registration) and `/rw02/boss` (Boss Approvals)
 
-### Quick Start: Multi-Container Cloud Deployment
+
+
+**Hosting scope:** The current PostgreSQL-backed cloud topology is a single application instance. Do not enable horizontal app replicas or claim a 50,000-DAU capacity until the state model is moved to transaction-scoped database operations and load-tested. For deployment, backups and recovery, follow [the Production Hosting Runbook](docs/PRODUCTION_HOSTING_RUNBOOK.md). Customer Mobile Money checkout and callback processing remain intentionally disabled pending the verified MTN Collections integration.
+
+### Quick Start: Single-Instance Cloud Pilot Deployment
 
 ```bash
 # 1. Clone repository & configure production secrets
@@ -351,11 +361,10 @@ cp .env.example .env
 nano .env
 
 # 2. Launch production stack with PostgreSQL 16, Redis 7, and RestoPass App
-cd deploy
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose --project-directory . --env-file .env -f deploy/docker-compose.prod.yml up -d --build
 
 # 3. Check container health status
-docker compose -f docker-compose.prod.yml ps
+docker compose --project-directory . --env-file .env -f deploy/docker-compose.prod.yml ps
 ```
 
 ---
@@ -371,14 +380,14 @@ npm run build
 ```
 
 ### Test Coverage Breakdown (`88` Passing Tests across `23` Suites)
-- **[`tests/productionScale.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/productionScale.test.ts)**: PostgreSQL schema DDL parsing and relational table definitions, graceful offline database fallback, distributed Redis 30s QR replay guard with atomic SETNX, S3/Spaces/R2 object storage upload with local fallback, and authenticated `POST /api/upload/photo` verification.
+- **[`tests/productionScale.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/productionScale.test.ts)**: PostgreSQL schema DDL parsing and relational table definitions, graceful offline database fallback, distributed Redis 30s QR replay guard with atomic SETNX, private S3/Spaces/R2 object storage with private local fallback, authenticated tenant-scoped photo upload/read, and cross-tenant denial tests.
 - **[`tests/apiSecurity.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/apiSecurity.test.ts)**: HMAC session token signing, tampering/expiration rejection, role-based tenant scoping, atomic DB backup persistence, customer identity isolation (`getCurrentCustomer` never falls back to another customer), and production secret validation.
 - **[`tests/cryptoService.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/cryptoService.test.ts)**: SHA-256 digests, HMAC-SHA256, hierarchical restaurant/customer key isolation, constant-time comparison, salted PIN verification, and `c1`/`v1` QR token verification.
 - **[`tests/customerAuthAndPhysicalCard.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/customerAuthAndPhysicalCard.test.ts)**: 7-step end-to-end verification of provisional registration, boss approval with grace meal reconciliation, non-SMS 6+ digit PIN activation, rate-limited login, audited PIN recovery, CR80 physical card scanning, and `500 RWF` monetization gating with physical card fallback.
 - **[`tests/ledgerIntegrity.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/ledgerIntegrity.test.ts)**: Append-only ledger balance derivation from checkpoints and immutable top-up entries.
 - **[`tests/magicAuth.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/magicAuth.test.ts)**: WhatsApp `v2` magic-link HMAC verification, payload/signature tampering rejection, expiration, and single-use replay prevention.
 - **[`tests/productionRemediation.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/productionRemediation.test.ts)**: Elimination of station pairing bypass codes, brute-force lockout, ledger idempotency guards, serialized disk writes under concurrency, and dynamic phone QR replay blocking.
-- **[`tests/studentSubscription.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/studentSubscription.test.ts)**: Launch feature flag defaults, `500 RWF` integer safety, Mobile Money callback idempotency, 72-hour grace period boundaries, complimentary access auditing, and physical card independence.
+- **[`tests/studentSubscription.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/studentSubscription.test.ts)**: Launch feature flag defaults, `500 RWF` integer safety, subscription entitlement rules and 72-hour grace period boundaries, complimentary access auditing, and physical card independence.
 - **[`tests/topupGraceAndScannerSpec.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/topupGraceAndScannerSpec.test.ts)**: All 5 top-up/grace accounting scenarios (`103 + 60 -> 163`, `5 - 2 + 60 -> 63`, `0 + 60 - 2 -> 58`, new customer `60 - 3 -> 57`, `0 balance + 3 grace used + second pending top-up -> blocked`) and all 12 scanner station validation and audio acceptance tests.
 - **[`tests/selfRegistrationAndPrintReadyExport.test.ts`](file:///c:/Users/ADMIN/Restourant/restourant/tests/selfRegistrationAndPrintReadyExport.test.ts)**: Self-onboarding student workflow, Boss approval activation, print-ready PVC card batch export, and initial PIN setup.
 

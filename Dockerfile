@@ -29,7 +29,7 @@ ENV PORT=3000
 
 # Install production dependencies only
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm install -g tsx
+RUN npm ci --omit=dev && npm install --global tsx@4.21.0
 
 # Copy built frontend assets from builder stage
 COPY --from=builder /app/dist ./dist
@@ -37,17 +37,16 @@ COPY --from=builder /app/dist ./dist
 # Copy backend files and database schemas
 COPY server.ts ./
 COPY src/services ./src/services
-COPY data ./data
 
 # Ensure upload directory exists
-RUN mkdir -p public/uploads/patron-photos && chown -R node:node /app
+RUN mkdir -p data/private/patron-photos && chown -R node:node /app && chmod 700 data/private data/private/patron-photos
 
 USER node
 
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/ready || exit 1
 
 CMD ["tsx", "server.ts"]
 

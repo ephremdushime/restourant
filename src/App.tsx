@@ -9,7 +9,6 @@ import { SuperAdminView } from './components/superadmin/SuperAdminView';
 import { AuthPortalView } from './components/common/AuthPortalView';
 import { NotificationDrawer } from './components/common/NotificationDrawer';
 import { sound } from './services/audioService';
-import { validateCustomerMagicToken } from './services/magicAuthService';
 
 export default function App() {
   const [state, setState] = useState(() => restoStore.getState());
@@ -48,6 +47,7 @@ export default function App() {
   });
 
   const [isDemoMode, setIsDemoMode] = useState<boolean>(() => {
+    if (!import.meta.env.DEV) return false;
     try {
       return sessionStorage.getItem('restopass_demo_mode') === 'true';
     } catch {}
@@ -55,6 +55,7 @@ export default function App() {
   });
 
   const handleToggleDemoMode = () => {
+    if (!import.meta.env.DEV) return;
     setIsDemoMode((prev) => {
       const next = !prev;
       restoStore.setDemoMode(next);
@@ -179,46 +180,8 @@ export default function App() {
         }
       }
 
-      // Check for WhatsApp 1-tap magic authentication token (?auth=...)
-      if (rawHash.includes('auth=')) {
-        const match = rawHash.match(/auth=([^&]+)/);
-        if (match && match[1]) {
-          const token = match[1];
-          const decoded = validateCustomerMagicToken(token, { markAsRedeemed: true });
-          if (decoded) {
-            const allCustomers = restoStore.getState().customers;
-            const matchedCust = allCustomers.find(
-              (c) => c.id === decoded.customerId || c.memberNo === decoded.memberNo
-            );
-            if (matchedCust) {
-              restoStore.setRestaurantCode(decoded.restaurantCode);
-              restoStore.setCustomer(matchedCust.id);
-              restoStore
-                .loginToServer({
-                  role: 'customer',
-                  username: matchedCust.memberNo,
-                  pin: '1234',
-                  restaurantCode: decoded.restaurantCode,
-                })
-                .then(() => {
-                  setSessions((prev) => {
-                    const next = { ...prev, customer: true };
-                    try {
-                      sessionStorage.setItem('restopass_portal_sessions', JSON.stringify(next));
-                    } catch {}
-                    return next;
-                  });
-                  setSessionLabels((prev) => ({
-                    ...prev,
-                    customer: `${matchedCust.name} (#${matchedCust.memberNo})`,
-                  }));
-                  handleRoleChange('customer', false);
-                });
-              return;
-            }
-          }
-        }
-      }
+      // Legacy WhatsApp magic-link authentication has been retired.
+      // Customer access requires the registered phone/member number and personal PIN.
 
       // Auto-pair cashier device if pair_key query param exists in hash or search
       if (hash.includes('pair_key=') || (typeof window !== 'undefined' && window.location.search.includes('pair_key='))) {

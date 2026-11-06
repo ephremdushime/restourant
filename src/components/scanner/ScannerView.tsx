@@ -4,6 +4,7 @@ import { restoStore } from '../../store/restoStore';
 import { translations } from '../../services/i18n';
 import { sound } from '../../services/audioService';
 import { BatteryIndicator } from '../common/BatteryIndicator';
+import { PrivatePhoto } from '../common/PrivatePhoto';
 import { ScannerProvisionalModal } from './ScannerProvisionalModal';
 import { CardPrintStudio } from '../restaurant/CardPrintStudio';
 import {
@@ -430,7 +431,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             type="button"
             onClick={() => setIsProvisionalModalOpen(true)}
             className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold bg-amber-600 hover:bg-amber-500 text-white transition-colors cursor-pointer shadow-sm"
-            title="Register new customer or record recharge with up to 3 grace meals while boss is away"
+            title="New registrations receive up to 4 grace plates after reception payment; existing top-ups use their configured allowance"
           >
             <UserPlus className="w-4 h-4" />
             <span>Register / Top-Up</span>
@@ -876,7 +877,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
               {/* Member Card Profile */}
               <div className="flex items-center gap-4 bg-black/35 p-3.5 rounded-2xl border border-white/15">
-                <img
+                <PrivatePhoto
                   src={activeScan.event.customerPhoto}
                   alt={activeScan.event.customerName}
                   className="w-16 h-16 rounded-xl object-cover border border-white/30 shadow-md shrink-0"
@@ -897,7 +898,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                     <div className="mt-2 p-2.5 rounded-xl bg-amber-500/25 border border-amber-400/50 text-xs sm:text-sm text-amber-100 flex items-center gap-2">
                       <ShieldCheck className="w-4 h-4 text-amber-300 shrink-0" />
                       <span>
-                        <strong>Provisional Grace Plate Served:</strong> Customer authorized for up to 3 plates while awaiting boss Mobile Money payment approval.
+                        <strong>Provisional Grace Plate Served:</strong> Customer authorized for up to 4 registration grace plates after reception confirms the paid package, or the top-up approval's configured allowance.
                       </span>
                     </div>
                   )}
