@@ -69,14 +69,13 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     assert.ok(reg.customer);
     const customerId = reg.customer.id;
 
-    // Simulate consuming 2 grace meals while waiting for boss approval (< 4 allowed)
-    reg.customer.gracePlatesConsumed = 2;
-
-    // Find the pending approval request in store
+    // Simulate the authoritative approval-level record created by two successful grace scans.
     const pendingReq = restoStore.getState().pendingApprovals.find(
       (a) => a.customerId === customerId && a.status === 'pending'
     );
     assert.ok(pendingReq, 'Pending approval request must exist');
+    pendingReq.gracePlatesConsumed = 2;
+    reg.customer.gracePlatesConsumed = 2; // mirrored for customer-facing status only
 
     // Boss approves registration
     const approveResult = restoStore.approvePendingRequest(
