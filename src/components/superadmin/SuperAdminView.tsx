@@ -702,7 +702,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 leading-relaxed max-w-2xl">
-                  Monetizes optional student digital customer features at <strong>{studentSubSettings.priceRwf.toLocaleString()} RWF / month</strong> via Mobile Money (MTN MoMo &amp; Airtel Money).
+                  Sets the monthly digital access fee at <strong>{studentSubSettings.priceRwf.toLocaleString()} RWF / month</strong>. Customers pay at reception; Super Admin verifies and activates access.
                   Activation is controlled entirely by this platform feature flag without requiring a code release.
                 </p>
               </div>
