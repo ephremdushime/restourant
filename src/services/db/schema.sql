@@ -40,6 +40,92 @@ CREATE TABLE IF NOT EXISTS customers (
     CONSTRAINT uq_resto_member UNIQUE (restaurant_code, member_no)
 );
 
+
+-- Database-enforced identity uniqueness within each restaurant.
+-- Friendly application checks remain useful, but these indexes close the
+-- concurrent-registration race and make PostgreSQL the final authority.
+DO $identity_preflight$
+DECLARE duplicate_groups BIGINT;
+BEGIN
+  SELECT COUNT(*) INTO duplicate_groups
+  FROM (
+    SELECT restaurant_code,
+      CASE
+        WHEN LEFT(digits, 3) = '250' AND LENGTH(digits) = 12 THEN SUBSTRING(digits FROM 4)
+        WHEN LEFT(digits, 1) = '0' AND LENGTH(digits) = 10 THEN SUBSTRING(digits FROM 2)
+        ELSE digits
+      END AS normalized_phone
+    FROM (
+      SELECT restaurant_code, REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g') AS digits
+      FROM customers
+      WHERE phone IS NOT NULL
+    ) phones
+    WHERE LENGTH(digits) >= 7
+    GROUP BY restaurant_code,
+      CASE
+        WHEN LEFT(digits, 3) = '250' AND LENGTH(digits) = 12 THEN SUBSTRING(digits FROM 4)
+        WHEN LEFT(digits, 1) = '0' AND LENGTH(digits) = 10 THEN SUBSTRING(digits FROM 2)
+        ELSE digits
+      END
+    HAVING COUNT(*) > 1
+  ) duplicates;
+  IF duplicate_groups > 0 THEN
+    RAISE EXCEPTION 'RestoPass identity migration blocked: % duplicate normalized phone group(s) exist within a restaurant.', duplicate_groups
+      USING HINT = 'Resolve duplicate customer phone numbers per restaurant before restarting. No customer records were changed.';
+  END IF;
+
+  SELECT COUNT(*) INTO duplicate_groups
+  FROM (
+    SELECT restaurant_code, data->>'idHash' AS identity_hash
+    FROM customers
+    WHERE NULLIF(data->>'idHash', '') IS NOT NULL
+    GROUP BY restaurant_code, data->>'idHash'
+    HAVING COUNT(*) > 1
+  ) duplicates;
+  IF duplicate_groups > 0 THEN
+    RAISE EXCEPTION 'RestoPass identity migration blocked: % duplicate identity-document hash group(s) exist within a restaurant.', duplicate_groups
+      USING HINT = 'Resolve duplicate identity documents per restaurant before restarting. No customer records were changed.';
+  END IF;
+
+  SELECT COUNT(*) INTO duplicate_groups
+  FROM (
+    SELECT restaurant_code, LOWER(BTRIM(data #>> '{studentProfile,registrationNumber}')) AS student_number
+    FROM customers
+    WHERE is_student = TRUE
+      AND LENGTH(BTRIM(COALESCE(data #>> '{studentProfile,registrationNumber}', ''))) >= 3
+    GROUP BY restaurant_code, LOWER(BTRIM(data #>> '{studentProfile,registrationNumber}'))
+    HAVING COUNT(*) > 1
+  ) duplicates;
+  IF duplicate_groups > 0 THEN
+    RAISE EXCEPTION 'RestoPass identity migration blocked: % duplicate student registration number group(s) exist within a restaurant.', duplicate_groups
+      USING HINT = 'Resolve duplicate student registration numbers per restaurant before restarting. No customer records were changed.';
+  END IF;
+END $identity_preflight$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_restaurant_phone_normalized
+ON customers (
+  restaurant_code,
+  (CASE
+    WHEN LEFT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 3) = '250'
+      AND LENGTH(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g')) = 12
+      THEN SUBSTRING(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g') FROM 4)
+    WHEN LEFT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 1) = '0'
+      AND LENGTH(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g')) = 10
+      THEN SUBSTRING(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g') FROM 2)
+    ELSE REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g')
+  END)
+)
+WHERE phone IS NOT NULL AND LENGTH(REGEXP_REPLACE(phone, '[^0-9]', '', 'g')) >= 7;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_restaurant_identity_hash
+ON customers (restaurant_code, (data->>'idHash'))
+WHERE NULLIF(data->>'idHash', '') IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_restaurant_student_number
+ON customers (restaurant_code, (LOWER(BTRIM(data #>> '{studentProfile,registrationNumber}'))))
+WHERE is_student = TRUE
+  AND LENGTH(BTRIM(COALESCE(data #>> '{studentProfile,registrationNumber}', ''))) >= 3;
+
 -- 4. Immutable Append-Only Ledger Entries (CRITICAL 50,000 DAU Invariance)
 CREATE TABLE IF NOT EXISTS ledger_entries (
     id VARCHAR(64) PRIMARY KEY,
