@@ -59,8 +59,17 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   const dashboardEntitlement = customer
     ? restoStore.checkStudentEntitlement(customer.id, 'customer_dashboard')
     : null;
+  const freeAccessExpired = Boolean(
+    customer?.freeAccessExpiresAt && new Date(customer.freeAccessExpiresAt).getTime() <= Date.now()
+  );
   const isDashboardGated = Boolean(
-    customer && subSettings.enabled && (!dashboardEntitlement || !dashboardEntitlement.allowed)
+    customer && (
+      customer.customerAccessStatus === 'pending_super_admin_activation' ||
+      customer.customerAccessStatus === 'payment_required' ||
+      customer.customerAccessStatus === 'expired' ||
+      freeAccessExpired ||
+      (subSettings.enabled && (!dashboardEntitlement || !dashboardEntitlement.allowed))
+    )
   );
 
   // Only read balance when dashboard subscription allows it
@@ -325,6 +334,47 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
     if (historyFilter === 'transfers') return item.type === 'transfer_out' || item.type === 'transfer_in' || item.type === 'reversal';
     return true;
   });
+
+  if (customer?.registrationStatus === 'pending_boss_approval') {
+    return (
+      <div className="max-w-xl mx-auto px-4 py-8 space-y-5">
+        <PWAInstallBanner />
+        <div className="rounded-3xl border-2 border-amber-500/50 bg-slate-900 p-6 sm:p-8 space-y-4 shadow-xl">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center">
+              <Clock className="w-6 h-6 text-amber-300" />
+            </div>
+            <div>
+              <h2 className="text-xl font-black text-white">Account Partially Activated</h2>
+              <p className="text-xs text-amber-200">Reception payment confirmed</p>
+            </div>
+          </div>
+          <div className="rounded-2xl bg-slate-950 border border-slate-800 p-4 space-y-2">
+            <div className="flex justify-between text-sm"><span className="text-slate-400">Member number</span><strong className="font-mono text-white">#{customer.memberNo}</strong></div>
+            <div className="flex justify-between text-sm"><span className="text-slate-400">Grace meals available</span><strong className="text-emerald-300">{Math.max(0, customer.gracePlatesRemaining ?? 4)} / 4</strong></div>
+            <div className="flex justify-between text-sm"><span className="text-slate-400">Registration review</span><strong className="text-amber-300">Awaiting boss approval</strong></div>
+          </div>
+          <p className="text-sm leading-relaxed text-slate-200">
+            Your reception payment has been confirmed. You may use up to four grace meals while the Restaurant Boss reviews your registration. Your full dashboard and physical card will be enabled after approval.
+          </p>
+          <p className="text-xs text-slate-400">You can sign in with your registered phone number and PIN to check this status. No additional payment is due for this approval step.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (customer?.customerAccessStatus === 'pending_super_admin_activation') {
+    return (
+      <div className="max-w-xl mx-auto px-4 py-8">
+        <div className="rounded-3xl border-2 border-amber-500/50 bg-slate-900 p-6 sm:p-8 space-y-3 shadow-xl">
+          <CheckCircle2 className="w-10 h-10 text-emerald-400" />
+          <h2 className="text-xl font-black text-white">Registration Approved</h2>
+          <p className="text-sm text-slate-200">Your Restaurant Boss has approved your registration and your physical card is ready for issuance. Your one-month complimentary digital access is awaiting Super Admin activation.</p>
+          <p className="text-xs text-slate-400">You will receive dashboard access as soon as the complimentary month is activated.</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!customer) {
     return (
