@@ -2627,7 +2627,10 @@ function applySyncDeletionTombstones(state: any, incoming: any, user: UserSessio
   );
   let applied = 0;
 
-  for (const request of incoming.slice(0, 200)) {
+  // Existing markers do not consume the per-request application budget; otherwise
+  // the same first 200 old markers would starve newer offline deletions forever.
+  for (const request of incoming) {
+    if (applied >= 200) break;
     if (!request || typeof request !== 'object') continue;
     const collection = request.collection;
     const recordId = typeof request.recordId === 'string' ? request.recordId.trim() : '';
