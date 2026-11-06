@@ -17,6 +17,8 @@ import {
   canMergeTenantScopedRecord,
   resolveRestaurantAdminAccount,
   verifyRestaurantAdminCredentials,
+  getRestaurantAdminAuthVersion,
+  isCurrentRestaurantAdminSession,
   UserSession,
 } from '../server';
 import { restoStore } from '../src/store/restoStore';
@@ -422,6 +424,23 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
     assert.equal(verifyRestaurantAdminCredentials('RW02', 'boss@rw02.test', 'unique_rw01_restaurant_admin_password_2026', config, true), false);
     assert.equal(resolveRestaurantAdminAccount('RW03', config), null);
     assert.equal(verifyRestaurantAdminCredentials('RW03', 'anyone', 'long_enough_password_2026', config, true), false);
+
+    const account = resolveRestaurantAdminAccount('RW01', config)!;
+    const session: UserSession = {
+      userId: 'admin_RW01',
+      username: account.username,
+      role: 'restaurant_admin',
+      restaurantCode: 'RW01',
+      authVersion: getRestaurantAdminAuthVersion('RW01', account),
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+    };
+    assert.equal(isCurrentRestaurantAdminSession(session, config), true);
+    const rotatedConfig = JSON.stringify({
+      RW01: { username: 'manager@rw01.test', password: 'rotated_unique_rw01_password_2026' },
+    });
+    assert.equal(isCurrentRestaurantAdminSession(session, rotatedConfig), false);
+    assert.equal(isCurrentRestaurantAdminSession({ ...session, authVersion: undefined }, config), false);
   });
 
   test('validateProductionSecrets throws fatal error in production when secrets are missing or weak', () => {
