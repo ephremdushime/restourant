@@ -504,7 +504,8 @@ setInterval(() => {
 const authRateLimiter = createRateLimiter('auth', 20, 60 * 1000); // 20 attempts per minute
 const apiRateLimiter = createRateLimiter('api', 120, 60 * 1000); // 120 requests per minute
 const syncRateLimiter = createRateLimiter('sync', 40, 60 * 1000); // 40 syncs per minute
-const photoRateLimiter = createRateLimiter('photo', 10, 60 * 1000); // 10 photo operations per minute
+const photoUploadRateLimiter = createRateLimiter('photo-upload', 10, 60 * 1000); // 10 portrait writes per minute
+const photoReadRateLimiter = createRateLimiter('photo-read', 120, 60 * 1000); // 120 authorized reads per minute
 
 // Request body parser with scoped limits (supports patron portrait uploads)
 app.use(express.json({ limit: '10mb' }));
@@ -1503,7 +1504,7 @@ app.post('/api/customer/recovery/complete', authRateLimiter, (req, res) => {
 // storage key, tenant prefix, object URL, or filename.
 app.post(
   '/api/upload/photo',
-  photoRateLimiter,
+  photoUploadRateLimiter,
   requireAuth(['customer', 'stand_staff', 'restaurant_admin', 'super_admin']),
   async (req, res) => {
     const { customerId, photoBase64 } = req.body || {};
@@ -1580,7 +1581,7 @@ app.post(
 // Never redirect to S3 or expose a bucket/CDN URL.
 app.get(
   '/api/customers/:customerId/photo',
-  photoRateLimiter,
+  photoReadRateLimiter,
   requireAuth(),
   async (req, res) => {
     const customerId = req.params.customerId;
