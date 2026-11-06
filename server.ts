@@ -231,6 +231,29 @@ function ensureServerDbDefaults(state: any) {
   if (Array.isArray(state.stationUsers)) {
     state.stationUsers = state.stationUsers.filter((u: any) => !SEED_USER_IDS.has(u.id) && u.restaurantCode !== 'RW02');
   }
+
+  // Reapply persisted tombstones in standalone JSON mode as well as PostgreSQL.
+  const tombstoneCollections: Record<string, string> = {
+    customers: 'customers',
+    stationUsers: 'stationUsers',
+    branches: 'branches',
+    packages: 'packages',
+    menuItems: 'menuItems',
+    scanPoints: 'scanPoints',
+    cashierSessions: 'cashierSessions',
+  };
+  const deletedKeys = new Set(
+    (state.deletionTombstones || [])
+      .filter((item: any) => item && tombstoneCollections[item.collection] && item.recordId && item.restaurantCode)
+      .map((item: any) => `${item.collection}:${item.restaurantCode}:${item.recordId}`)
+  );
+  for (const [collection, stateKey] of Object.entries(tombstoneCollections)) {
+    if (Array.isArray(state[stateKey])) {
+      state[stateKey] = state[stateKey].filter(
+        (item: any) => !deletedKeys.has(`${collection}:${item.restaurantCode}:${item.id}`)
+      );
+    }
+  }
 }
 ensureServerDbDefaults(serverDbState);
 
@@ -2896,6 +2919,9 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         }
       }
     }
+
+    // Apply authenticated soft-deletion requests after normal sync merging.
+    applySyncDeletionTombstones(serverDbState, fullState.deletionTombstones, user);
 
     const savedOk = await queueDbSave(serverDbState);
     if (!savedOk) {
