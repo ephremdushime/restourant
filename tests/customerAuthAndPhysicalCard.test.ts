@@ -16,7 +16,7 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     });
   });
 
-  test('Step 1: Cashier registers customer -> pending_approval, no active account or meal credit granted yet', async () => {
+  test('Step 1: Reception registers and confirms payment -> partial activation, no paid meal credit yet', async () => {
     const regResult = restoStore.registerProvisionalCustomer({
       name: 'Uwimana Jean Bosco',
       phone: '+250 788 123 456',
@@ -37,7 +37,10 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     const customer = regResult.customer;
 
     // Customer must start in pending_approval
-    assert.equal(customer.activationStatus, 'pending_approval');
+    assert.equal(customer.activationStatus, 'partial_active');
+    assert.equal(customer.registrationStatus, 'pending_boss_approval');
+    assert.equal(customer.receptionPaymentStatus, 'confirmed');
+    assert.equal(customer.gracePlatesRemaining, 4);
     assert.equal(customer.cardReadyForPrint, false);
     // No active meal credit or custom PIN yet
     assert.equal(restoStore.getCustomerBalance(customer.id), 0);
@@ -357,7 +360,7 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     assert.equal(entSubscribed.allowed, true);
   });
 
-  test('Step 8: Boss approves new registration -> Customer immediately sets up PIN on Customer Portal without Magic Link/WhatsApp', async () => {
+  test('Step 8: Reception-confirmed customer sets PIN before boss approval, then boss completes activation', async () => {
     const reg = restoStore.registerProvisionalCustomer({
       name: 'Habimana Patrick',
       phone: '+250 788 334 455',
@@ -370,44 +373,43 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     assert.ok(reg.customer);
     const customerId = reg.customer.id;
 
-    // Before boss approval, portal status reports pending_boss_approval
+    // After reception payment, PIN setup is available before boss approval
     const beforeApprovalStatus = restoStore.checkCustomerPortalStatus('+250 788 334 455', 'RW01');
     assert.ok(beforeApprovalStatus.customer);
-    assert.equal(beforeApprovalStatus.status, 'pending_boss_approval');
+    assert.equal(beforeApprovalStatus.status, 'needs_pin_setup');
 
-    // Boss approves new customer registration
-    const pendingReq = restoStore.getState().pendingApprovals.find(
-      (a) => a.customerId === customerId && a.status === 'pending'
-    );
-    assert.ok(pendingReq);
-    const approveRes = restoStore.approvePendingRequest(pendingReq.id, 'Boss Jean Paul');
-    assert.equal(approveRes.success, true);
-
-    // First-time customer has cardReadyForPrint = true
-    assert.equal(approveRes.customer?.cardReadyForPrint, true);
-
-    // Portal status now reports needs_pin_setup
-    const afterApprovalStatus = restoStore.checkCustomerPortalStatus('+250 788 334 455', 'RW01');
-    assert.ok(afterApprovalStatus.customer);
-    assert.equal(afterApprovalStatus.status, 'needs_pin_setup');
-
-    // Customer sets their 6+ digit personal PIN directly on Customer Portal
+    // Customer sets a 6+ digit PIN immediately after reception confirms payment.
     const pinSetupRes = await restoStore.setupFirstTimeCustomerPin({
       phoneOrMember: '+250 788 334 455',
       newPin: '748392',
       restaurantCode: 'RW01',
     });
     assert.equal(pinSetupRes.success, true);
-    assert.equal(pinSetupRes.customer?.activationStatus, 'active');
+    assert.equal(pinSetupRes.customer?.activationStatus, 'partial_active');
     assert.equal(pinSetupRes.customer?.hasCustomPin, true);
+    assert.equal(pinSetupRes.customer?.cardReadyForPrint, false);
 
-    // Customer can now sign in with Phone + PIN
+    // Customer can sign in to the restricted onboarding dashboard before boss approval.
     const loginRes = await restoStore.customerLogin({
       phone: '+250 788 334 455',
       pin: '748392',
     });
     assert.equal(loginRes.success, true);
     assert.equal(loginRes.customer?.id, customerId);
+
+    // Boss approval completes registration and makes the physical card print-ready.
+    const pendingReq = restoStore.getState().pendingApprovals.find(
+      (a) => a.customerId === customerId && a.status === 'pending'
+    );
+    assert.ok(pendingReq);
+    const approveRes = restoStore.approvePendingRequest(pendingReq.id, 'Boss Jean Paul');
+    assert.equal(approveRes.success, true);
+    assert.equal(approveRes.customer?.registrationStatus, 'approved');
+    assert.equal(approveRes.customer?.activationStatus, 'active');
+    assert.equal(approveRes.customer?.cardReadyForPrint, true);
+
+    const afterApprovalStatus = restoStore.checkCustomerPortalStatus('+250 788 334 455', 'RW01');
+    assert.equal(afterApprovalStatus.status, 'ready_for_login');
 
     // Verify customer received in-app notifications for registration, boss approval, and PIN setup
     const customerNotifs = restoStore.getCustomerNotifications(customerId);
