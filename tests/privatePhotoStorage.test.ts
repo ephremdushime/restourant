@@ -35,6 +35,20 @@ describe('Private patron photo storage', () => {
       assert.ok(retrieved);
       assert.equal(retrieved.mimeType, 'image/png');
       assert.deepEqual(retrieved.buffer, png);
+
+      // Local objects remain readable if S3 is configured later; storage backend is record-specific.
+      process.env.S3_BUCKET = 'new-private-bucket';
+      process.env.S3_ACCESS_KEY_ID = 'TEST_KEY_ID';
+      process.env.S3_SECRET_ACCESS_KEY = 'TEST_SECRET_KEY';
+      resetS3Client();
+      const stillLocal = await getPrivatePatronPhoto(uploaded.key, 'local');
+      assert.ok(stillLocal);
+      assert.deepEqual(stillLocal.buffer, png);
+      delete process.env.S3_BUCKET;
+      delete process.env.S3_ACCESS_KEY_ID;
+      delete process.env.S3_SECRET_ACCESS_KEY;
+      resetS3Client();
+
       await deletePrivatePatronPhoto(uploaded.key, 'local');
       assert.equal(await getPrivatePatronPhoto(uploaded.key), null);
       await assert.rejects(() => getPrivatePatronPhoto('../public/uploads/photo.png'), /Invalid photo key/);
