@@ -15,6 +15,8 @@ import {
   isActiveStationSession,
   isActiveCustomerSession,
   findCustomerForLogin,
+  getSuperAdminAuthVersion,
+  isCurrentSuperAdminSession,
   applySyncDeletionTombstones,
   canMergeTenantScopedRecord,
   resolveRestaurantAdminAccount,
@@ -336,6 +338,30 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
       customers: [{ ...activeState.customers[0], provisionalStatus: 'rejected' }],
     }), false);
     assert.equal(isActiveCustomerSession({ ...session, role: 'restaurant_admin' }, { customers: [] }), true);
+  });
+
+  test('production Super Admin sessions are invalidated when the configured credential rotates', () => {
+    const configuredCredential = ['fixture', 'platform', 'credential', '2026'].join('_');
+    const session: UserSession = {
+      userId: 'super_admin_principal',
+      username: 'platform-admin',
+      role: 'super_admin',
+      restaurantCode: 'ALL',
+      authVersion: getSuperAdminAuthVersion(configuredCredential),
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+    };
+    const currentEnvironment = {
+      NODE_ENV: 'production',
+      RESTOPASS_SUPERADMIN_PASSWORD: configuredCredential,
+    } as NodeJS.ProcessEnv;
+
+    assert.equal(isCurrentSuperAdminSession(session, currentEnvironment), true);
+    assert.equal(isCurrentSuperAdminSession(session, {
+      ...currentEnvironment,
+      RESTOPASS_SUPERADMIN_PASSWORD: ['rotated', 'platform', 'credential', '2026'].join('_'),
+    }), false);
+    assert.equal(isCurrentSuperAdminSession({ ...session, authVersion: undefined }, currentEnvironment), false);
   });
 
   test('prevents tenant admins from reassigning records through ID collisions', () => {
