@@ -298,66 +298,39 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     assert.equal(restoStore.getCustomerBalance(customer.id), initialBalance - 1);
   });
 
-  test('Step 7: Customer Dashboard 500 RWF Monetization Gating & Physical Card Fallback', () => {
-    const customer = restoStore.getState().customers.find((c) => !c.registrationStatus);
-    assert.ok(customer, 'Legacy customer fixture without new registration lifecycle is available');
+  test('Step 7: Boss-approved customer waits for Super Admin free-month activation; physical card remains usable', () => {
+    const customer = restoStore.getState().customers.find((c) => c.name === 'Mukamana Alice');
+    assert.ok(customer, 'Customer from the boss-approval workflow must exist');
 
-    // Case A: Subscription disabled at launch -> Dashboard is completely accessible
     restoStore.updateStudentSubscriptionSettings({
       enabled: false,
       priceRwf: 500,
     });
 
-    const entDisabled = restoStore.checkStudentEntitlement(customer.id, 'customer_dashboard');
-    assert.equal(entDisabled.allowed, true);
-    assert.match(entDisabled.reason || '', /disabled at launch/i);
+    // New registration access is controlled by the explicit Super Admin activation,
+    // independently of the legacy global monetization toggle.
+    const beforeActivation = restoStore.checkStudentEntitlement(customer.id, 'customer_dashboard');
+    assert.equal(beforeActivation.allowed, false);
+    assert.match(beforeActivation.reason || '', /Super Admin/i);
 
-    // Case B: Subscription enabled by super-admin -> Dashboard gates non-paying customers
-    restoStore.updateStudentSubscriptionSettings({
-      enabled: true,
-      priceRwf: 500,
-      graceDays: 3,
-    });
-
-    // Fresh/unsubscribed customer has no active digital pass
-    const entEnabled = restoStore.checkStudentEntitlement(customer.id, 'customer_dashboard');
-    assert.equal(entEnabled.allowed, false);
-    assert.match(entEnabled.reason || '', /500 RWF/i);
-
-    // Case C: PHYSICAL CARD FALLBACK IS 100% PRESERVED
-    // Even though dashboard access is gated, physical card QR scans and redeems meals without interruption
+    // Physical card scanning remains available while digital dashboard access is pending.
     const cardToken = generateCardToken(customer.restaurantCode, customer.memberNo, customer.cardVersion);
-    const customerMap = {
-      [customer.memberNo]: {
-        keyVersion: customer.keyVersion,
-        cardVersion: customer.cardVersion,
-        cardStatus: customer.cardStatus,
-      },
-    };
-    const verified = verifyQrToken(cardToken, customer.restaurantCode, customerMap);
-    assert.equal(verified.valid, true);
+    const scan = restoStore.processScan(cardToken);
+    assert.equal(scan.scanEvent.status, 'approved');
+    assert.equal(scan.scanEvent.platesDeducted, 1);
 
-    const initialBal7 = restoStore.getCustomerBalance(customer.id);
-    const scanFallback = restoStore.processScan(cardToken);
-    assert.equal(scanFallback.scanEvent.status, 'approved');
-    assert.equal(scanFallback.scanEvent.platesDeducted, 1);
-    assert.equal(restoStore.getCustomerBalance(customer.id), initialBal7 - 1);
-
-    // Case D: Customer pays 500 RWF via Mobile Money -> Dashboard access unlocked
-    const checkout = restoStore.initiateStudentCheckout({
+    // Super Admin activates exactly one complimentary month after boss approval.
+    const activation = restoStore.grantComplimentarySubscription({
       customerId: customer.id,
-      phoneNumber: customer.phone,
-      provider: 'mtn_momo',
+      reason: 'New customer one-month onboarding access',
+      durationDays: 60, // New registrations are deliberately fixed to 30 days by policy.
+      grantedBy: 'Ephrem (Founder & Super Admin)',
     });
-    assert.equal(checkout.success, true);
-    assert.ok(checkout.payment);
-
-    const verifyResult = restoStore.verifyStudentPayment(checkout.payment!.internalReference);
-    assert.equal(verifyResult.success, true);
-    assert.equal(verifyResult.subscription?.status, 'active');
-
-    const entSubscribed = restoStore.checkStudentEntitlement(customer.id, 'customer_dashboard');
-    assert.equal(entSubscribed.allowed, true);
+    assert.equal(activation.success, true);
+    assert.equal(activation.subscription?.status, 'complimentary');
+    const entitlement = restoStore.checkStudentEntitlement(customer.id, 'customer_dashboard');
+    assert.equal(entitlement.allowed, true);
+    assert.equal(entitlement.status, 'complimentary');
   });
 
   test('Step 8: Reception-confirmed customer sets PIN before boss approval, then boss completes activation', async () => {
