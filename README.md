@@ -48,7 +48,7 @@ flowchart TB
     end
 
     subgraph Storage["Atomic Persistence Layer"]
-        DB[("data/db.json\n+ Rolling Backup db.backup.json")]
+        DB[("PostgreSQL (cloud)\n/ Atomic JSON (standalone)")]
         Outbox[("Offline Sync Outbox\n& Clock Guard")]
     end
 
@@ -77,7 +77,7 @@ flowchart TB
 ### 2.1 Stand Scanner Station (`stand_staff`)
 - **Hardware & Camera Scanning**: Supports USB/Bluetooth HID barcode guns (auto-focused wedge input), GPU-accelerated browser `BarcodeDetector` camera scanning, and manual Member ID lookup.
 - **Rogue Wi-Fi Terminal Shield**: Only devices paired with a valid station pairing key (`PAIR-XXXX`) and active `CashierSession` can access the scanning screen.
-- **Reception Provisional Desk**: When the restaurant boss is away, cashiers can register new patrons or submit balance top-ups with Mobile Money transaction references, granting up to **3 authorized grace meals** while awaiting boss verification.
+- **Reception Provisional Desk**: When the restaurant boss is away, cashiers can register new patrons or submit cash/mobile-money payment references for manual verification, granting up to **3 authorized grace meals** while awaiting boss approval.
 - **In-Person PIN & Activation Desk**: Issues 15-minute, single-use 6-digit activation and PIN-recovery codes after verifying a patron's physical Student ID or National ID.
 - **Shift Handover & Cash Reconciliation**: Tracks opening float, cash collected, plates served, and variance upon shift closure.
 
@@ -88,7 +88,7 @@ flowchart TB
 - **Self-Service Card Lock**: Patrons can immediately lock/unlock their physical PVC card if misplaced.
 
 ### 2.3 Restaurant Boss / Administrator Portal (`restaurant_admin`)
-- **Boss MoMo Approval Room**: Central queue to inspect pending registrations and top-ups against MTN MoMo / Airtel Money SMS statements, reconcile grace meals automatically, and dispatch 1-tap WhatsApp pass links.
+- **Boss Payment Approval Room**: Central queue to inspect pending registrations and top-ups, manually reconcile payment references against the restaurant's payment records, reconcile grace meals automatically, and dispatch approved customer communications.
 - **CR80 Physical PVC Card Print Studio**: Duplex (`85.60mm × 53.98mm`) front-and-back badge designer and print studio with Kinyarwanda/English property notices.
 - **Executive Monthly Reconciliation**: Tracks monthly prepaid plates & cash intake, used plates & cash value, and remaining patron liability.
 - **Branches, Stations & Security Center**: Manage multiple dining halls, create 8-digit PIN/password cashier accounts, inspect audit logs, and remotely revoke active cashier terminal sessions.
@@ -173,7 +173,7 @@ Because campus environments cannot rely on paid SMS OTP delivery for every login
 RestoPass includes a built-in, super-admin-controlled monetization engine for student digital features (`customer_dashboard`, `digital_plate_transfer`):
 
 - **Disabled by Default at Launch (`enabled: false`)**: All digital features work without restriction until the platform founder explicitly enables the policy.
-- **Integer-Safe Pricing (`500 RWF` / 30 Days)**: When enabled, students can subscribe via MTN Mobile Money (`*182#`) or Airtel Money (`*500#`) for exactly **500 RWF/month**, with an automatic **72-hour (3-day) grace period** after expiration.
+- **Integer-Safe Pricing (`500 RWF` / 30 Days)**: When enabled, the entitlement policy can charge **500 RWF/month** with an automatic **72-hour (3-day) grace period** after expiration. Online payment checkout is disabled; subscriptions must not be marked paid from client-provided references or screenshots.
 - **100% Physical Card Fallback Guarantee**: Even when a student's digital subscription is unsubscribed or expired, their **physical PVC card (`c1`) continues to scan and redeem prepaid meals at all buffet stands without interruption**.
 - **Audited Complimentary Access**: Super Admins can grant or revoke complimentary passes with a mandatory audit reason.
 
