@@ -7,12 +7,12 @@ mkdir -p "$ROOT_DIR/backups/logs"
 chmod 700 "$ROOT_DIR/backups" "$ROOT_DIR/backups/logs"
 cat > "$CRON_FILE" <<EOF
 # RestoPass encrypted off-site backup at 02:15 host-local time, daily.
-15 2 * * * cd "$ROOT_DIR" && /bin/bash deploy/backup-all.sh >> "$ROOT_DIR/backups/logs/backup.log" 2>&1
+15 2 * * * cd "$ROOT_DIR" && /bin/bash deploy/backup-all.sh >> "$ROOT_DIR/backups/logs/backup.log" 2>&1 # restopass-managed-backup-job
 # Isolated PostgreSQL + private-photo recovery verification at 04:00 every Sunday.
-0 4 * * 0 cd "$ROOT_DIR" && /bin/bash deploy/verify-latest-paired-backup.sh >> "$ROOT_DIR/backups/logs/verify.log" 2>&1
+0 4 * * 0 cd "$ROOT_DIR" && /bin/bash deploy/verify-latest-paired-backup.sh >> "$ROOT_DIR/backups/logs/verify.log" 2>&1 # restopass-managed-backup-job
 EOF
 chmod 600 "$CRON_FILE"
-( crontab -l 2>/dev/null | grep -v 'RestoPass encrypted off-site backup' | grep -v 'RestoPass isolated paired-backup verification' || true
+( crontab -l 2>/dev/null | grep -v 'restopass-managed-backup-job' || true
   cat "$CRON_FILE" ) | crontab -
 echo "Installed RestoPass backup schedule for user $(id -un):"
 echo "  Daily 02:15: paired encrypted PostgreSQL + private-photo backup and S3 upload."
