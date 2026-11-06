@@ -136,20 +136,6 @@ describe('Production Readiness Remediation & Hardening', () => {
       Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { onLine: true } });
       restoStore.setAuthToken('test-session-token');
 
-      // A full-state reconnect push is still required when the explicit outbox
-      // is empty, because grace counters and scan events also live in the snapshot.
-      let emptyQueuePushCalled = false;
-      globalThis.fetch = (async () => {
-        emptyQueuePushCalled = true;
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ success: true, serverState: null }),
-        } as Response;
-      }) as typeof fetch;
-      assert.equal(restoStore.syncPendingOutbox(), 0);
-      assert.equal(emptyQueuePushCalled, true, 'Reconnect must push full state even when there are no outbox entries');
-
       globalThis.fetch = (async () => ({
         ok: false,
         status: 503,
@@ -180,6 +166,21 @@ describe('Production Readiness Remediation & Hardening', () => {
       assert.equal(first.syncedToCloud, true, 'The server-acknowledged item should be marked synced');
       assert.ok(createdDuringRequest);
       assert.equal(createdDuringRequest.syncedToCloud, false, 'Items created in-flight must remain pending');
+
+      // An empty outbox must still trigger a full-state reconnect push because
+      // grace counters and scan events are also synchronized through state snapshots.
+      let emptyQueuePushCalled = false;
+      globalThis.fetch = (async () => {
+        emptyQueuePushCalled = true;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, serverState: null }),
+        } as Response;
+      }) as typeof fetch;
+      assert.equal(restoStore.syncPendingOutbox(), 0);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(emptyQueuePushCalled, true, 'Reconnect must push full state even when there are no outbox entries');
     } finally {
       state.syncOutbox = originalOutbox;
       state.networkStatus = originalNetworkStatus;
