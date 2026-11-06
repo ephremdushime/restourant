@@ -672,6 +672,11 @@ function requireAuth(allowedRoles?: string[]) {
       return res.status(401).json({ success: false, error: 'Customer account is no longer active. Please contact restaurant reception.' });
     }
     if (process.env.NODE_ENV === 'production' &&
+        session.role === 'super_admin' &&
+        !isCurrentSuperAdminSession(session)) {
+      return res.status(401).json({ success: false, error: 'Super Admin credentials changed. Please sign in again.' });
+    }
+    if (process.env.NODE_ENV === 'production' &&
         session.role === 'restaurant_admin' &&
         !isCurrentRestaurantAdminSession(session)) {
       return res.status(401).json({ success: false, error: 'Restaurant administrator credentials changed. Please sign in again.' });
@@ -1120,6 +1125,24 @@ function verifyRestaurantAdminCredentials(
   return !isProduction && typeof password === 'string' && password.length >= 6;
 }
 
+function getSuperAdminAuthVersion(password: string): string {
+  return crypto.createHmac('sha256', MASTER_KEY)
+    .update(`RESTOPASS_SUPERADMIN_AUTH:${password}`)
+    .digest('hex');
+}
+
+/** Password rotation immediately invalidates existing production Super Admin sessions. */
+function isCurrentSuperAdminSession(
+  session: UserSession,
+  raw: NodeJS.ProcessEnv = process.env
+): boolean {
+  if (!session || session.role !== 'super_admin') return false;
+  const password = raw.RESTOPASS_SUPERADMIN_PASSWORD || raw.SUPERADMIN_PASSWORD;
+  if (!password) return raw.NODE_ENV !== 'production';
+  const expectedVersion = getSuperAdminAuthVersion(password);
+  return typeof session.authVersion === 'string' && timingSafeCompare(session.authVersion, expectedVersion);
+}
+
 function getRestaurantAdminAuthVersion(restaurantCode: string, account: { username: string; password: string }): string {
   return crypto.createHmac('sha256', MASTER_KEY)
     .update(`RESTOPASS_ADMIN_AUTH:${restaurantCode.trim().toUpperCase()}:${account.username.toLowerCase()}:${account.password}`)
@@ -1172,6 +1195,7 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
       username: safeSuperUsername,
       role: 'super_admin',
       restaurantCode: 'ALL',
+      ...(configuredSuperAdminPassword ? { authVersion: getSuperAdminAuthVersion(configuredSuperAdminPassword) } : {}),
     });
     return res.json({
       success: true,
@@ -3998,6 +4022,8 @@ export {
   isActiveStationSession,
   isActiveCustomerSession,
   findCustomerForLogin,
+  getSuperAdminAuthVersion,
+  isCurrentSuperAdminSession,
   applySyncDeletionTombstones,
   canMergeTenantScopedRecord,
   resolveRestaurantAdminAccount,
