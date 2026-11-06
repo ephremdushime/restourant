@@ -7273,6 +7273,33 @@ export class RestoStore {
    * Once the Boss approves a new registration, the customer can immediately set their
    * personal 6+ digit PIN on the Customer Portal without needing a magic link or WhatsApp link.
    */
+  public async getCustomerRegistrationStatus(
+    phone: string,
+    restaurantCode: string
+  ): Promise<{ status: 'needs_pin_setup' | 'ready_for_login' | 'pending_reception_payment' | 'pending_boss_approval' | 'rejected' | 'not_found' | 'unavailable'; memberNo?: string; error?: string }> {
+    if (typeof window !== 'undefined' && navigator.onLine) {
+      try {
+        const response = await fetch('/api/customer/registration/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone, restaurantCode }),
+        });
+        const result = await response.json();
+        if (response.ok && result.success && result.status) {
+          return { status: result.status, memberNo: result.memberNo };
+        }
+        return { status: response.status === 404 ? 'not_found' : 'unavailable', error: result.error || 'Unable to verify registration status.' };
+      } catch {
+        if ((import.meta as any).env?.PROD === true) {
+          return { status: 'unavailable', error: 'Cannot reach RestoPass. Reconnect and try again.' };
+        }
+      }
+    } else if ((import.meta as any).env?.PROD === true) {
+      return { status: 'unavailable', error: 'An internet connection is required to verify your registration.' };
+    }
+    return this.checkCustomerPortalStatus(phone, restaurantCode);
+  }
+
   public checkCustomerPortalStatus(
     phoneOrMember: string,
     restaurantCode?: string
@@ -7421,10 +7448,6 @@ export class RestoStore {
       const cleanIdentifier = params.phoneOrMember.trim();
       const cleanPin = params.newPin.trim();
       const cleanCode = (params.activationCode || '').trim();
-      const status = this.checkCustomerPortalStatus(cleanIdentifier, params.restaurantCode);
-      if (!cleanCode && status.status !== 'needs_pin_setup') {
-        return { success: false, error: 'Reception payment must be confirmed before you can set your PIN.' };
-      }
       if (!/^\\d{6,}$/.test(cleanPin)) {
         return { success: false, error: 'PIN must be at least 6 numeric digits.' };
       }
@@ -7738,7 +7761,7 @@ export class RestoStore {
             this.setRestaurantCode(data.customer.restaurantCode);
           }
           this.setRole('customer');
-          this.pullStateFromServer();
+          await this.pullStateFromServer();
           return { success: true, customer: this.getCurrentCustomer() || undefined };
         }
         if (productionBuild) {
