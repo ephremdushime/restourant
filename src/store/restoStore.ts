@@ -5762,6 +5762,126 @@ export class RestoStore {
   }
 
   /**
+   * Reception confirms payment for a customer who self-registered online.
+   * This is a separate event from registration and from final boss approval.
+   */
+  public confirmRegistrationPayment(data: {
+    customerId: string;
+    packageId?: string;
+    platesRequested: number;
+    amountRwf: number;
+    paymentMethod: PaymentMethod;
+    paymentReference: string;
+    registeredByStaffId: string;
+    registeredByStaffName: string;
+    stationId: string;
+    stationName: string;
+  }): { success: boolean; approval?: PendingApproval; error?: string } {
+    const customer = this.state.customers.find((c) => c.id === data.customerId);
+    if (!customer) return { success: false, error: 'Customer not found' };
+    if (customer.registrationStatus !== 'pending_reception_payment' || customer.receptionPaymentStatus === 'confirmed') {
+      return { success: false, error: 'This customer is not awaiting reception payment confirmation.' };
+    }
+    if (!Number.isInteger(data.platesRequested) || data.platesRequested < 1 ||
+        !Number.isFinite(data.amountRwf) || data.amountRwf <= 0) {
+      return { success: false, error: 'Select a valid meal package and payment amount.' };
+    }
+    const paymentReference = data.paymentReference.trim().toUpperCase();
+    if (data.paymentMethod !== 'cash' && !paymentReference) {
+      return { success: false, error: 'Enter the payment transaction reference.' };
+    }
+    if (paymentReference && (this.state.pendingApprovals || []).some(
+      (a) => a.restaurantCode === customer.restaurantCode && a.paymentReference.toUpperCase() === paymentReference
+    )) {
+      return { success: false, error: 'This payment reference has already been recorded.' };
+    }
+
+    const now = new Date().toISOString();
+    const pkg = data.packageId ? this.state.packages.find((p) => p.id === data.packageId && p.restaurantCode === customer.restaurantCode) : null;
+    const approvalId = `appr_reg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const approval: PendingApproval = {
+      id: approvalId,
+      restaurantCode: customer.restaurantCode,
+      branchId: customer.branchId || 'br_rw01_main',
+      branchName: customer.branchName || 'Main Dining Hall',
+      type: 'new_customer',
+      customerId: customer.id,
+      customerName: customer.name,
+      customerPhone: customer.phone,
+      customerPhoto: customer.photoUrl,
+      memberNo: customer.memberNo,
+      packageId: pkg?.id,
+      packageName: pkg?.name || `${data.platesRequested} Custom Plates`,
+      platesRequested: data.platesRequested,
+      amountRwf: data.amountRwf,
+      paymentMethod: data.paymentMethod,
+      paymentReference: paymentReference || `CASH-${approvalId}`,
+      registeredByStaffId: data.registeredByStaffId,
+      registeredByStaffName: data.registeredByStaffName,
+      stationId: data.stationId,
+      stationName: data.stationName,
+      gracePlatesAllowed: 4,
+      gracePlatesConsumed: 0,
+      createdAt: now,
+      status: 'pending',
+      requiresSuperAdminCoSign: data.platesRequested > 120,
+      coSignStatus: data.platesRequested > 120 ? 'pending_super_admin' : 'not_required',
+    };
+    if (!this.state.pendingApprovals) this.state.pendingApprovals = [];
+    this.state.pendingApprovals.unshift(approval);
+
+    customer.registrationStatus = 'pending_boss_approval';
+    customer.receptionPaymentStatus = 'confirmed';
+    customer.receptionPaymentConfirmedAt = now;
+    customer.receptionPaymentConfirmedBy = data.registeredByStaffName;
+    customer.receptionPaymentReference = approval.paymentReference;
+    customer.provisionalStatus = 'pending_approval';
+    customer.activationStatus = 'partial_active';
+    customer.cardStatus = 'active';
+    customer.gracePlatesAllowed = 4;
+    customer.gracePlatesConsumed = 0;
+    customer.gracePlatesRemaining = 4;
+    customer.pendingApprovalId = approvalId;
+
+    this.logAudit({
+      restaurantCode: customer.restaurantCode,
+      branchId: approval.branchId,
+      branchName: approval.branchName,
+      actorRole: 'reception',
+      actorName: data.registeredByStaffName,
+      action: 'REGISTRATION_PAYMENT_CONFIRMED',
+      details: `Reception confirmed ${data.amountRwf.toLocaleString()} RWF for customer #${customer.memberNo} via ${data.paymentMethod.toUpperCase()} (Ref: ${approval.paymentReference}). Account partially activated with up to 4 grace plates; awaiting boss approval.`,
+    });
+    this.sendNotification({
+      restaurantCode: customer.restaurantCode,
+      target: 'all',
+      senderRole: 'system',
+      senderName: data.stationName,
+      type: 'system_broadcast',
+      title: `Payment Confirmed: New Customer #${customer.memberNo}`,
+      message: `Reception confirmed payment for ${customer.name}. Final registration approval is awaiting the Restaurant Boss.`,
+      priority: 'important',
+      actionTab: 'approvals',
+    });
+    this.sendNotification({
+      restaurantCode: customer.restaurantCode,
+      target: customer.id,
+      targetName: `${customer.name} (#${customer.memberNo})`,
+      senderRole: 'system',
+      senderName: data.stationName,
+      type: 'topup_success',
+      title: 'Payment Confirmed — PIN Setup Available',
+      message: 'Your payment has been confirmed at reception. You may now set your PIN and access your limited onboarding dashboard. Your full account and physical card will be activated after boss approval.',
+      priority: 'important',
+      actionTab: 'my_card',
+    });
+    this.scheduleSaveState();
+    this.pushStateToServer();
+    this.notify();
+    return { success: true, approval };
+  }
+
+  /**
    * Scanner station user / reception records a provisional recharge when boss is away.
    * Keeps existing approved customers active while their top-up request is pending,
    * and preserves any prior grace consumption without resetting the counter.
