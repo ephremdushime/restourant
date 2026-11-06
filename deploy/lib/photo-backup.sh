@@ -3,7 +3,8 @@
 set -Eeuo pipefail
 
 photo_backup_key() {
-  local root_dir="$1" env_file="$root_dir/.env" key="${RESTOPASS_BACKUP_ENCRYPTION_KEY:-}"
+  local root_dir="$1" env_file key="${RESTOPASS_BACKUP_ENCRYPTION_KEY:-}"
+  env_file="$root_dir/.env"
   if [[ -z "$key" && -f "$env_file" ]]; then
     key="$(sed -n 's/^RESTOPASS_BACKUP_ENCRYPTION_KEY=//p' "$env_file" | head -n 1 | tr -d '"\r')"
   fi
