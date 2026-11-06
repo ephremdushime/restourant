@@ -39,21 +39,24 @@ Generate independent random secrets. Do not reuse the examples in .env.example:
     openssl rand -hex 32   # POSTGRES_PASSWORD
     openssl rand -hex 32   # REDIS_PASSWORD
     openssl rand -hex 24   # RESTOPASS_SUPERADMIN_PASSWORD
-    openssl rand -hex 24   # RESTOPASS_BOSS_PASSWORD
+    openssl rand -hex 24   # unique password for each restaurant administrator
+    openssl rand -hex 32   # RESTOPASS_BACKUP_ENCRYPTION_KEY
 
 Set these values in the root .env file:
 
 - NODE_ENV=production
 - RESTOPASS_DEPLOYMENT_MODE=cloud
 - SESSION_SECRET, RESTOPASS_MASTER_SECRET
-- RESTOPASS_SUPERADMIN_PASSWORD, RESTOPASS_BOSS_PASSWORD
+- RESTOPASS_SUPERADMIN_PASSWORD
+- RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS: JSON keyed by restaurant code, with a unique username and password (16+ characters; 32+ recommended) for each tenant, for example `{"RW01":{"username":"manager@restaurant.rw","password":"<unique-secret>"}}`.
+- RESTOPASS_BACKUP_ENCRYPTION_KEY: 64-character random hex key; store a recovery copy separately from the VPS and backup files.
 - POSTGRES_PASSWORD, REDIS_PASSWORD
 - TRUST_PROXY=loopback only when a host-local reverse proxy is the sole trusted proxy. Otherwise configure the exact trusted proxy topology; do not blindly trust all forwarded headers.
 - Keep MTN_COLLECTIONS_ENABLED=false until the MTN Collections adapter and reconciliation tests are implemented.
 
 The Compose stack uses PostgreSQL on a private Docker network and explicitly sets PGSSLMODE=disable with ALLOW_INSECURE_DB_TLS=true for that internal connection. Do not reuse that exception for a database reached over a public or untrusted network. For a managed/external database, use TLS certificate verification (verify-full) and remove the insecure-TLS exception.
 
-The current restaurant-admin credential is a shared environment password, not a per-user identity system. Treat this as a controlled single-restaurant pilot limitation; do not onboard multiple independent restaurant tenants until individual administrator accounts and credential lifecycle controls are implemented.
+Production restaurant-admin credentials are configured per tenant. The login username is fixed to the configured tenant account, and changing its username or password invalidates existing administrator sessions. This is one administrator account per tenant; multiple named administrators within one restaurant still require a dedicated account-management workflow.
 
 ## 4. Validate and start
 
@@ -71,15 +74,15 @@ Configure the reverse proxy to forward HTTPS requests to http://127.0.0.1:3000. 
 
 ## 5. Backups and restore drills
 
-The PostgreSQL backup script creates a custom-format dump, restricts local file permissions, writes a SHA-256 checksum and applies a default 14-day local retention period:
+The PostgreSQL backup script streams a custom-format dump through AES-256-CBC encryption (PBKDF2, 600,000 iterations) before writing it to disk. It writes a SHA-256 transfer checksum and a separate HMAC-SHA256 authentication tag, restricts local file permissions and applies a default 14-day local retention period. The encryption key must be stored separately from the backup files:
 
     bash deploy/backup-postgres.sh
 
 Verify a backup by restoring it into a temporary database. This does not modify the live production database:
 
-    bash deploy/verify-postgres-backup.sh backups/postgres/restopass_YYYYMMDDTHHMMSSZ.dump
+    bash deploy/verify-postgres-backup.sh backups/postgres/restopass_YYYYMMDDTHHMMSSZ.dump.enc
 
-Schedule the backup script at least daily using the host's scheduler. **The script creates a local backup only.** Copy the backup and checksum to a separate, access-controlled off-server location; use encrypted storage and a separate credential. A backup on the same VPS is not disaster recovery. Perform and record a restore verification at least weekly and after schema migrations.
+Schedule the backup script at least daily using the host's scheduler. **The script creates a local backup only.** Copy the encrypted dump, `.sha256` checksum and `.hmac` tag to a separate, access-controlled off-server location. Store `RESTOPASS_BACKUP_ENCRYPTION_KEY` in a separate password manager or secret manager; losing that key makes the backup unrecoverable. A backup on the same VPS is not disaster recovery. Perform and record a restore verification at least weekly and after schema migrations.
 
 Also protect the persistent Docker volumes for PostgreSQL and customer uploads. Do not treat container images or the app's local JSON snapshot as a backup strategy.
 
