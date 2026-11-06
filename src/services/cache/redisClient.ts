@@ -10,8 +10,76 @@ import Redis from 'ioredis';
 import crypto from 'node:crypto';
 
 let redisInstance: Redis | null = null;
+const memoryRateLimits = new Map<string, { count: number; resetAt: number }>();
 const memoryReplayCache = new Map<string, number>();
 const memoryRevokedSessions = new Map<string, number>();
+
+
+export type RateLimitResult =
+  | { allowed: true; remaining: number; retryAfterSeconds: number; available: true }
+  | { allowed: false; remaining: 0; retryAfterSeconds: number; available: true }
+  | { allowed: false; remaining: 0; retryAfterSeconds: number; available: false };
+
+/**
+ * Distributed fixed-window rate limiting. Redis INCR + first-write PEXPIRE
+ * execute atomically in Lua so multiple application instances share one quota.
+ * If Redis is configured but unavailable, callers must fail closed.
+ */
+export async function consumeRateLimit(
+  bucket: string,
+  subject: string,
+  maxRequests: number,
+  windowMs: number
+): Promise<RateLimitResult> {
+  const safeBucket = bucket.replace(/[^a-zA-Z0-9:_-]/g, '_').slice(0, 80);
+  const safeSubject = crypto.createHash('sha256').update(subject).digest('hex');
+  const safeMax = Math.max(1, Math.floor(maxRequests));
+  const safeWindow = Math.max(1000, Math.floor(windowMs));
+  const client = getRedisClient();
+
+  if (isRedisConfigured()) {
+    if (!client) {
+      return { allowed: false, remaining: 0, retryAfterSeconds: Math.ceil(safeWindow / 1000), available: false };
+    }
+    try {
+      if (client.status !== 'ready') await client.ping();
+      const result = await client.eval(
+        `local count = redis.call('INCR', KEYS[1])
+         if count == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
+         local ttl = redis.call('PTTL', KEYS[1])
+         return { count, ttl }`,
+        1,
+        `restopass:rate:${safeBucket}:${safeSubject}`,
+        String(safeWindow)
+      ) as [number, number];
+      const count = Number(result?.[0] || 0);
+      const ttl = Math.max(1000, Number(result?.[1] || safeWindow));
+      const retryAfterSeconds = Math.max(1, Math.ceil(ttl / 1000));
+      if (!Number.isFinite(count) || count < 1) throw new Error('Redis returned an invalid rate-limit counter.');
+      if (count > safeMax) {
+        return { allowed: false, remaining: 0, retryAfterSeconds, available: true };
+      }
+      return { allowed: true, remaining: Math.max(0, safeMax - count), retryAfterSeconds, available: true };
+    } catch (err: any) {
+      console.error('[Redis Rate Limiter] Distributed rate limit unavailable:', err?.message || err);
+      return { allowed: false, remaining: 0, retryAfterSeconds: Math.ceil(safeWindow / 1000), available: false };
+    }
+  }
+
+  // Standalone/local deployments are single-process by design.
+  const now = Date.now();
+  const memoryKey = `${safeBucket}:${safeSubject}`;
+  const existing = memoryRateLimits.get(memoryKey);
+  const record = !existing || now >= existing.resetAt
+    ? { count: 1, resetAt: now + safeWindow }
+    : { count: existing.count + 1, resetAt: existing.resetAt };
+  memoryRateLimits.set(memoryKey, record);
+  const retryAfterSeconds = Math.max(1, Math.ceil((record.resetAt - now) / 1000));
+  if (record.count > safeMax) {
+    return { allowed: false, remaining: 0, retryAfterSeconds, available: true };
+  }
+  return { allowed: true, remaining: Math.max(0, safeMax - record.count), retryAfterSeconds, available: true };
+}
 
 export function isRedisConfigured(): boolean {
   return Boolean(process.env.REDIS_URL);
@@ -184,6 +252,7 @@ export async function isTokenUsed(tokenKey: string): Promise<boolean> {
  * Resets memory cache (useful for automated testing)
  */
 export function resetMemoryCache(): void {
+  memoryRateLimits.clear();
   memoryReplayCache.clear();
   memoryRevokedSessions.clear();
 }
@@ -200,6 +269,7 @@ export async function closeRedis(): Promise<void> {
     }
     redisInstance = null;
   }
+  memoryRateLimits.clear();
   memoryReplayCache.clear();
 }
 
