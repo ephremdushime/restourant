@@ -3589,6 +3589,7 @@ export class RestoStore {
   ): { success: boolean; customer?: Customer; error?: string } {
     const customer = this.state.customers.find((c) => c.id === customerId);
     if (!customer) return { success: false, error: 'Member not found' };
+    if (updates.photoUrl?.startsWith('data:')) return { success: false, error: 'Photo data must be uploaded through the authenticated photo service.' };
 
     const checkPhone = updates.phone || customer.phone;
     const checkIdType = updates.idType || customer.idType;
@@ -3613,7 +3614,6 @@ export class RestoStore {
     }
 
     if (updates.name) customer.name = updates.name.trim();
-    if (updates.photoUrl?.startsWith('data:')) return { success: false, error: 'Photo data must be uploaded through the authenticated photo service.' };
     if (updates.photoUrl) customer.photoUrl = updates.photoUrl;
     if (updates.occupation !== undefined) customer.occupation = updates.occupation;
     if (updates.isStudent !== undefined) customer.isStudent = updates.isStudent;
