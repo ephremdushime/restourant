@@ -45,20 +45,19 @@ export const SyncSimulationDrawer: React.FC<SyncSimulationDrawerProps> = ({
     setTimeout(() => {
       restoStore.syncPendingOutbox();
       setIsSyncing(false);
-      setDrillSuccessMessage('Local authority pushed all pending outbox events to central cloud mirror.');
+      setDrillSuccessMessage('Sync attempt submitted. Events remain pending until the server explicitly acknowledges them.');
       setTimeout(() => setDrillSuccessMessage(null), 3000);
     }, 800);
   };
 
   const handleNightlyBackupDrill = () => {
-    const ts = restoStore.triggerNightlyBackup();
-    setDrillSuccessMessage(`Encrypted snapshot generated & verified: ${new Date(ts).toLocaleTimeString()}`);
-    setTimeout(() => setDrillSuccessMessage(null), 4000);
+    setDrillSuccessMessage('No backup was run in this browser. On the configured production host, run: bash deploy/backup-all.sh');
+    setTimeout(() => setDrillSuccessMessage(null), 7000);
   };
 
   const handleSimulateReplacementMachineRestore = () => {
-    setDrillSuccessMessage('Replacement Mini PC drill successful: Local SQLite/PostgreSQL schema restored from central cloud snapshot.');
-    setTimeout(() => setDrillSuccessMessage(null), 4000);
+    setDrillSuccessMessage('No restore was run. After creating a backup, verify it on the configured host with: bash deploy/verify-latest-paired-backup.sh');
+    setTimeout(() => setDrillSuccessMessage(null), 7000);
   };
 
   return (
@@ -264,8 +263,8 @@ export const SyncSimulationDrawer: React.FC<SyncSimulationDrawerProps> = ({
           </div>
 
           {drillSuccessMessage && (
-            <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-700 text-emerald-300 text-xs flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <div className="p-3 rounded-xl bg-amber-950/80 border border-amber-700 text-amber-300 text-xs flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
               <span>{drillSuccessMessage}</span>
             </div>
           )}
@@ -302,7 +301,7 @@ export const SyncSimulationDrawer: React.FC<SyncSimulationDrawerProps> = ({
               <span>Disaster Recovery &amp; Replacement PC Drill</span>
             </div>
             <p className="text-[11px] text-slate-400 leading-relaxed">
-              In case of hardware failure or power surge, an encrypted local database snapshot is pushed nightly to the cloud mirror.
+              Production scripts support encrypted PostgreSQL and private-photo backups plus isolated restore verification. Configure and verify the server-side schedule; this browser panel does not create or restore backups.
             </p>
 
             <div className="flex flex-col gap-2 pt-1">
@@ -310,7 +309,7 @@ export const SyncSimulationDrawer: React.FC<SyncSimulationDrawerProps> = ({
                 onClick={handleNightlyBackupDrill}
                 className="w-full py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-medium text-xs flex items-center justify-between transition-colors"
               >
-                <span>Trigger Nightly Encrypted Backup</span>
+                <span>Show Production Backup Command</span>
                 <HardDriveDownload className="w-4 h-4 text-emerald-400" />
               </button>
 
@@ -318,7 +317,7 @@ export const SyncSimulationDrawer: React.FC<SyncSimulationDrawerProps> = ({
                 onClick={handleSimulateReplacementMachineRestore}
                 className="w-full py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-medium text-xs flex items-center justify-between transition-colors"
               >
-                <span>Simulate Machine Failure Restore</span>
+                <span>Show Restore Verification Command</span>
                 <RefreshCw className="w-4 h-4 text-amber-400" />
               </button>
             </div>
