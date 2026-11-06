@@ -11,6 +11,7 @@ import {
   sanitizeSensitiveState,
   normalizeStationUserCredentials,
   verifyServerCustomerPin,
+  verifyStationUserCredentials,
   UserSession,
 } from '../server';
 import { restoStore } from '../src/store/restoStore';
@@ -178,6 +179,33 @@ describe('Server API Security, Session Engine & Role Scoping', () => {
       memberNo: stationUser.username,
       pinHash: stationUser.pinHash,
     }), false);
+  });
+
+  test('authenticates migrated station users with scrypt hashes and rejects blocked users', () => {
+    const stationUser: any = {
+      id: 'station_auth_1',
+      username: 'cashier_auth',
+      status: 'active',
+      authType: 'both',
+      pin: '654321',
+      passwordHash: 'LegacyStaffPassword#2026',
+    };
+    normalizeStationUserCredentials({ stationUsers: [stationUser] });
+
+    assert.equal(stationUser.pin, undefined);
+    assert.match(stationUser.pinHash, /^scrypt\\$16384\\$8\\$1\\$/);
+    assert.match(stationUser.passwordHash, /^scrypt\\$16384\\$8\\$1\\$/);
+    assert.equal(verifyStationUserCredentials('654321', stationUser), true);
+    assert.equal(verifyStationUserCredentials('LegacyStaffPassword#2026', stationUser), true);
+    assert.equal(verifyStationUserCredentials('incorrect', stationUser), false);
+
+    stationUser.status = 'blocked';
+    assert.equal(verifyStationUserCredentials('654321', stationUser), false);
+
+    stationUser.status = 'active';
+    stationUser.authType = 'pin8';
+    assert.equal(verifyStationUserCredentials('LegacyStaffPassword#2026', stationUser), false);
+    assert.equal(verifyStationUserCredentials('654321', stationUser), true);
   });
 
   test('redacts PINs, password hashes, recovery codes and replay state from every client payload', () => {
