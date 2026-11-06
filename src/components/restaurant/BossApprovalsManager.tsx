@@ -22,6 +22,7 @@ import {
   Printer,
 } from 'lucide-react';
 import { CardFrontView, CardBackView } from './CardPrintStudio';
+import { PrivatePhoto } from '../common/PrivatePhoto';
 
 interface BossApprovalsManagerProps {
   restaurantCode: string;
@@ -257,7 +258,7 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
                 {/* Header row: Customer identity & Request Type badge */}
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 border-b border-slate-800 pb-3">
                   <div className="flex items-center gap-3.5">
-                    <img
+                    <PrivatePhoto
                       src={appr.customerPhoto || customer?.photoUrl || '/src/assets/images/avatar_student_male_1790979380050.jpg'}
                       alt={appr.customerName}
                       className="w-12 h-12 rounded-xl object-cover border border-slate-700 shrink-0 shadow-sm"
@@ -544,7 +545,7 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
                 <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <img
+                      <PrivatePhoto
                         src={approvedModalData.customer.photoUrl}
                         alt={approvedModalData.customer.name}
                         className="w-11 h-11 rounded-xl object-cover border border-slate-700"
