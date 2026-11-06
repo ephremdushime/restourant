@@ -1045,8 +1045,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   const result = await restoStore.activateComplimentarySubscription({
                     customerId: compCustomerId,
                     reason: compReason.trim(),
-                    durationDays: Number(compDays) || 30,
-                    grantedBy: 'Ephrem (Super Admin)',
+                    durationDays: 30,
                   });
                   if (!result.success) {
                     setCompError(result.error || 'Failed to grant complimentary access.');
