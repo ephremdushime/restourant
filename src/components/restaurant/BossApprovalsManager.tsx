@@ -371,7 +371,7 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
                   <div className="flex items-center gap-2">
                     <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
                     <span>
-                      Grace Plates Consumed at Stand: <strong>{graceConsumed} of 3 plates</strong>
+                      Grace Plates Consumed at Stand: <strong>{graceConsumed} of {appr.gracePlatesAllowed ?? (appr.type === 'new_customer' ? 4 : 3)} plates</strong>
                     </span>
                   </div>
 
@@ -570,7 +570,7 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
                     </div>
                   </div>
 
-                  {/* Net Balance Breakdown minus Consumed Grace Meals (< 3) */}
+                  {/* Net Balance Breakdown minus consumed grace plates */}
                   <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 text-xs flex items-center justify-between">
                     <div className="text-slate-300">
                       <span>Grace Meals Reconciled: </span>
