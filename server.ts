@@ -5145,6 +5145,7 @@ function checkServerStudentEntitlement(
 } {
   ensureServerDbDefaults(targetState);
   const settings = targetState?.studentSubscriptionSettings;
+  const graceDays = Number.isSafeInteger(Number(settings?.graceDays)) ? Math.min(365, Math.max(0, Number(settings.graceDays))) : 3;
 
   // Physical card QR scanning NEVER requires a dashboard subscription
   if (feature === 'physical_card_scan') {
@@ -5196,7 +5197,7 @@ function checkServerStudentEntitlement(
   }
   if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'active' && (lifecycleSub?.status === 'active' || lifecycleSub?.status === 'grace_period')) {
     const paidEnd = new Date(lifecycleSub.currentPeriodEnd || 0).getTime();
-    const graceEnd = new Date(lifecycleSub.gracePeriodEnd || paidEnd + (settings?.graceDays || 3) * 86400000).getTime();
+    const graceEnd = new Date(lifecycleSub.gracePeriodEnd || paidEnd + graceDays * 86400000).getTime();
     if (graceEnd && lifecycleNow > graceEnd) {
       lifecycleSub.status = 'expired';
       lifecycleCustomer.customerAccessStatus = 'payment_required';
@@ -5284,7 +5285,7 @@ function checkServerStudentEntitlement(
   const endMs = sub.currentPeriodEnd ? new Date(sub.currentPeriodEnd).getTime() : 0;
   const graceMs = sub.gracePeriodEnd
     ? new Date(sub.gracePeriodEnd).getTime()
-    : endMs + (settings.graceDays || 3) * 24 * 3600 * 1000;
+    : endMs + graceDays * 24 * 3600 * 1000;
 
   if (sub.status === 'active') {
     if (now <= endMs) {
