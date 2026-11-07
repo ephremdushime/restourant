@@ -613,8 +613,10 @@ export interface StudentSubscriptionPayment {
   phoneNumber: string;
   providerTransactionId?: string;
   amountRwf: number;
+  monthsPurchased?: number;
+  monthlyPriceRwf?: number;
   currency: string;
-  status: 'pending' | 'verified' | 'failed';
+  status: 'created' | 'provider_pending' | 'pending' | 'verified' | 'failed' | 'review_required';
   initiatedAt: string;
   verifiedAt?: string;
   failureReason?: string;
