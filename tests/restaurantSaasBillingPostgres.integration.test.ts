@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
+import { calculateComplimentaryEnd } from '../src/services/restaurantSaasBilling';
 
 test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant entitlement', { skip: !databaseUrl }, async () => {
   process.env.NODE_ENV = 'test';
@@ -22,6 +23,8 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
   const suffix = Math.random().toString(36).slice(2, 8).toUpperCase();
   const restaurantCode = 'SA' + suffix;
   const otherRestaurantCode = 'SB' + suffix;
+  const freeRestaurantCode = 'SC' + suffix;
+  const freeCreatedAt = new Date().toISOString();
   const payer = '250788123456';
   const restaurant = {
     code: restaurantCode,
@@ -37,14 +40,26 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     status: 'pending_payment',
     saasSubscriptionPriceRwf: 65000,
   };
+  const freeRestaurant = {
+    code: freeRestaurantCode,
+    name: 'Complimentary SaaS Billing Tenant',
+    planId: 'plan_integration',
+    status: 'pending_payment',
+    createdAt: freeCreatedAt,
+    saasSubscriptionPriceRwf: 65000,
+    saasComplimentaryDurationValue: 3,
+    saasComplimentaryDurationUnit: 'months',
+    saasRenewalGraceDays: 5,
+  };
 
   await pool!.query(
-    'INSERT INTO restaurants (code,name,status,data) VALUES ($1,$2,$3,$4),($5,$6,$7,$8)',
+    'INSERT INTO restaurants (code,name,status,data) VALUES ($1,$2,$3,$4),($5,$6,$7,$8),($9,$10,$11,$12)',
     [restaurantCode, restaurant.name, 'pending_payment', JSON.stringify(restaurant),
-      otherRestaurantCode, otherRestaurant.name, 'pending_payment', JSON.stringify(otherRestaurant)]
+      otherRestaurantCode, otherRestaurant.name, 'pending_payment', JSON.stringify(otherRestaurant),
+      freeRestaurantCode, freeRestaurant.name, 'pending_payment', JSON.stringify(freeRestaurant)]
   );
   serverModule.setServerDbState({
-    restaurants: [restaurant, otherRestaurant],
+    restaurants: [restaurant, otherRestaurant, freeRestaurant],
     plans: [{ id: 'plan_integration', terms: { maxScanPointsIncluded: 3 } }],
     licenses: [],
     customers: [], scanPoints: [], packages: [], pendingApprovals: [],
@@ -58,6 +73,10 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
   const otherAdminToken = serverModule.createSessionToken({
     userId: 'admin_' + otherRestaurantCode, username: 'other.admin',
     role: 'restaurant_admin', restaurantCode: otherRestaurantCode,
+  });
+  const freeAdminToken = serverModule.createSessionToken({
+    userId: 'admin_' + freeRestaurantCode, username: 'free.admin',
+    role: 'restaurant_admin', restaurantCode: freeRestaurantCode,
   });
   const superAdminToken = serverModule.createSessionToken({
     userId: 'saas_test_super_admin', username: 'saas.test.superadmin', role: 'super_admin', restaurantCode: 'GLOBAL',
@@ -108,6 +127,25 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
   };
 
   try {
+    // Complimentary onboarding starts the free term immediately, grants a temporary
+    // server-issued licence, and blocks payment until the free term has ended.
+    const complimentary = await request(
+      'GET', '/api/restaurant-saas/subscription?restaurantCode=' + encodeURIComponent(freeRestaurantCode),
+      superAdminToken
+    );
+    assert.equal(complimentary.status, 200);
+    assert.equal(complimentary.body.subscription.status, 'complimentary');
+    const expectedComplimentaryEnd = calculateComplimentaryEnd(freeCreatedAt, 3, 'months');
+    assert.equal(new Date(complimentary.body.subscription.complimentary_ends_at).getTime(), Date.parse(expectedComplimentaryEnd));
+    const freeLicense = await pool!.query('SELECT id,valid_until FROM licenses WHERE restaurant_code=$1', [freeRestaurantCode]);
+    assert.equal(freeLicense.rowCount, 1);
+    assert.equal(new Date(freeLicense.rows[0].valid_until).getTime(), Date.parse(expectedComplimentaryEnd));
+    const blockedDuringFree = await request('POST', '/api/restaurant-saas/payment/initiate', freeAdminToken, {
+      payerMsisdn: '+250 788 123 456', idempotencyKey: 'saas-free-' + freeRestaurantCode + '-001', months: 1,
+    });
+    assert.equal(blockedDuringFree.status, 409);
+    assert.equal(blockedDuringFree.body.code, 'COMPLIMENTARY_PERIOD_ACTIVE');
+
     // Super Admin browser sync must not be able to manufacture a paid licence.
     const syncLicenseBypass = await request('POST', '/api/sync', superAdminToken, {
       fullState: {
@@ -245,6 +283,36 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     );
     assert.equal(repeatedMismatch.body.status, 'review_required');
 
+    // Once the complimentary end date passes, the restaurant can make its first payment.
+    await pool!.query(
+      "UPDATE restaurant_subscriptions SET complimentary_ends_at=NOW()-INTERVAL '1 second' WHERE restaurant_code=$1",
+      [freeRestaurantCode]
+    );
+    const complimentaryExpired = await request(
+      'GET', '/api/restaurant-saas/subscription?restaurantCode=' + encodeURIComponent(freeRestaurantCode),
+      superAdminToken
+    );
+    assert.equal(complimentaryExpired.status, 200);
+    assert.equal(complimentaryExpired.body.subscription.status, 'pending_payment');
+    providerStatus = 'SUCCESSFUL';
+    providerAmount = '65000';
+    const firstPaidMonth = await request('POST', '/api/restaurant-saas/payment/initiate', freeAdminToken, {
+      payerMsisdn: '+250 788 123 456', idempotencyKey: 'saas-free-' + freeRestaurantCode + '-002', months: 1,
+    });
+    assert.equal(firstPaidMonth.status, 202);
+    const firstPaidVerified = await request(
+      'POST', '/api/restaurant-saas/payment/' + encodeURIComponent(firstPaidMonth.body.paymentId) + '/verify',
+      freeAdminToken, {}
+    );
+    assert.equal(firstPaidVerified.status, 200);
+    assert.equal(firstPaidVerified.body.status, 'successful');
+    const firstPaidPeriod = await pool!.query(
+      'SELECT current_period_start,current_period_end,status FROM restaurant_subscriptions WHERE restaurant_code=$1',
+      [freeRestaurantCode]
+    );
+    assert.equal(firstPaidPeriod.rows[0].status, 'active');
+    assert.ok(Date.parse(firstPaidPeriod.rows[0].current_period_start) >= Date.parse(expectedComplimentaryEnd));
+
     await pool!.query(
       "UPDATE restaurant_subscriptions SET status='restricted',current_period_end=NOW()-INTERVAL '73 hours' WHERE restaurant_code=$1",
       [restaurantCode]
@@ -259,7 +327,7 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
   } finally {
     (globalThis as any).fetch = originalFetch;
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
-    await pool!.query('DELETE FROM restaurant_subscription_audit_logs WHERE restaurant_code = ANY($1::varchar[])', [[restaurantCode, otherRestaurantCode]]);
+    await pool!.query('DELETE FROM restaurant_subscription_audit_logs WHERE restaurant_code = ANY($1::varchar[])', [[restaurantCode, otherRestaurantCode, freeRestaurantCode]]);
     await pool!.query('DELETE FROM restaurant_subscription_payments WHERE restaurant_code = ANY($1::varchar[])', [[restaurantCode, otherRestaurantCode]]);
     await pool!.query('DELETE FROM restaurant_subscriptions WHERE restaurant_code = ANY($1::varchar[])', [[restaurantCode, otherRestaurantCode]]);
     await pool!.query('DELETE FROM licenses WHERE restaurant_code = ANY($1::varchar[])', [[restaurantCode, otherRestaurantCode]]);
