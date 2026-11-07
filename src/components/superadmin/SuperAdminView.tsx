@@ -1209,7 +1209,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                       className="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-white"
                     >
                       <option value="cash">Cash at reception</option>
-                      <option value="mtn_momo">MTN Mobile Money</option>
+                      
                       <option value="bank_transfer">Bank transfer</option>
                     </select>
                   </div>
