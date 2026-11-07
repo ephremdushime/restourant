@@ -188,7 +188,7 @@ export const CustomerSubscriptionPage: React.FC<CustomerSubscriptionPageProps> =
             {busy ? 'Please wait…' : 'Request MTN MoMo payment'}
           </button>
           {pendingReference && (
-            <button disabled={busy} onClick={verifyPayment} className="w-full sm:w-auto rounded-xl border border-emerald-600 text-emerald-300 hover:bg-emerald-950 disabled:opacity-50 px-5 py-3 font-bold">
+            <button disabled={busy} onClick={() => verifyPayment()} className="w-full sm:w-auto rounded-xl border border-emerald-600 text-emerald-300 hover:bg-emerald-950 disabled:opacity-50 px-5 py-3 font-bold">
               Verify payment status
             </button>
           )}
