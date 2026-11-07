@@ -99,7 +99,7 @@ export const RestaurantSaasBillingPanel: React.FC<{ restaurantCode: string; rest
         </div>
       )}
       {restricted && <div className="p-3 rounded-xl border border-amber-700 bg-amber-950/40 text-amber-200 text-sm">Your subscription is restricted. Scanner redemption and business-changing operations remain disabled until a payment is verified.</div>}
-      {sub?.status !== 'complimentary' && <div className="space-y-3">
+      {sub?.status !== 'complimentary' && Number(snapshot.priceRwf) > 0 && <div className="space-y-3">
         <h3 className="font-bold text-white">Pay with MTN MoMo</h3>
         <label className="block text-xs text-slate-400">Choose subscription duration</label>
         <select value={months} onChange={(e) => setMonths(Number(e.target.value))} className="w-full rounded-xl bg-slate-950 border border-slate-700 px-4 py-3 text-white">
