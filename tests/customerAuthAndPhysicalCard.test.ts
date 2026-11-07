@@ -328,7 +328,7 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     assert.equal(restoStore.getCustomerBalance(customer.id), initialBalance - 1);
   });
 
-  test('Step 7: Boss-approved customer waits for Super Admin free-month activation; physical card remains usable', () => {
+  test('Step 7: globally disabled customer payment grants free dashboard access; physical card remains usable', () => {
     const customer = restoStore.getState().customers.find((c) => c.name === 'Mukamana Alice');
     assert.ok(customer, 'Customer from the boss-approval workflow must exist');
 
@@ -337,11 +337,12 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
       priceRwf: 500,
     });
 
-    // New registration access is controlled by the explicit Super Admin activation,
-    // independently of the legacy global monetization toggle.
+    // Global payment enforcement is disabled during the launch promotion,
+    // so every approved customer receives free dashboard access without an
+    // individual Super Admin activation.
     const beforeActivation = restoStore.checkStudentEntitlement(customer.id, 'customer_dashboard');
-    assert.equal(beforeActivation.allowed, false);
-    assert.match(beforeActivation.reason || '', /Super Admin/i);
+    assert.equal(beforeActivation.allowed, true);
+    assert.equal(beforeActivation.status, 'complimentary');
 
     // Physical card scanning remains available while digital dashboard access is pending.
     const cardToken = generateCardToken(customer.restaurantCode, customer.memberNo, customer.cardVersion);
