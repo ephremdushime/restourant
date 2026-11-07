@@ -104,7 +104,7 @@ describe('Phase 7: Controlled Production Launch & Release Sign-Off', () => {
     assert.strictEqual(offlineRedemption, false, 'Scanner offline redemption must be permanently forbidden');
   });
 
-  test('Gate 3: Customer subscription checkout fails closed (503) without active provider onboarding', async () => {
+  test('Gate 3: Customer checkout remains unavailable while customer access is globally free', async () => {
     const customerToken = createSessionToken({
       userId: 'cust_prod_pilot_1',
       username: 'student.pilot',
@@ -126,9 +126,8 @@ describe('Phase 7: Controlled Production Launch & Release Sign-Off', () => {
       }
     );
 
-    assert.strictEqual(res.status, 503, 'Must return 503 Service Unavailable');
-    assert.strictEqual(res.body.code, 'PAYMENT_PROVIDER_NOT_CONFIGURED');
-    assert.ok(res.body.error.includes('Mobile Money checkout is not available yet'));
+    assert.strictEqual(res.status, 409, 'Free customer access must not initiate a payment');
+    assert.strictEqual(res.body.code, 'CUSTOMER_ACCESS_IS_FREE');
   });
 
   test('Gate 4: Mobile money webhook callback fails closed (503) when live adapter is disabled', async () => {
