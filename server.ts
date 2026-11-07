@@ -4548,10 +4548,10 @@ async function ensureRestaurantSaasSubscription(client: any, restaurantCode: str
   if (!found.rows[0]) return null;
   let restaurant = found.rows[0].data || {};
   const plan = (serverDbState?.plans || []).find((item: any) => item.id === restaurant.planId);
-  // Legacy tenants created before SaaS pricing existed receive a safe default
-  // that Super Admin can edit. New onboarding always supplies an explicit price.
+  // Legacy tenants without an agreed SaaS price remain billable only after
+  // Super Admin explicitly configures the amount. Never invent a price.
   const configuredPrice = Number(restaurant.saasSubscriptionPriceRwf ?? restaurant.termsOverride?.saasSubscriptionPriceRwf ?? restaurant.termsOverride?.basePriceRwf ?? plan?.terms?.basePriceRwf ?? 0);
-  const price = Number.isSafeInteger(configuredPrice) && configuredPrice > 0 ? configuredPrice : 50000;
+  const price = Number.isSafeInteger(configuredPrice) && configuredPrice > 0 ? configuredPrice : 0;
   if (Number(restaurant.saasSubscriptionPriceRwf) !== price) {
     restaurant = { ...restaurant, saasSubscriptionPriceRwf: price };
     await client.query('UPDATE restaurants SET data=$2,updated_at=NOW() WHERE code=$1', [restaurantCode, JSON.stringify(restaurant)]);
@@ -4808,6 +4808,10 @@ app.post('/api/restaurant-saas/payment/initiate', apiRateLimiter, requireAuth(['
       return res.status(409).json({ success: false, code: 'COMPLIMENTARY_PERIOD_ACTIVE', complimentaryEndsAt: subscription.complimentary_ends_at, error: 'Your complimentary access is still active. The first paid period begins after it ends.' });
     }
     const monthlyPrice = Number(subscription.price_rwf);
+    if (!Number.isSafeInteger(monthlyPrice) || monthlyPrice <= 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, code: 'SAAS_PRICE_NOT_CONFIGURED', error: 'The restaurant subscription price has not been configured by Super Admin yet.' });
+    }
     const amount = calculateSubscriptionAmount(monthlyPrice, months);
     const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ restaurantCode: req.user!.restaurantCode, payer, amount, months, currency: 'RWF' })).digest('hex');
     const prior = await client.query('SELECT * FROM restaurant_subscription_payments WHERE idempotency_key=$1 FOR UPDATE', [idempotencyKey]);
