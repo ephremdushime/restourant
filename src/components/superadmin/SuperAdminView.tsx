@@ -1641,7 +1641,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="text-slate-300 block mb-1 font-semibold">Extra Station Fee</label>
                   <input
