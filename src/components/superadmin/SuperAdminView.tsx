@@ -1524,7 +1524,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                       step={5000}
                       required
                       value={newBasePrice}
-                      onChange={(e) => setNewBasePrice(Math.max(0, parseInt(e.target.value) || 0))}
+                      onChange={(e) => setNewBasePrice(Math.max(1, parseInt(e.target.value) || 1))}
                       className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white font-mono"
                     />
                     <span className="text-[10px] text-slate-500">Monthly fee; billing uses calendar months</span>
@@ -1638,7 +1638,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                     step={5000}
                     required
                     value={editRestoBasePrice}
-                    onChange={(e) => setEditRestoBasePrice(Math.max(0, parseInt(e.target.value) || 0))}
+                    onChange={(e) => setEditRestoBasePrice(Math.max(1, parseInt(e.target.value) || 1))}
                     className="w-full p-2.5 rounded bg-slate-950 border border-slate-700 text-white font-mono focus:border-amber-500 outline-hidden"
                   />
                   <span className="text-[10px] text-slate-500">Contract base rate</span>
