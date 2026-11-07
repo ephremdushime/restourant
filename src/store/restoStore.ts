@@ -1,3 +1,4 @@
+import { calculateRenewalPeriod, calculateSubscriptionAmount } from '../services/restaurantSaasBilling';
 import {
   Restaurant,
   License,
@@ -7306,7 +7307,7 @@ export class RestoStore {
         expiresAt: promoActive ? settings.promoEndsAt : undefined,
         reason: promoActive
           ? (settings.promoMessage || 'Your account is enjoying RestoPass promotional access.')
-          : 'Customer subscription payments are currently disabled by Super Admin.',
+          : 'Customer subscription payments are disabled at launch by Super Admin.',
       };
     }
     if (lifecycleCustomer?.registrationStatus && (
@@ -7448,6 +7449,7 @@ export class RestoStore {
     customerId: string;
     phoneNumber: string;
     provider: 'mtn_momo' | 'airtel_money';
+    months?: number;
   }): { success: boolean; payment?: StudentSubscriptionPayment; instructions?: string; error?: string } {
     if (this.authToken && !this.isDemoModeActive()) {
       return { success: false, error: 'Mobile Money checkout is not connected yet. Dashboard payments will be enabled after RestoPass completes provider API onboarding.' };
@@ -7465,7 +7467,11 @@ export class RestoStore {
 
     const now = new Date().toISOString();
     const internalReference = `SUB-MOMO-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-    const subPrice = this.getStudentSubscriptionPrice(cust.restaurantCode);
+    const monthlyPrice = this.getStudentSubscriptionPrice(cust.restaurantCode);
+    const months = Number(params.months ?? 1);
+    let amountRwf: number;
+    try { amountRwf = calculateSubscriptionAmount(monthlyPrice, months); }
+    catch (error: any) { return { success: false, error: error.message }; }
 
     // Get or create subscription record in pending status
     let sub = this.state.customerSubscriptions.find((s) => s.customerId === cust.id);
@@ -7477,7 +7483,7 @@ export class RestoStore {
         restaurantCode: cust.restaurantCode,
         status: 'pending_payment',
         planName: 'Student Digital Pass',
-        priceRwf: subPrice,
+        priceRwf: monthlyPrice,
         currency: 'RWF',
         paymentMethod: params.provider,
         lastPaymentRef: internalReference,
@@ -7487,7 +7493,7 @@ export class RestoStore {
       this.state.customerSubscriptions.push(sub);
     } else {
       sub.status = 'pending_payment';
-      sub.priceRwf = subPrice;
+      sub.priceRwf = monthlyPrice;
       sub.lastPaymentRef = internalReference;
       sub.paymentMethod = params.provider;
       sub.updatedAt = now;
@@ -7502,7 +7508,9 @@ export class RestoStore {
       internalReference,
       provider: params.provider,
       phoneNumber: cleanPhone,
-      amountRwf: subPrice,
+      amountRwf,
+      monthlyPriceRwf: monthlyPrice,
+      monthsPurchased: months,
       currency: 'RWF',
       status: 'pending',
       initiatedAt: now,
@@ -7517,7 +7525,7 @@ export class RestoStore {
     return {
       success: true,
       payment,
-      instructions: `USSD payment push sent via ${providerName} to ${cleanPhone}. Please enter your PIN on your phone to complete the ${subPrice.toLocaleString()} RWF subscription.`,
+      instructions: `Payment request prepared via ${providerName} to ${cleanPhone}: ${amountRwf.toLocaleString()} RWF for ${months} calendar month(s). This local demo does not send a real payment request.`,
     };
   }
 
@@ -7541,13 +7549,20 @@ export class RestoStore {
     }
 
     const nowMs = Date.now();
-    const periodEndMs = nowMs + 30 * 24 * 3600 * 1000; // 30 calendar days
-    const graceEndMs = periodEndMs + (this.state.studentSubscriptionSettings?.graceDays || 3) * 24 * 3600 * 1000; // +72h grace
+    const verifiedAt = new Date(nowMs).toISOString();
+    const monthsPurchased = Number(payment.monthsPurchased || 1);
+    const existingSubscription = this.state.customerSubscriptions.find((item) => item.id === payment.subscriptionId);
+    const period = calculateRenewalPeriod(
+      existingSubscription?.currentPeriodEnd || null,
+      verifiedAt,
+      monthsPurchased,
+      Number(this.state.studentSubscriptionSettings?.graceDays ?? 3)
+    );
 
     payment.status = 'verified';
-    payment.verifiedAt = new Date(nowMs).toISOString();
+    payment.verifiedAt = verifiedAt;
     payment.providerTransactionId = providerTransactionId || `TRX_${Date.now()}`;
-    const verifiedPrice = payment.amountRwf || this.getStudentSubscriptionPrice(payment.restaurantCode);
+    const verifiedPrice = payment.monthlyPriceRwf || this.getStudentSubscriptionPrice(payment.restaurantCode);
 
     let sub = this.state.customerSubscriptions.find((s) => s.id === payment.subscriptionId);
     if (!sub) {
@@ -7560,9 +7575,9 @@ export class RestoStore {
         planName: 'Student Digital Pass',
         priceRwf: verifiedPrice,
         currency: 'RWF',
-        currentPeriodStart: new Date(nowMs).toISOString(),
-        currentPeriodEnd: new Date(periodEndMs).toISOString(),
-        gracePeriodEnd: new Date(graceEndMs).toISOString(),
+        currentPeriodStart: period.periodStart,
+        currentPeriodEnd: period.periodEnd,
+        gracePeriodEnd: period.gracePeriodEnd,
         cancelAtPeriodEnd: false,
         paymentMethod: payment.provider,
         lastPaymentRef: payment.internalReference,
@@ -7574,9 +7589,9 @@ export class RestoStore {
       sub.status = 'active';
       sub.priceRwf = verifiedPrice;
       sub.currency = 'RWF';
-      sub.currentPeriodStart = new Date(nowMs).toISOString();
-      sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
-      sub.gracePeriodEnd = new Date(graceEndMs).toISOString();
+      sub.currentPeriodStart = period.periodStart;
+      sub.currentPeriodEnd = period.periodEnd;
+      sub.gracePeriodEnd = period.gracePeriodEnd;
       sub.cancelAtPeriodEnd = false;
       sub.paymentMethod = payment.provider;
       sub.lastPaymentRef = payment.internalReference;
@@ -7587,7 +7602,7 @@ export class RestoStore {
     if (paidCustomer) {
       if (paidCustomer.registrationStatus) {
         paidCustomer.customerAccessStatus = 'active';
-        paidCustomer.freeAccessExpiresAt = new Date(periodEndMs).toISOString();
+        paidCustomer.freeAccessExpiresAt = period.periodEnd;
       }
     }
 
@@ -7596,7 +7611,7 @@ export class RestoStore {
       actorRole: 'customer',
       actorName: payment.memberNo,
       action: 'STUDENT_SUBSCRIPTION_ACTIVATED',
-      details: `Activated student subscription for #${payment.memberNo} via ${payment.provider.toUpperCase()} (Ref: ${payment.internalReference}, Amount: ${verifiedPrice.toLocaleString()} RWF). Valid until ${new Date(periodEndMs).toLocaleDateString()}`,
+      details: `Activated customer subscription for #${payment.memberNo} via ${payment.provider.toUpperCase()} (Ref: ${payment.internalReference}, Amount: ${payment.amountRwf.toLocaleString()} RWF, ${monthsPurchased} month(s)). Valid until ${new Date(period.periodEnd).toLocaleDateString()}`,
     });
 
     this.sendNotification({
@@ -7606,7 +7621,7 @@ export class RestoStore {
       senderName: 'RestoPass Subscription Authority',
       type: 'system_broadcast',
       title: 'Student Digital Pass Active! 🌟',
-      message: 'Your ${verifiedPrice.toLocaleString()} RWF monthly digital subscription is active! Digital plate transfers and online pass features are unlocked for 30 days.',
+      message: `Your ${verifiedPrice.toLocaleString()} RWF/month digital subscription is active for ${monthsPurchased} calendar month(s), until ${new Date(period.periodEnd).toLocaleDateString()}.`,
       priority: 'important',
       actionTab: 'my_card',
     });
