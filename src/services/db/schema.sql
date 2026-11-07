@@ -436,12 +436,17 @@ CREATE TABLE IF NOT EXISTS restaurant_subscriptions (
     id VARCHAR(64) PRIMARY KEY,
     restaurant_code VARCHAR(32) NOT NULL UNIQUE REFERENCES restaurants(code) ON DELETE CASCADE,
     status VARCHAR(24) NOT NULL DEFAULT 'pending_payment'
-      CHECK (status IN ('pending_payment','active','grace_period','restricted','cancelled')),
+      CHECK (status IN ('pending_payment','complimentary','active','grace_period','restricted','cancelled')),
     price_rwf INT NOT NULL CHECK (price_rwf > 0),
     currency CHAR(3) NOT NULL DEFAULT 'RWF' CHECK (currency = 'RWF'),
     current_period_start TIMESTAMPTZ,
     current_period_end TIMESTAMPTZ,
     grace_period_end TIMESTAMPTZ,
+    complimentary_started_at TIMESTAMPTZ,
+    complimentary_ends_at TIMESTAMPTZ,
+    complimentary_duration_value INT NOT NULL DEFAULT 0 CHECK (complimentary_duration_value >= 0),
+    complimentary_duration_unit VARCHAR(12) NOT NULL DEFAULT 'days' CHECK (complimentary_duration_unit IN ('days','months','years')),
+    renewal_grace_days INT NOT NULL DEFAULT 3 CHECK (renewal_grace_days BETWEEN 0 AND 365),
     last_payment_id VARCHAR(64),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -449,7 +454,21 @@ CREATE TABLE IF NOT EXISTS restaurant_subscriptions (
       (status = 'pending_payment' AND current_period_start IS NULL AND current_period_end IS NULL)
       OR status <> 'pending_payment'
     )
-);
+ );
+ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS complimentary_started_at TIMESTAMPTZ;
+ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS complimentary_ends_at TIMESTAMPTZ;
+ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS complimentary_duration_value INT NOT NULL DEFAULT 0;
+ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS complimentary_duration_unit VARCHAR(12) NOT NULL DEFAULT 'days';
+ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS renewal_grace_days INT NOT NULL DEFAULT 3;
+ALTER TABLE restaurant_subscriptions DROP CONSTRAINT IF EXISTS restaurant_subscriptions_status_check;
+ALTER TABLE restaurant_subscriptions ADD CONSTRAINT restaurant_subscriptions_status_check
+  CHECK (status IN ('pending_payment','complimentary','active','grace_period','restricted','cancelled'));
+ALTER TABLE restaurant_subscriptions DROP CONSTRAINT IF EXISTS restaurant_subscriptions_complimentary_duration_unit_check;
+ALTER TABLE restaurant_subscriptions ADD CONSTRAINT restaurant_subscriptions_complimentary_duration_unit_check
+  CHECK (complimentary_duration_unit IN ('days','months','years'));
+ALTER TABLE restaurant_subscriptions DROP CONSTRAINT IF EXISTS restaurant_subscriptions_renewal_grace_days_check;
+ALTER TABLE restaurant_subscriptions ADD CONSTRAINT restaurant_subscriptions_renewal_grace_days_check
+  CHECK (renewal_grace_days BETWEEN 0 AND 365);
 CREATE INDEX IF NOT EXISTS idx_restaurant_subscriptions_status
   ON restaurant_subscriptions (status, current_period_end);
 
@@ -464,6 +483,7 @@ CREATE TABLE IF NOT EXISTS restaurant_subscription_payments (
     provider_transaction_id VARCHAR(128),
     payer_msisdn VARCHAR(24) NOT NULL,
     amount_rwf INT NOT NULL CHECK (amount_rwf > 0),
+    months_purchased INT NOT NULL DEFAULT 1 CHECK (months_purchased BETWEEN 1 AND 24),
     currency CHAR(3) NOT NULL DEFAULT 'RWF' CHECK (currency = 'RWF'),
     status VARCHAR(24) NOT NULL DEFAULT 'created'
       CHECK (status IN ('created','provider_pending','successful','failed','cancelled','expired','review_required')),
@@ -474,7 +494,11 @@ CREATE TABLE IF NOT EXISTS restaurant_subscription_payments (
     entitlement_applied_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+ );
+ALTER TABLE restaurant_subscription_payments ADD COLUMN IF NOT EXISTS months_purchased INT NOT NULL DEFAULT 1;
+ALTER TABLE restaurant_subscription_payments DROP CONSTRAINT IF EXISTS restaurant_subscription_payments_months_purchased_check;
+ALTER TABLE restaurant_subscription_payments ADD CONSTRAINT restaurant_subscription_payments_months_purchased_check
+  CHECK (months_purchased BETWEEN 1 AND 24);
 -- Existing deployments must accept a final provider-success that fails a strict match.
 ALTER TABLE restaurant_subscription_payments
   DROP CONSTRAINT IF EXISTS restaurant_subscription_payments_status_check;
