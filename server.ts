@@ -835,7 +835,7 @@ function requireAuth(allowedRoles?: string[]) {
       if (pool) {
         try {
           const entitlement = await pool.query(
-            `SELECT r.status, l.valid_until, s.status AS subscription_status
+            `SELECT r.status, l.valid_until, s.status AS subscription_status, s.renewal_grace_days
              FROM restaurants r
              LEFT JOIN licenses l ON l.id = r.data->>'currentLicenseId'
              LEFT JOIN restaurant_subscriptions s ON s.restaurant_code = r.code
@@ -844,10 +844,12 @@ function requireAuth(allowedRoles?: string[]) {
           );
           const row = entitlement.rows[0];
           const paidUntilMs = row?.valid_until ? new Date(row.valid_until).getTime() : 0;
-          const graceEndsAtMs = paidUntilMs + 72 * 60 * 60 * 1000;
+          const graceDays = Number.isSafeInteger(Number(row?.renewal_grace_days)) ? Math.min(365, Math.max(0, Number(row.renewal_grace_days))) : 3;
+          const graceEndsAtMs = paidUntilMs + graceDays * 24 * 60 * 60 * 1000;
+          const complimentaryExpired = row?.subscription_status === 'complimentary' && Date.now() >= paidUntilMs;
           if (!row || !row.subscription_status || ['pending_payment', 'suspended', 'expired'].includes(row.status) ||
-            ['pending_payment', 'restricted', 'cancelled'].includes(row.subscription_status) ||
-            !Number.isFinite(paidUntilMs) || Date.now() >= graceEndsAtMs) {
+            ['pending_payment', 'restricted', 'cancelled'].includes(row.subscription_status) || complimentaryExpired ||
+            !Number.isFinite(paidUntilMs) || (row.subscription_status !== 'complimentary' && Date.now() >= graceEndsAtMs)) {
             return res.status(402).json({
               success: false,
               code: 'RESTAURANT_SUBSCRIPTION_RESTRICTED',
