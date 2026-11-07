@@ -118,7 +118,7 @@ describe('Cloud-authoritative scanner regression guards', () => {
     assert.doesNotMatch(server, /USSD payment push sent via/);
     assert.match(store, /Mobile Money checkout is not connected yet/);
     assert.match(store, /Client-side payment simulation is disabled/);
-    assert.match(readRepoFile('src/components/customer/CustomerView.tsx'), /Mobile Money Payments Coming Soon/);
+    assert.match(readRepoFile('src/components/customer/CustomerSubscriptionPage.tsx'), /Request MTN MoMo payment/);
     assert.match(readRepoFile('docs/architecture/mobile-money-subscription-integration.md'), /Provider registration and API onboarding runbook/);
     assert.match(readRepoFile('docs/architecture/mobile-money-subscription-integration.md'), /independently queries the provider/);
   });
