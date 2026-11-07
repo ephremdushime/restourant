@@ -4892,7 +4892,7 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
       const providerSaysSuccessful = provider?.status === 'SUCCESSFUL';
       const status = providerSaysSuccessful ? 'review_required'
         : ['FAILED', 'REJECTED', 'TIMEOUT', 'EXPIRED'].includes(provider?.status) ? 'failed' : 'provider_pending';
-      await pool.query("UPDATE restaurant_subscription_payments SET status=$2,provider_status=$3,provider_transaction_id=CASE WHEN $2='review_required' THEN $4 ELSE provider_transaction_id END,updated_at=NOW() WHERE id=$1 AND entitlement_applied_at IS NULL",
+      await pool.query("UPDATE restaurant_subscription_payments SET status=$2::varchar,provider_status=$3,provider_transaction_id=CASE WHEN $2::text='review_required' THEN $4::varchar ELSE provider_transaction_id END,updated_at=NOW() WHERE id=$1 AND entitlement_applied_at IS NULL",
         [payment.id, status, String(provider?.status || 'UNKNOWN').slice(0, 64),
         status === 'review_required' && typeof provider?.financialTransactionId === 'string' ? provider.financialTransactionId : null]);
       if (status === 'review_required') {
