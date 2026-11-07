@@ -106,7 +106,7 @@ export const CustomerSubscriptionPage: React.FC<CustomerSubscriptionPageProps> =
       <div className="rounded-2xl bg-emerald-950/50 border border-emerald-600/60 p-4 flex items-start gap-3">
         <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
         <div className="text-xs sm:text-sm text-slate-200 leading-relaxed">
-          <strong className="text-white block mb-0.5">Your dashboard subscription is separate from your meal balance</strong>
+          <strong className="text-white block mb-0.5">Dashboard Subscription Is Separate From Your Meal Balance</strong>
           An expired dashboard subscription never disables your physical card or consumes, erases, or alters your prepaid meal credits. Your card continues to work at the restaurant's scanner stations.
         </div>
       </div>
