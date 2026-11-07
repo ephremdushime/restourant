@@ -2591,7 +2591,7 @@ app.post('/api/qr/token/phone', apiRateLimiter, requireAuth(), (req, res) => {
       return res.status(402).json({
         success: false,
         requiresSubscription: true,
-        error: qrEnt.reason || 'Digital dashboard QR requires an active subscription (500 RWF/mo).',
+        error: qrEnt.reason || 'Digital dashboard QR requires an active customer subscription.',
       });
     }
   } else if (user.role === 'stand_staff' || user.role === 'restaurant_admin') {
@@ -2913,7 +2913,7 @@ app.post(
           valid: false,
           requiresSubscription: true,
           error:
-            'Digital QR pass requires an active dashboard subscription (500 RWF/mo). Please scan physical card or activate subscription.',
+            'Digital QR pass requires an active dashboard subscription. Please scan the physical card or activate dashboard access.',
         });
       }
 
@@ -3013,10 +3013,14 @@ app.post(
     const restaurantLicenses = (serverDbState?.licenses || []).filter((l: any) => l.restaurantCode === restaurantCode);
     const licenseStatus = restaurantLicenses.find((l: any) => l.id === currentRestaurant?.currentLicenseId) || restaurantLicenses[restaurantLicenses.length - 1];
     const paidUntilMs = licenseStatus ? new Date(licenseStatus.validUntil).getTime() : 0;
-    const graceEndsAtMs = paidUntilMs + 72 * 60 * 60 * 1000;
+    const isComplimentaryLicense = Boolean(licenseStatus?.complimentary);
+    const configuredGraceDays = Number.isSafeInteger(Number(licenseStatus?.graceDays))
+      ? Math.min(365, Math.max(0, Number(licenseStatus.graceDays))) : 3;
+    const graceEndsAtMs = paidUntilMs + (isComplimentaryLicense ? 0 : configuredGraceDays * 24 * 60 * 60 * 1000);
     const blockedRestaurantStates = ['pending_payment', 'suspended', 'expired'];
-    if (!currentRestaurant || blockedRestaurantStates.includes(currentRestaurant.status) || !licenseStatus || !Number.isFinite(paidUntilMs) || Date.now() >= graceEndsAtMs) {
-      return res.status(403).json({ success: false, error: 'Restaurant subscription is inactive or the 72-hour renewal grace period has ended.' });
+    if (!currentRestaurant || blockedRestaurantStates.includes(currentRestaurant.status) || !licenseStatus ||
+        !Number.isFinite(paidUntilMs) || Date.now() >= graceEndsAtMs) {
+      return res.status(403).json({ success: false, error: 'Restaurant subscription is inactive or its configured access period has ended.' });
     }
 
     const parts = payload.split('.');
@@ -5291,7 +5295,7 @@ function checkServerStudentEntitlement(
         enforcementEnabled: true,
         expiresAt: sub.currentPeriodEnd,
         gracePeriodEnd: sub.gracePeriodEnd,
-        reason: 'Subscription is in 3-day grace period. Please renew to avoid interruption.',
+        reason: `Subscription is in ${graceDays}-day grace period. Please renew to avoid interruption.`,
       };
     }
     sub.status = 'expired';
@@ -5301,7 +5305,7 @@ function checkServerStudentEntitlement(
       status: 'expired',
       inGracePeriod: false,
       enforcementEnabled: true,
-      reason: 'Your subscription and 3-day grace period have expired. Please renew for 500 RWF/mo.',
+      reason: `Your subscription and ${graceDays}-day grace period have expired. Please renew for ${Number(settings.priceRwf || 0).toLocaleString()} RWF per calendar month.`,
     };
   }
 
@@ -5514,14 +5518,10 @@ app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['cu
 
 // POST /api/payments/mobile-money/callback: Webhook callback from Mobile Money provider with Idempotency
 app.post('/api/payments/mobile-money/callback', apiRateLimiter, async (req, res) => {
-  if (process.env.RESTOPASS_MOBILE_MONEY_ENABLED !== 'true') {
-    return res.status(503).json({ success: false, error: 'Payment callback verification is not configured. No subscription was activated.' });
-  }
-
-  ensureServerDbDefaults(serverDbState);
-  const webhookSecret = process.env.MOMO_WEBHOOK_SECRET || MASTER_KEY;
-  const providedSig = String(req.headers['x-callback-signature'] || '').trim();
+  const webhookSecret = process.env.RESTOPASS_MOBILE_MONEY_WEBHOOK_SECRET;
+  if (!webhookSecret) return res.status(503).json({ success: false, error: 'Legacy customer payment callback is disabled.' });
   const payloadBody = req.body || {};
+  const providedSig = String(req.headers['x-restopass-signature'] || '');
   const canonicalPayload = JSON.stringify({
     internalReference: payloadBody.internalReference,
     providerTransactionId: payloadBody.providerTransactionId,
@@ -5530,302 +5530,18 @@ app.post('/api/payments/mobile-money/callback', apiRateLimiter, async (req, res)
     status: payloadBody.status,
   });
   const expectedSig = serverHmac(webhookSecret, canonicalPayload);
-
   if (!providedSig || !timingSafeCompare(providedSig, expectedSig)) {
-    return res.status(401).json({ success: false, error: 'Invalid or missing webhook callback signature' });
+    return res.status(401).json({ success: false, error: 'Invalid or missing legacy callback signature.' });
   }
-
-  const { internalReference, providerTransactionId, amountRwf, currency = 'RWF', status } = payloadBody;
-  if (!internalReference || !providerTransactionId) {
-    return res.status(400).json({ success: false, error: 'Missing internalReference or providerTransactionId' });
-  }
-
-  // This legacy HMAC callback is not an MTN-authenticated webhook. It must never
-  // grant subscription entitlement; MTN server-to-server status verification is authoritative.
-  if (String(status || '').toUpperCase() === 'SUCCESSFUL') {
-    return res.status(409).json({ success: false, error: 'Successful customer subscriptions must be verified directly with MTN. This legacy callback cannot activate access.' });
-  }
-
-  if (Number(amountRwf) !== 500 || currency !== 'RWF') {
-    return res.status(400).json({ success: false, error: 'Invalid payment amount or currency (expected exactly 500 RWF)' });
-  }
-
-  const payments: any[] = serverDbState.studentSubscriptionPayments || [];
-  const attempt = payments.find((p) => p.internalReference === internalReference);
-  if (!attempt) {
-    return res.status(404).json({ success: false, error: 'Payment attempt not found for internalReference' });
-  }
-
-  if (attempt.status === 'verified') {
-    return res.json({
-      success: true,
-      idempotentDuplicate: true,
-      paymentAttempt: attempt,
-    });
-  }
-
-  const duplicateTxId = payments.find(
-    (p) => p.id !== attempt.id && p.providerTransactionId === providerTransactionId && p.status === 'verified'
-  );
-  if (duplicateTxId) {
-    return res.status(409).json({ success: false, error: 'Provider transaction ID has already been credited to another payment' });
-  }
-
-  const normalizedStatus = String(status || '').toUpperCase();
-  if (normalizedStatus === 'FAILED' || normalizedStatus === 'REJECTED' || normalizedStatus === 'EXPIRED') {
-    attempt.status = 'failed';
-    attempt.providerTransactionId = providerTransactionId;
-    attempt.updatedAt = new Date().toISOString();
-    serverDbState.auditLogs.unshift({
-      id: `aud_${crypto.randomUUID()}`,
-      restaurantCode: attempt.restaurantCode,
-      userId: attempt.customerId,
-      action: 'MOBILE_MONEY_PAYMENT_FAILED',
-      timestamp: new Date().toISOString(),
-      details: { internalReference, providerTransactionId, status: normalizedStatus },
-    });
-    await queueDbSave(serverDbState);
-    return res.json({ success: true, status: 'failed', paymentAttempt: attempt });
-  }
-
-  if (normalizedStatus !== 'SUCCESSFUL') {
-    return res.status(400).json({ success: false, error: `Unsupported terminal callback status: ${status}` });
-  }
-
-  attempt.status = 'verified';
-  attempt.providerTransactionId = providerTransactionId;
-  attempt.verifiedAt = new Date().toISOString();
-
-  const nowMs = Date.now();
-  const periodEndMs = nowMs + 30 * 24 * 3600 * 1000;
-  const graceEndMs = periodEndMs + 3 * 24 * 3600 * 1000;
-
-  let sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === attempt.customerId);
-  if (!sub) {
-    sub = {
-      id: `sub_${attempt.customerId}_${nowMs}`,
-      customerId: attempt.customerId,
-      memberNo: attempt.memberNo,
-      restaurantCode: attempt.restaurantCode,
-      plan: 'monthly',
-      priceRwf: 500,
-      currency: 'RWF',
-      status: 'active',
-      currentPeriodStart: new Date(nowMs).toISOString(),
-      currentPeriodEnd: new Date(periodEndMs).toISOString(),
-      gracePeriodEndsAt: new Date(graceEndMs).toISOString(),
-      lastPaymentId: attempt.id,
-      updatedAt: new Date(nowMs).toISOString(),
-    };
-    serverDbState.customerSubscriptions.push(sub);
-  } else {
-    sub.status = 'active';
-    sub.currentPeriodStart = new Date(nowMs).toISOString();
-    sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
-    sub.gracePeriodEndsAt = new Date(graceEndMs).toISOString();
-    sub.lastPaymentId = attempt.id;
-    sub.updatedAt = new Date(nowMs).toISOString();
-  }
-
-  serverDbState.auditLogs.unshift({
-    id: `aud_${crypto.randomUUID()}`,
-    restaurantCode: attempt.restaurantCode,
-    userId: attempt.customerId,
-    action: 'MOBILE_MONEY_SUBSCRIPTION_VERIFIED',
-    timestamp: new Date(nowMs).toISOString(),
-    details: {
-      paymentId: attempt.id,
-      internalReference,
-      providerTransactionId,
-      amountRwf: 500,
-      subscriptionId: sub.id,
-    },
-  });
-
-  await queueDbSave(serverDbState);
-  return res.json({
-    success: true,
-    idempotentDuplicate: false,
-    paymentAttempt: attempt,
-    subscription: sub,
+  // This endpoint is not an MTN-authenticated webhook. Even a valid legacy HMAC
+  // must never activate customer access; use the server-to-server MTN status route.
+  return res.status(410).json({
+    success: false,
+    code: 'LEGACY_CALLBACK_DISABLED',
+    error: 'Customer subscription payments must be verified directly with MTN Collections. This legacy callback cannot change access.',
   });
 });
 
-// Super Admin verifies an offline access-fee payment and activates a paid 30-day renewal.
-app.post('/api/superadmin/customer/subscription/activate-paid', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
-  if (!serverDbState) return res.status(503).json({ success: false, error: 'Subscription service is unavailable.' });
-  const body = req.body || {};
-  const customerId = typeof body.customerId === 'string' ? body.customerId.trim() : '';
-  const paymentMethod = typeof body.paymentMethod === 'string' ? body.paymentMethod : '';
-  const referenceInput = typeof body.paymentReference === 'string' ? body.paymentReference.trim().toUpperCase() : '';
-  const verificationNote = typeof body.verificationNote === 'string' ? body.verificationNote.trim().slice(0, 500) : '';
-  const months = Number(body.months ?? 1);
-  if (!Number.isSafeInteger(months) || months < 1 || months > 24) {
-    return res.status(400).json({ success: false, error: 'Choose between 1 and 24 calendar months.' });
-  }
-  if (!customerId || !['cash', 'bank_transfer'].includes(paymentMethod)) {
-    return res.status(400).json({ success: false, error: 'Select a customer and valid payment method.' });
-  }
-  if (paymentMethod !== 'cash' && (!referenceInput || referenceInput.length > 100)) {
-    return res.status(400).json({ success: false, error: 'A payment transaction reference is required.' });
-  }
-
-  const customer = (serverDbState.customers || []).find((c: any) => c.id === customerId);
-  if (!customer) return res.status(404).json({ success: false, error: 'Customer not found.' });
-  if (customer.registrationStatus !== 'approved') {
-    return res.status(409).json({ success: false, error: 'The Restaurant Boss must approve the registration before paid digital access can be activated.' });
-  }
-
-  const nowMs = Date.now();
-  const now = new Date(nowMs).toISOString();
-  const existingSub = (serverDbState.customerSubscriptions || []).find((sub: any) => sub.customerId === customerId);
-  if (customer.customerAccessStatus === 'active' && existingSub) {
-    const currentGraceEnd = new Date(existingSub.gracePeriodEnd || existingSub.currentPeriodEnd || 0).getTime();
-    if (existingSub.status === 'expired' || (currentGraceEnd > 0 && currentGraceEnd <= nowMs)) {
-      customer.customerAccessStatus = 'payment_required';
-      existingSub.status = 'expired';
-    }
-  }
-  if (customer.customerAccessStatus === 'complimentary' &&
-      new Date(customer.freeAccessExpiresAt || existingSub?.currentPeriodEnd || 0).getTime() > nowMs) {
-    return res.status(409).json({ success: false, error: 'The complimentary access period is still active.' });
-  }
-  if (existingSub && ['active', 'grace_period'].includes(existingSub.status) &&
-      new Date(existingSub.gracePeriodEnd || existingSub.currentPeriodEnd || 0).getTime() > nowMs) {
-    return res.status(409).json({ success: false, error: 'The current paid access period has not expired yet.' });
-  }
-  if (!['payment_required', 'expired', 'complimentary'].includes(customer.customerAccessStatus || '')) {
-    return res.status(409).json({ success: false, error: 'This customer is not currently due for a paid access renewal.' });
-  }
-
-  const settings = serverDbState.studentSubscriptionSettings || {};
-  const nowForPolicy = Date.now();
-  const promoStartForPolicy = settings.promoStartsAt ? Date.parse(settings.promoStartsAt) : 0;
-  const promoEndForPolicy = settings.promoEndsAt ? Date.parse(settings.promoEndsAt) : Number.POSITIVE_INFINITY;
-  const promoCurrentlyActive = Boolean(settings.promoAccessEnabled) &&
-    (!settings.promoStartsAt || Number.isFinite(promoStartForPolicy)) &&
-    (!settings.promoEndsAt || Number.isFinite(promoEndForPolicy)) &&
-    nowForPolicy >= promoStartForPolicy && nowForPolicy < promoEndForPolicy;
-  if (!settings.enabled || promoCurrentlyActive) {
-    return res.status(409).json({ success: false, error: 'Customer access is currently free. Manual paid activation is disabled by the active platform policy.' });
-  }
-  const monthlyPriceRwf = Number(settings.priceRwf);
-  let amountRwf: number;
-  try { amountRwf = calculateSubscriptionAmount(monthlyPriceRwf, months); }
-  catch (error: any) { return res.status(409).json({ success: false, error: error.message }); }
-  const paymentReference = referenceInput || `CASH-ACCESS-${crypto.randomUUID()}`;
-  if ((serverDbState.studentSubscriptionPayments || []).some((p: any) =>
-    p.restaurantCode === customer.restaurantCode &&
-    String(p.providerTransactionId || p.internalReference || '').toUpperCase() === paymentReference
-  )) {
-    return res.status(409).json({ success: false, error: 'This payment reference has already been used.' });
-  }
-
-  const previousCustomer = { ...customer };
-  const previousSub = existingSub ? { ...existingSub } : null;
-  const paymentId = `spay_${crypto.randomUUID()}`;
-  const subscriptionId = existingSub?.id || `sub_${customer.id}_${crypto.randomUUID()}`;
-  const internalReference = `MANUAL-ACCESS-${crypto.randomUUID()}`;
-  const period = calculateRenewalPeriod(existingSub?.currentPeriodEnd || null, now, months, Number(settings.graceDays ?? 3));
-  const periodEnd = period.periodEnd;
-  const graceEnd = period.gracePeriodEnd;
-  const subscription = existingSub || {
-    id: subscriptionId,
-    customerId: customer.id,
-    memberNo: customer.memberNo,
-    restaurantCode: customer.restaurantCode,
-    status: 'active',
-    planName: 'Student Digital Pass',
-    priceRwf: monthlyPriceRwf,
-    currency: 'RWF',
-    createdAt: now,
-    updatedAt: now,
-  };
-  Object.assign(subscription, {
-    status: 'active',
-    planName: 'Student Digital Pass',
-    priceRwf: monthlyPriceRwf,
-    currency: 'RWF',
-    currentPeriodStart: period.periodStart,
-    currentPeriodEnd: periodEnd,
-    gracePeriodEnd: graceEnd,
-    cancelAtPeriodEnd: false,
-    paymentMethod,
-    lastPaymentRef: paymentReference,
-    complimentaryReason: undefined,
-    complimentaryGrantedBy: undefined,
-    updatedAt: now,
-  });
-  if (!existingSub) {
-    if (!Array.isArray(serverDbState.customerSubscriptions)) serverDbState.customerSubscriptions = [];
-    serverDbState.customerSubscriptions.push(subscription);
-  }
-
-  if (!Array.isArray(serverDbState.studentSubscriptionPayments)) serverDbState.studentSubscriptionPayments = [];
-  const payment = {
-    id: paymentId,
-    subscriptionId,
-    customerId: customer.id,
-    memberNo: customer.memberNo,
-    restaurantCode: customer.restaurantCode,
-    internalReference,
-    provider: paymentMethod,
-    phoneNumber: customer.phone,
-    providerTransactionId: paymentReference,
-    amountRwf,
-    monthlyPriceRwf,
-    monthsPurchased: months,
-    currency: 'RWF',
-    status: 'verified',
-    initiatedAt: now,
-    verifiedAt: now,
-  };
-  serverDbState.studentSubscriptionPayments.unshift(payment);
-  customer.customerAccessStatus = 'active';
-
-  if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
-  const auditId = `audit_${crypto.randomUUID()}`;
-  serverDbState.auditLogs.unshift({
-    id: auditId,
-    timestamp: now,
-    restaurantCode: customer.restaurantCode,
-    actorRole: 'super_admin',
-    actorName: req.user!.username,
-    action: 'STUDENT_SUBSCRIPTION_MANUAL_PAYMENT_VERIFIED',
-    details: `Verified ${amountRwf.toLocaleString()} RWF ${paymentMethod.toUpperCase()} access renewal for #${customer.memberNo}. Ref: ${paymentReference}. Note: ${verificationNote || 'No additional note'}.`,
-  });
-  if (!Array.isArray(serverDbState.notifications)) serverDbState.notifications = [];
-  const notificationId = `notif_${crypto.randomUUID()}`;
-  serverDbState.notifications.unshift({
-    id: notificationId,
-    restaurantCode: customer.restaurantCode,
-    target: customer.id,
-    targetName: `${customer.name} (#${customer.memberNo})`,
-    senderRole: 'system',
-    senderName: req.user!.username,
-    type: 'system_broadcast',
-    title: 'Dashboard Access Renewed',
-    message: `Your ${amountRwf.toLocaleString()} RWF access fee has been verified. Your digital dashboard is active until ${new Date(periodEnd).toLocaleDateString()}.`,
-    priority: 'important',
-    timestamp: now,
-    readByCustomerIds: [],
-    actionTab: 'my_card',
-  });
-
-  const saved = await queueDbSave(serverDbState);
-  if (!saved) {
-    Object.assign(customer, previousCustomer);
-    if (previousSub) Object.assign(subscription, previousSub);
-    else serverDbState.customerSubscriptions = (serverDbState.customerSubscriptions || []).filter((sub: any) => sub.id !== subscriptionId);
-    serverDbState.studentSubscriptionPayments = serverDbState.studentSubscriptionPayments.filter((p: any) => p.id !== paymentId);
-    serverDbState.auditLogs = serverDbState.auditLogs.filter((a: any) => a.id !== auditId);
-    serverDbState.notifications = serverDbState.notifications.filter((n: any) => n.id !== notificationId);
-    return res.status(503).json({ success: false, error: 'Payment activation could not be saved. Please retry after checking the payment reference.' });
-  }
-  return res.json({ success: true, subscription, payment, customer: { id: customer.id, customerAccessStatus: customer.customerAccessStatus } });
-});
-
-// GET /api/customer/subscription/payments/:internalReference/status: Server-side MTN MoMo payment status verification
 app.get('/api/customer/subscription/payments/:internalReference/status', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
   ensureServerDbDefaults(serverDbState);
   const internalReference = String(req.params.internalReference || '');
@@ -6871,7 +6587,7 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
             return res.status(402).json({
               success: false,
               requiresSubscription: true,
-              error: transferEnt.reason || 'Digital plate transfers require an active student subscription (500 RWF/mo).',
+              error: transferEnt.reason || 'Digital plate transfers require an active customer subscription.',
             });
           }
         }
