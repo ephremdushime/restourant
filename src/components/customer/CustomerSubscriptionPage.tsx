@@ -122,7 +122,7 @@ export const CustomerSubscriptionPage: React.FC<CustomerSubscriptionPageProps> =
             {promoState.active && promoState.endsAt && (
               <span className="block mt-1 font-semibold">Promotional period ends {new Date(promoState.endsAt).toLocaleDateString()}.</span>
             )}
-            <span className="block mt-1 text-emerald-200/80">If paid access is introduced after this period, RestoPass will communicate the change in advance. Meal purchases remain payable directly to the restaurant.</span>
+            <span className="block mt-1 text-emerald-200/80">The promotion end date is displayed here so you can plan ahead. No payment is automatic: you must choose a subscription and approve an MTN MoMo request. Meal purchases remain payable directly to the restaurant.</span>
           </div>
         </div>
       )}
