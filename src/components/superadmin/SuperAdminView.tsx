@@ -810,8 +810,12 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    const promoStartsAt = promoStartInput ? new Date(promoStartInput).toISOString() : undefined;
-                    const promoEndsAt = promoEndInput ? new Date(promoEndInput).toISOString() : undefined;
+                    if (promoAccessEnabledInput && !promoEndInput) {
+                      showToast('Set a promotional end date before enabling the customer promotion.', 'error');
+                      return;
+                    }
+                    const promoStartsAt = promoStartInput ? new Date(promoStartInput).toISOString() : '';
+                    const promoEndsAt = promoEndInput ? new Date(promoEndInput).toISOString() : '';
                     if (promoStartsAt && promoEndsAt && Date.parse(promoStartsAt) >= Date.parse(promoEndsAt)) {
                       showToast('Promotional end date must be after its start date.', 'error');
                       return;
