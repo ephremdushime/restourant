@@ -2327,7 +2327,7 @@ export class RestoStore {
         graceHoursRemaining: 0,
         validUntil: license.validUntil,
         license,
-        warningMessage: 'The configured ${graceDays}-day renewal grace period has ended. Scanner redemption and business-changing operations are restricted. Sign in to renew.',
+        warningMessage: `The configured ${graceDays}-day renewal grace period has ended. Scanner redemption and business-changing operations are restricted. Sign in to renew.`,
       };
     }
 
@@ -2352,10 +2352,10 @@ export class RestoStore {
         isExpiringSoon: true,
         daysRemaining,
         hoursRemaining,
-        graceHoursRemaining: 72,
+        graceHoursRemaining: graceDays * 24,
         validUntil: license.validUntil,
         license,
-        warningMessage: `Subscription renewal due in ${daysRemaining} day(s). After expiry, a 72-hour grace period applies.`,
+        warningMessage: `Subscription renewal due in ${daysRemaining} day(s). After expiry, a ${graceDays}-day grace period applies.`,
       };
     }
 
@@ -7283,6 +7283,32 @@ export class RestoStore {
     // This prevents a disabled legacy monetization flag from bypassing the one-month free entitlement.
     const lifecycleCustomer = this.state.customers.find((c) => c.id === customerId);
     const lifecycleSubscription = this.getCustomerSubscription(customerId);
+    const policyNow = Date.now();
+    const promoStart = settings.promoStartsAt ? Date.parse(settings.promoStartsAt) : 0;
+    const promoEnd = settings.promoEndsAt ? Date.parse(settings.promoEndsAt) : Number.POSITIVE_INFINITY;
+    const promoValid = (!settings.promoStartsAt || Number.isFinite(promoStart)) &&
+      (!settings.promoEndsAt || Number.isFinite(promoEnd));
+    const promoActive = Boolean(settings.promoAccessEnabled) && promoValid &&
+      policyNow >= promoStart && policyNow < promoEnd;
+    if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.registrationStatus !== 'approved') {
+      return {
+        allowed: false, feature, status: 'inactive', inGracePeriod: false,
+        enforcementEnabled: settings.enabled,
+        reason: 'Your restaurant registration must be approved before customer dashboard access is activated.',
+      };
+    }
+    const eligibleForGlobalFreeAccess = Boolean(lifecycleCustomer) &&
+      (!lifecycleCustomer.registrationStatus || lifecycleCustomer.registrationStatus === 'approved');
+    if (eligibleForGlobalFreeAccess && (!settings.enabled || promoActive)) {
+      return {
+        allowed: true, feature, status: 'complimentary', inGracePeriod: false,
+        enforcementEnabled: settings.enabled,
+        expiresAt: promoActive ? settings.promoEndsAt : undefined,
+        reason: promoActive
+          ? (settings.promoMessage || 'Your account is enjoying RestoPass promotional access.')
+          : 'Customer subscription payments are currently disabled by Super Admin.',
+      };
+    }
     if (lifecycleCustomer?.registrationStatus && (
         lifecycleCustomer.customerAccessStatus === 'pending_super_admin_activation' ||
         lifecycleCustomer.customerAccessStatus === 'payment_required' ||
