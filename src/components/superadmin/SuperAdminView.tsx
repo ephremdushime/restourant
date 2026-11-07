@@ -788,7 +788,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
               <div className="space-y-0.5">
                 <div className="text-sm font-bold text-white flex items-center gap-2">
                   <DollarSign className="w-4 h-4 text-emerald-400" />
-                  <span>Platform-Wide Student Subscription Monthly Fee</span>
+                  <span>Platform-Wide Customer Dashboard Subscription Fee</span>
                 </div>
                 <p className="text-xs text-slate-400">
                   One platform-wide monthly fee for all restaurant customers. Restaurant meal purchases are paid directly to each restaurant and are not part of this subscription.
@@ -802,7 +802,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                     min={1}
                     step={50}
                     value={globalStudentFeeInput}
-                    onChange={(e) => setGlobalStudentFeeInput(Math.max(0, parseInt(e.target.value) || 0))}
+                    onChange={(e) => setGlobalStudentFeeInput(Math.max(1, parseInt(e.target.value) || 1))}
                     className="w-32 py-1.5 px-3 rounded-lg bg-slate-900 border border-slate-700 text-white font-mono font-bold text-sm focus:border-emerald-500 outline-hidden pr-12"
                   />
                   <span className="absolute right-2.5 top-2 text-[11px] text-slate-400 font-mono font-bold">RWF</span>
@@ -1441,7 +1441,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   <label className="text-slate-300 block mb-1 font-semibold">Temporary administrator password</label>
                   <input type="password" required minLength={16} maxLength={128} value={newAdminPassword} onChange={(e) => setNewAdminPassword(e.target.value)}
                     autoComplete="new-password" className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white" />
-                  <span className="text-[10px] text-slate-500">At least 16 characters. The server stores only a password hash. Share it securely and require a password change after first login.</span>
+                  <span className="text-[10px] text-slate-500">At least 16 characters. The server stores only a password hash. Share it securely and ask the administrator to change it after first login.</span>
                 </div>
               </div>
 
