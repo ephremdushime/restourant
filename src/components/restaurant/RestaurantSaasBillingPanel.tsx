@@ -99,7 +99,7 @@ export const RestaurantSaasBillingPanel: React.FC<{ restaurantCode: string; rest
         </div>
       )}
       {restricted && <div className="p-3 rounded-xl border border-amber-700 bg-amber-950/40 text-amber-200 text-sm">Your subscription is restricted. Scanner redemption and business-changing operations remain disabled until a payment is verified.</div>}
-      <div className="space-y-3">
+      {sub?.status !== 'complimentary' && <div className="space-y-3">
         <h3 className="font-bold text-white">Pay with MTN MoMo</h3>
         <label className="block text-xs text-slate-400">Choose subscription duration</label>
         <select value={months} onChange={(e) => setMonths(Number(e.target.value))} className="w-full rounded-xl bg-slate-950 border border-slate-700 px-4 py-3 text-white">
@@ -113,7 +113,7 @@ export const RestaurantSaasBillingPanel: React.FC<{ restaurantCode: string; rest
         {paymentId && <button disabled={busy} onClick={() => verify(paymentId)} className="w-full sm:w-auto rounded-xl border border-emerald-600 text-emerald-300 hover:bg-emerald-950 disabled:opacity-50 px-5 py-3 font-bold">Verify payment status</button>}
         {message && <p className="text-sm text-emerald-300">{message}</p>}
         {error && <p role="alert" className="text-sm text-rose-300">{error}</p>}
-      </div>
+      </div>}
       <div className="border-t border-slate-800 pt-4">
         <h3 className="font-bold text-white mb-3">Recent SaaS payments</h3>
         {(snapshot.payments || []).length === 0 ? <p className="text-sm text-slate-500">No payment attempts recorded.</p> : (
