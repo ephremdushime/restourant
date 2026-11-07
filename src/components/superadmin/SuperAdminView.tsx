@@ -78,6 +78,9 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   const [newPlanId, setNewPlanId] = useState('plan_high_volume');
   const [newMaxStations, setNewMaxStations] = useState(3);
   const [newBasePrice, setNewBasePrice] = useState(140000);
+  const [newComplimentaryDuration, setNewComplimentaryDuration] = useState(3);
+  const [newComplimentaryUnit, setNewComplimentaryUnit] = useState<'days' | 'months' | 'years'>('months');
+  const [newRenewalGraceDays, setNewRenewalGraceDays] = useState(3);
   const [newExtraScanFee, setNewExtraScanFee] = useState(15000);
   const [newStudentSubPrice, setNewStudentSubPrice] = useState(500);
   const [newSinglePlatePrice, setNewSinglePlatePrice] = useState(1200);
@@ -207,11 +210,14 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       planId: newPlanId,
       licensedScanPoints: Number(newMaxStations),
       saasSubscriptionPriceRwf: Number(newBasePrice),
+      saasComplimentaryDurationValue: Number(newComplimentaryDuration),
+      saasComplimentaryDurationUnit: newComplimentaryUnit,
+      saasRenewalGraceDays: Number(newRenewalGraceDays),
       pricePerExtraScanPointRwf: Number(newExtraScanFee),
       studentSubscriptionPriceRwf: Number(newStudentSubPrice),
       singlePlatePriceRwf: Number(newSinglePlatePrice),
     });
-    showToast(`Created ${newName}. RestoPass access activates after verified subscription payment.`);
+    showToast(`Created ${newName}. Complimentary access: ${newComplimentaryDuration} ${newComplimentaryUnit}; paid billing starts after it ends.`);
     setCreateModalOpen(false);
   };
 
@@ -1415,7 +1421,29 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                       onChange={(e) => setNewBasePrice(Math.max(0, parseInt(e.target.value) || 0))}
                       className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white font-mono"
                     />
-                    <span className="text-[10px] text-slate-500">Charged to the restaurant for 30 days of software access</span>
+                    <span className="text-[10px] text-slate-500">Monthly fee; billing uses calendar months</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-semibold">Complimentary Access</label>
+                    <input type="number" min={0} max={120} value={newComplimentaryDuration}
+                      onChange={(e) => setNewComplimentaryDuration(Math.max(0, Math.min(120, parseInt(e.target.value) || 0)))}
+                      className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white font-mono" />
+                  </div>
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-semibold">Free Period Unit</label>
+                    <select value={newComplimentaryUnit} onChange={(e) => setNewComplimentaryUnit(e.target.value as 'days' | 'months' | 'years')}
+                      className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white">
+                      <option value="days">Days</option><option value="months">Months</option><option value="years">Years</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-semibold">Renewal Grace (days)</label>
+                    <input type="number" min={0} max={365} value={newRenewalGraceDays}
+                      onChange={(e) => setNewRenewalGraceDays(Math.max(0, Math.min(365, parseInt(e.target.value) || 0)))}
+                      className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white font-mono" />
                   </div>
                 </div>
 
