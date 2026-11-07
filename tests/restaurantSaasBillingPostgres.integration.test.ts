@@ -7,6 +7,7 @@ const databaseUrl = process.env.TEST_DATABASE_URL;
 
 test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant entitlement', { skip: !databaseUrl }, async () => {
   process.env.NODE_ENV = 'test';
+  process.env.RESTOPASS_TEST_ENFORCE_SAAS = 'true';
   process.env.DATABASE_URL = databaseUrl!;
   process.env.RESTOPASS_SAAS_MTN_ENABLED = 'true';
   process.env.MTN_MOMO_TARGET_ENVIRONMENT = 'sandbox';
