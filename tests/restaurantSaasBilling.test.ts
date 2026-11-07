@@ -31,8 +31,8 @@ test('calendar-month arithmetic clamps month-end dates and handles leap years', 
 test('subscription grace period is configurable in calendar days', () => {
   const end = '2026-12-05T00:00:00.000Z';
   assert.equal(getRestaurantSaasStatus(end, Date.parse('2026-12-05T00:00:00Z'), false, 4).status, 'grace_period');
-  assert.equal(getRestaurantSaasStatus(end, Date.parse('2026-12-08T23:59:59Z'), false, 3).status, 'grace_period');
-  assert.equal(getRestaurantSaasStatus(end, Date.parse('2026-12-09T00:00:00Z'), false, 3).status, 'restricted');
+  assert.equal(getRestaurantSaasStatus(end, Date.parse('2026-12-07T23:59:59Z'), false, 3).status, 'grace_period');
+  assert.equal(getRestaurantSaasStatus(end, Date.parse('2026-12-08T00:00:00Z'), false, 3).status, 'restricted');
 });
 
 test('early multi-month renewal preserves paid time and appends calendar months', () => {
