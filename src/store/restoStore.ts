@@ -2309,7 +2309,8 @@ export class RestoStore {
     }
 
     const validUntilMs = new Date(license.validUntil).getTime();
-    const graceEndsAtMs = validUntilMs + 72 * 60 * 60 * 1000;
+    const graceDays = Number.isSafeInteger(Number(license.graceDays)) ? Math.min(365, Math.max(0, Number(license.graceDays))) : 3;
+    const graceEndsAtMs = validUntilMs + graceDays * 24 * 60 * 60 * 1000;
     const msRemaining = validUntilMs - guardedNow;
     const graceMsRemaining = graceEndsAtMs - guardedNow;
     const daysRemaining = Math.max(0, Math.ceil(msRemaining / (24 * 3600 * 1000)));
@@ -2326,7 +2327,7 @@ export class RestoStore {
         graceHoursRemaining: 0,
         validUntil: license.validUntil,
         license,
-        warningMessage: 'The 72-hour renewal grace period has ended. Scanner redemption and business-changing operations are restricted. Sign in to renew.',
+        warningMessage: 'The configured ${graceDays}-day renewal grace period has ended. Scanner redemption and business-changing operations are restricted. Sign in to renew.',
       };
     }
 
@@ -2340,7 +2341,7 @@ export class RestoStore {
         graceHoursRemaining,
         validUntil: license.validUntil,
         license,
-        warningMessage: `Subscription expired. A 72-hour restricted renewal grace period remains (${graceHoursRemaining} hour(s)). Renew now to avoid service interruption.`,
+        warningMessage: `Subscription expired. A ${graceDays}-day restricted renewal grace period remains (${graceHoursRemaining} hour(s)). Renew now to avoid service interruption.`,
       };
     }
 
