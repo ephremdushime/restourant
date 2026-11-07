@@ -1496,9 +1496,28 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
     if (!validPassword) {
       return res.status(401).json({ success: false, error: 'Invalid Restaurant Administrator credentials.' });
     }
+    // Resolve the authoritative SaaS entitlement before deciding whether the tenant may sign in.
+    // Pending-payment tenants can still sign in to view billing and renew; operational access
+    // remains restricted by the licence and server-side entitlement checks.
+    const billingClient = await pool.connect();
+    try {
+      await billingClient.query('BEGIN');
+      const ensured = await ensureRestaurantSaasSubscription(billingClient, restaurantCode);
+      if (!ensured) {
+        await billingClient.query('ROLLBACK');
+        return res.status(404).json({ success: false, error: 'Restaurant account was not found.' });
+      }
+      await billingClient.query('COMMIT');
+    } catch (billingError) {
+      try { await billingClient.query('ROLLBACK'); } catch { }
+      console.error('[Tenant Admin Login] SaaS entitlement lookup failed:', billingError);
+      return res.status(503).json({ success: false, error: 'Restaurant subscription status is temporarily unavailable.' });
+    } finally {
+      billingClient.release();
+    }
     const currentResto = (serverDbState?.restaurants || []).find((r: any) => r.code === restaurantCode);
-    if (!currentResto || currentResto.status !== 'active') {
-      return res.status(403).json({ success: false, error: 'Restaurant account is inactive.' });
+    if (!currentResto || !['active', 'pending_payment'].includes(currentResto.status)) {
+      return res.status(403).json({ success: false, error: 'Restaurant account is inactive or suspended.' });
     }
     const token = createSessionToken({
       userId: admin.id, username: admin.username,
