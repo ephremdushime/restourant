@@ -39,13 +39,15 @@ export function addCalendarMonths(value: string | Date, months: number): Date {
   assertDuration(months, 'Months', 120);
   const source = value instanceof Date ? new Date(value.getTime()) : assertValidDate(value, 'source');
   const originalDay = source.getUTCDate();
+  const sourceLastDay = new Date(Date.UTC(source.getUTCFullYear(), source.getUTCMonth() + 1, 0)).getUTCDate();
+  const sourceIsMonthEnd = originalDay === sourceLastDay;
   const targetMonthIndex = source.getUTCMonth() + months;
   const targetYear = source.getUTCFullYear() + Math.floor(targetMonthIndex / 12);
   const targetMonth = targetMonthIndex % 12;
   const lastDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
   const result = new Date(source.getTime());
   result.setUTCDate(1);
-  result.setUTCFullYear(targetYear, targetMonth, Math.min(originalDay, lastDay));
+  result.setUTCFullYear(targetYear, targetMonth, sourceIsMonthEnd ? lastDay : Math.min(originalDay, lastDay));
   return result;
 }
 
