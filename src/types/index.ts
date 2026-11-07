@@ -570,7 +570,11 @@ export interface StudentSubscriptionSettings {
   priceRwf: number; // default 500 RWF
   currency: string; // 'RWF'
   period: 'monthly';
-  graceDays: number; // default 3 days (72 hours)
+  graceDays: number; // calendar days after paid period ends
+  promoAccessEnabled?: boolean;
+  promoStartsAt?: string;
+  promoEndsAt?: string;
+  promoMessage?: string;
   requireForTransfers: boolean; // default true
   requireForDashboard: boolean; // default true
   updatedAt: string;
