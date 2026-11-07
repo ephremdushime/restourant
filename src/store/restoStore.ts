@@ -7183,6 +7183,8 @@ export class RestoStore {
         currency: 'RWF',
         period: 'monthly',
         graceDays: 3,
+        promoAccessEnabled: false,
+        promoMessage: 'You are enjoying complimentary RestoPass access during our launch promotion.',
         requireForTransfers: true,
         requireForDashboard: true,
         updatedAt: new Date().toISOString(),
@@ -7191,23 +7193,10 @@ export class RestoStore {
     return this.state.studentSubscriptionSettings;
   }
 
-  /**
-   * Authoritative student subscription price resolver:
-   * 1. Check restaurant terms override (per-restaurant custom rate)
-   * 2. Check restaurant custom studentSubscriptionPriceRwf
-   * 3. Fallback to platform-wide studentSubscriptionSettings.priceRwf (default 500 RWF)
-   */
-  public getStudentSubscriptionPrice(restaurantCode?: string): number {
-    const code = restaurantCode || this.state.currentRestaurantCode;
-    const r = this.state.restaurants.find((res) => res.code === code);
-    if (r?.termsOverride?.studentSubscriptionPriceRwf !== undefined) {
-      return Number(r.termsOverride.studentSubscriptionPriceRwf);
-    }
-    if (r?.studentSubscriptionPriceRwf !== undefined) {
-      return Number(r.studentSubscriptionPriceRwf);
-    }
+  /** Customer dashboard subscription pricing is platform-wide, never restaurant-specific. */
+  public getStudentSubscriptionPrice(_restaurantCode?: string): number {
     const settings = this.getStudentSubscriptionSettings();
-    return settings.priceRwf !== undefined ? Number(settings.priceRwf) : 500;
+    return Number(settings.priceRwf || 0);
   }
 
   public updateStudentSubscriptionSettings(
@@ -7218,9 +7207,14 @@ export class RestoStore {
     const updated: StudentSubscriptionSettings = {
       ...current,
       ...updates,
-      priceRwf: updates.priceRwf !== undefined ? Math.max(0, Number(updates.priceRwf)) : (current.priceRwf ?? 500),
+      priceRwf: updates.priceRwf !== undefined ? Math.max(0, Math.floor(Number(updates.priceRwf))) : (current.priceRwf ?? 500),
       currency: 'RWF',
       period: 'monthly',
+      graceDays: updates.graceDays !== undefined ? Math.min(365, Math.max(0, Math.floor(Number(updates.graceDays)))) : (current.graceDays ?? 3),
+      promoAccessEnabled: updates.promoAccessEnabled !== undefined ? Boolean(updates.promoAccessEnabled) : Boolean(current.promoAccessEnabled),
+      promoStartsAt: updates.promoStartsAt !== undefined ? updates.promoStartsAt : current.promoStartsAt,
+      promoEndsAt: updates.promoEndsAt !== undefined ? updates.promoEndsAt : current.promoEndsAt,
+      promoMessage: updates.promoMessage !== undefined ? String(updates.promoMessage).slice(0, 500) : current.promoMessage,
       updatedAt: new Date().toISOString(),
       updatedBy: actorName,
     };
