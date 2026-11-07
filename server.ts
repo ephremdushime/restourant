@@ -4669,7 +4669,7 @@ app.get('/api/restaurant-saas/subscription', apiRateLimiter, requireAuth(['resta
       }
       subscription.status = updated.rows[0]?.status || computedStatus;
     }
-    const payments = await client.query('SELECT id,internal_reference,amount_rwf,currency,status,provider_status,created_at,verified_at,entitlement_applied_at FROM restaurant_subscription_payments WHERE restaurant_code=$1 ORDER BY created_at DESC LIMIT 20', [code]);
+    const payments = await client.query('SELECT id,internal_reference,amount_rwf,months_purchased,currency,status,provider_status,created_at,verified_at,entitlement_applied_at FROM restaurant_subscription_payments WHERE restaurant_code=$1 ORDER BY created_at DESC LIMIT 20', [code]);
     await client.query('COMMIT');
     return res.json({ success: true, subscription, payments: payments.rows });
   } catch (error) { try { await client.query('ROLLBACK'); } catch { } console.error('[SaaS subscription read]', error); return res.status(503).json({ success: false, error: 'Subscription details unavailable.' }); }
