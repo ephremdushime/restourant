@@ -437,7 +437,7 @@ CREATE TABLE IF NOT EXISTS restaurant_subscriptions (
     restaurant_code VARCHAR(32) NOT NULL UNIQUE REFERENCES restaurants(code) ON DELETE CASCADE,
     status VARCHAR(24) NOT NULL DEFAULT 'pending_payment'
       CHECK (status IN ('pending_payment','complimentary','active','grace_period','restricted','cancelled')),
-    price_rwf INT NOT NULL CHECK (price_rwf > 0),
+    price_rwf INT NOT NULL CHECK (price_rwf >= 0),
     currency CHAR(3) NOT NULL DEFAULT 'RWF' CHECK (currency = 'RWF'),
     current_period_start TIMESTAMPTZ,
     current_period_end TIMESTAMPTZ,
@@ -455,6 +455,8 @@ CREATE TABLE IF NOT EXISTS restaurant_subscriptions (
       OR status <> 'pending_payment'
     )
  );
+ALTER TABLE restaurant_subscriptions DROP CONSTRAINT IF EXISTS restaurant_subscriptions_price_rwf_check;
+ALTER TABLE restaurant_subscriptions ADD CONSTRAINT restaurant_subscriptions_price_rwf_check CHECK (price_rwf >= 0);
 ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS complimentary_started_at TIMESTAMPTZ;
 ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS complimentary_ends_at TIMESTAMPTZ;
 ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS complimentary_duration_value INT NOT NULL DEFAULT 0;
