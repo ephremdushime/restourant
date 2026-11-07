@@ -5382,8 +5382,9 @@ app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['cu
   const requestFingerprint = crypto.createHash('sha256').update(JSON.stringify({
     customerId: user.userId, restaurantCode: user.restaurantCode, payer, amountRwf, months, currency: 'RWF',
   })).digest('hex');
-  const payments: any[] = serverDbState.studentSubscriptionPayments || [];
-  const existing = payments.find((p: any) => p.idempotencyKey === idempotencyKey && p.customerId === user.userId);
+  if (!Array.isArray(serverDbState.studentSubscriptionPayments)) serverDbState.studentSubscriptionPayments = [];
+  const payments: any[] = serverDbState.studentSubscriptionPayments;
+  const existing = payments.find((p: any) => p.idempotencyKey === idempotencyKey && p.customerId === user.userId && p.restaurantCode === user.restaurantCode);
   if (existing) {
     if (existing.requestFingerprint && existing.requestFingerprint !== requestFingerprint) {
       return res.status(409).json({ success: false, error: 'Idempotency key was already used with different payment details.' });
@@ -5391,7 +5392,7 @@ app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['cu
     return res.json({ success: true, idempotentReplay: true, paymentAttempt: existing, payment: existing });
   }
   const unresolved = payments.find((p: any) =>
-    p.customerId === user.userId && ['created', 'provider_pending', 'review_required'].includes(p.status)
+    p.customerId === user.userId && p.restaurantCode === user.restaurantCode && ['created', 'provider_pending', 'review_required'].includes(p.status)
   );
   if (unresolved) {
     return res.status(202).json({
