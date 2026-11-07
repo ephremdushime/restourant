@@ -77,6 +77,7 @@ export interface License {
   maxScanPoints: number;
   validUntil: string; // ISO date
   graceDays: number;
+  complimentary?: boolean;
   featureFlags: {
     spotChecksEnabled: boolean;
     multiStationEnabled: boolean;
