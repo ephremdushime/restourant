@@ -7005,9 +7005,37 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
         // Restaurant licences are derived from verified SaaS payment transactions.
         // Never accept client-supplied licence creation or mutation through state sync.
         if (fullState.studentSubscriptionSettings) {
+          const incoming = fullState.studentSubscriptionSettings;
+          const current = serverDbState.studentSubscriptionSettings || {};
+          const priceRwf = Number(incoming.priceRwf ?? current.priceRwf ?? 500);
+          const graceDays = Number(incoming.graceDays ?? current.graceDays ?? 3);
+          const promoStartsAt = incoming.promoStartsAt || undefined;
+          const promoEndsAt = incoming.promoEndsAt || undefined;
+          const promoEnabled = typeof incoming.promoAccessEnabled === 'boolean'
+            ? incoming.promoAccessEnabled : Boolean(current.promoAccessEnabled);
+          if (!Number.isSafeInteger(priceRwf) || priceRwf < 1 || priceRwf > 100000000 ||
+              !Number.isSafeInteger(graceDays) || graceDays < 0 || graceDays > 365 ||
+              (promoStartsAt && !Number.isFinite(Date.parse(promoStartsAt))) ||
+              (promoEndsAt && !Number.isFinite(Date.parse(promoEndsAt))) ||
+              (promoStartsAt && promoEndsAt && Date.parse(promoStartsAt) >= Date.parse(promoEndsAt)) ||
+              (promoEnabled && !promoEndsAt)) {
+            return res.status(400).json({ success: false, error: 'Customer subscription policy contains an invalid price, grace period, or promotional date range.' });
+          }
           serverDbState.studentSubscriptionSettings = {
-            ...serverDbState.studentSubscriptionSettings,
-            ...fullState.studentSubscriptionSettings,
+            ...current,
+            enabled: typeof incoming.enabled === 'boolean' ? incoming.enabled : Boolean(current.enabled),
+            priceRwf,
+            currency: 'RWF',
+            period: 'monthly',
+            graceDays,
+            promoAccessEnabled: promoEnabled,
+            promoStartsAt,
+            promoEndsAt,
+            promoMessage: typeof incoming.promoMessage === 'string' ? incoming.promoMessage.trim().slice(0, 500) : current.promoMessage,
+            requireForTransfers: typeof incoming.requireForTransfers === 'boolean' ? incoming.requireForTransfers : current.requireForTransfers,
+            requireForDashboard: typeof incoming.requireForDashboard === 'boolean' ? incoming.requireForDashboard : current.requireForDashboard,
+            updatedAt: new Date().toISOString(),
+            updatedBy: user.username,
           };
         }
         if (fullState.customTranslations) {
