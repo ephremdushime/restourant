@@ -180,7 +180,7 @@ The current generic callback route is deliberately disabled. Prefer provider-spe
 
 RestoPass uses MTN MoMo Collections for two separate subscription purposes, subject to the same BESTIE COMPANIES LTD merchant configuration and MTN approval:
 
-- Restaurant software subscription: internal reference prefix `RESTO-`.
+- Restaurant software subscription: internal reference prefix `RPS-`.
 - Customer dashboard access subscription: internal reference prefix `PATRON-`.
 
 These references are separate from restaurant meal purchases. Meal and drink payments are made directly to each restaurant and are not collected or settled by RestoPass.
