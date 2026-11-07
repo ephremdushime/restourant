@@ -4548,8 +4548,19 @@ async function ensureRestaurantSaasSubscription(client: any, restaurantCode: str
   if (!found.rows[0]) return null;
   let restaurant = found.rows[0].data || {};
   const plan = (serverDbState?.plans || []).find((item: any) => item.id === restaurant.planId);
-  const price = Number(restaurant.saasSubscriptionPriceRwf || restaurant.termsOverride?.saasSubscriptionPriceRwf || restaurant.termsOverride?.basePriceRwf || plan?.terms?.basePriceRwf);
-  if (!Number.isSafeInteger(price) || price <= 0) throw new Error('Valid SaaS price must be configured.');
+  // Legacy tenants created before SaaS pricing existed receive a safe default
+  // that Super Admin can edit. New onboarding always supplies an explicit price.
+  const configuredPrice = Number(restaurant.saasSubscriptionPriceRwf ?? restaurant.termsOverride?.saasSubscriptionPriceRwf ?? restaurant.termsOverride?.basePriceRwf ?? plan?.terms?.basePriceRwf ?? 0);
+  const price = Number.isSafeInteger(configuredPrice) && configuredPrice > 0 ? configuredPrice : 50000;
+  if (Number(restaurant.saasSubscriptionPriceRwf) !== price) {
+    restaurant = { ...restaurant, saasSubscriptionPriceRwf: price };
+    await client.query('UPDATE restaurants SET data=$2,updated_at=NOW() WHERE code=$1', [restaurantCode, JSON.stringify(restaurant)]);
+    if (serverDbState) {
+      serverDbState.restaurants = (serverDbState.restaurants || []).map((item: any) =>
+        item.code === restaurantCode ? restaurant : item
+      );
+    }
+  }
 
   const durationValue = Number(restaurant.saasComplimentaryDurationValue || 0);
   const durationUnit = ['days', 'months', 'years'].includes(restaurant.saasComplimentaryDurationUnit)
