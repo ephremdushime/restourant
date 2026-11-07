@@ -4558,14 +4558,43 @@ async function ensureRestaurantSaasSubscription(client: any, restaurantCode: str
     ? Math.min(365, Math.max(0, Number(restaurant.saasRenewalGraceDays))) : 3;
   const complimentaryActive = Boolean(complimentaryEndsAt && Date.parse(complimentaryEndsAt) > Date.now());
 
+  // Preserve valid licences issued before this billing model was introduced.
+  // Otherwise the first subscription read after deployment could incorrectly
+  // turn every existing active tenant into pending_payment.
+  const legacyLicenseResult = await client.query(
+    'SELECT id,valid_until,data FROM licenses WHERE restaurant_code=$1 AND valid_until >= NOW() ORDER BY created_at DESC LIMIT 1',
+    [restaurantCode]
+  );
+  const legacyLicense = legacyLicenseResult.rows[0] || null;
+  let legacyLicenseData: any = legacyLicense?.data || {};
+  if (typeof legacyLicenseData === 'string') {
+    try { legacyLicenseData = JSON.parse(legacyLicenseData); } catch { legacyLicenseData = {}; }
+  }
+  const legacyLicenseIsComplimentary = Boolean(legacyLicenseData.complimentary);
+  const legacyPaidPeriodStart = legacyLicense && !legacyLicenseIsComplimentary
+    ? (legacyLicenseData.issuedAt || restaurant.createdAt || new Date().toISOString()) : null;
+  const legacyPaidPeriodEnd = legacyLicense && !legacyLicenseIsComplimentary
+    ? new Date(legacyLicense.valid_until).toISOString() : null;
+  const effectiveComplimentaryStart = complimentaryStartedAt ||
+    (legacyLicense && legacyLicenseIsComplimentary ? (legacyLicenseData.issuedAt || restaurant.createdAt || new Date().toISOString()) : null);
+  const effectiveComplimentaryEnd = complimentaryEndsAt ||
+    (legacyLicense && legacyLicenseIsComplimentary ? new Date(legacyLicense.valid_until).toISOString() : null);
+  const initialStatus = complimentaryActive ? 'complimentary'
+    : legacyPaidPeriodEnd ? 'active'
+      : effectiveComplimentaryEnd && Date.parse(effectiveComplimentaryEnd) > Date.now() ? 'complimentary'
+        : 'pending_payment';
+
   await client.query(
     `INSERT INTO restaurant_subscriptions
-      (id,restaurant_code,status,price_rwf,complimentary_started_at,complimentary_ends_at,
-       complimentary_duration_value,complimentary_duration_unit,renewal_grace_days)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      (id,restaurant_code,status,price_rwf,current_period_start,current_period_end,
+       complimentary_started_at,complimentary_ends_at,complimentary_duration_value,
+       complimentary_duration_unit,renewal_grace_days)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      ON CONFLICT (restaurant_code) DO NOTHING`,
-    ['rs_' + crypto.randomUUID(), restaurantCode, complimentaryActive ? 'complimentary' : 'pending_payment',
-      price, complimentaryStartedAt, complimentaryEndsAt, durationValue, durationUnit, graceDays]
+    ['rs_' + crypto.randomUUID(), restaurantCode, initialStatus, price,
+      legacyPaidPeriodStart, legacyPaidPeriodEnd,
+      effectiveComplimentaryStart, effectiveComplimentaryEnd,
+      durationValue, durationUnit, graceDays]
   );
   const subscriptionResult = await client.query(
     'SELECT * FROM restaurant_subscriptions WHERE restaurant_code=$1 FOR UPDATE', [restaurantCode]
@@ -4581,6 +4610,22 @@ async function ensureRestaurantSaasSubscription(client: any, restaurantCode: str
       [restaurantCode, complimentaryActive ? 'complimentary' : 'pending_payment',
         complimentaryStartedAt, complimentaryEndsAt, durationValue, durationUnit, graceDays, price]
     );
+  } else if (!subscription.current_period_end && !subscription.complimentary_started_at && legacyLicense) {
+    if (legacyPaidPeriodEnd) {
+      await client.query(
+        `UPDATE restaurant_subscriptions SET status='active',current_period_start=$2,current_period_end=$3,
+         renewal_grace_days=$4,price_rwf=$5,updated_at=NOW()
+         WHERE restaurant_code=$1 AND current_period_end IS NULL`,
+        [restaurantCode, legacyPaidPeriodStart, legacyPaidPeriodEnd, Number(legacyLicenseData.graceDays ?? graceDays), price]
+      );
+    } else if (effectiveComplimentaryEnd) {
+      await client.query(
+        `UPDATE restaurant_subscriptions SET status='complimentary',complimentary_started_at=$2,
+         complimentary_ends_at=$3,renewal_grace_days=$4,price_rwf=$5,updated_at=NOW()
+         WHERE restaurant_code=$1 AND current_period_end IS NULL`,
+        [restaurantCode, effectiveComplimentaryStart, effectiveComplimentaryEnd, Number(legacyLicenseData.graceDays ?? graceDays), price]
+      );
+    }
   }
 
   const fresh = await client.query('SELECT * FROM restaurant_subscriptions WHERE restaurant_code=$1 FOR UPDATE', [restaurantCode]);
