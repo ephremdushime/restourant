@@ -89,6 +89,9 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   const [newExtraScanFee, setNewExtraScanFee] = useState(15000);
   const [newStudentSubPrice, setNewStudentSubPrice] = useState(500);
   const [newSinglePlatePrice, setNewSinglePlatePrice] = useState(1200);
+  const [newAdminUsername, setNewAdminUsername] = useState('admin');
+  const [newAdminDisplayName, setNewAdminDisplayName] = useState('Restaurant Administrator');
+  const [newAdminPassword, setNewAdminPassword] = useState('');
 
   // When selected plan changes during onboarding, sync baseline pricing defaults
   const handleOnboardPlanChange = (planId: string) => {
@@ -202,10 +205,15 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  const handleCreateRestaurant = (e: React.FormEvent) => {
+  const handleCreateRestaurant = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (newAdminPassword.length < 16 || newAdminPassword.length > 128) {
+      showToast('Initial restaurant administrator password must contain 16–128 characters.', 'error');
+      return;
+    }
+    const code = newCode.trim().toUpperCase();
     restoStore.createRestaurant({
-      code: newCode,
+      code,
       name: newName,
       legalEntity: newLegal,
       phone: newPhone,
@@ -219,11 +227,42 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       saasComplimentaryDurationUnit: newComplimentaryUnit,
       saasRenewalGraceDays: Number(newRenewalGraceDays),
       pricePerExtraScanPointRwf: Number(newExtraScanFee),
-      studentSubscriptionPriceRwf: Number(newStudentSubPrice),
       singlePlatePriceRwf: Number(newSinglePlatePrice),
     });
-    showToast(`Created ${newName}. Complimentary access: ${newComplimentaryDuration} ${newComplimentaryUnit}; paid billing starts after it ends.`);
-    setCreateModalOpen(false);
+    const token = restoStore.getAuthToken();
+    const headers = { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) };
+    try {
+      let initialized = false;
+      let lastError = 'Restaurant record is not yet available in the billing database.';
+      for (let attempt = 0; attempt < 6 && !initialized; attempt++) {
+        if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 350));
+        const response = await fetch('/api/restaurant-saas/subscription?restaurantCode=' + encodeURIComponent(code), {
+          headers, cache: 'no-store',
+        });
+        const body = await response.json();
+        if (response.ok && body.success) initialized = true;
+        else lastError = body.error || lastError;
+        if (!response.ok && response.status !== 404) break;
+      }
+      if (!initialized) throw new Error('Restaurant was created locally, but billing initialization failed: ' + lastError);
+
+      const adminResponse = await fetch('/api/admin/restaurant-admins', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ restaurantCode: code, username: newAdminUsername, displayName: newAdminDisplayName, password: newAdminPassword }),
+      });
+      const adminBody = await adminResponse.json();
+      if (!adminResponse.ok || !adminBody.success) {
+        throw new Error('Restaurant billing was initialized, but administrator provisioning failed: ' + (adminBody.error || 'Unknown error'));
+      }
+      await restoStore.pullStateFromServer();
+      const tenantUrl = window.location.origin + '/?resto=' + encodeURIComponent(code);
+      showToast(`Created ${newName}. Admin username: ${newAdminUsername}. Tenant entry: ${tenantUrl}. Complimentary access: ${newComplimentaryDuration} ${newComplimentaryUnit}; paid billing starts after it ends.`);
+      setNewAdminPassword('');
+      setCreateModalOpen(false);
+    } catch (error: any) {
+      showToast(error?.message || 'Restaurant onboarding did not finish. Check the tenant record before retrying.', 'error');
+    }
   };
 
   const handleIssueLicense = (e: React.FormEvent) => {
@@ -1389,6 +1428,28 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 </div>
               </div>
 
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+                <div className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">Initial Restaurant Administrator</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-semibold">Administrator username</label>
+                    <input required minLength={3} maxLength={64} value={newAdminUsername} onChange={(e) => setNewAdminUsername(e.target.value)}
+                      className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white" />
+                  </div>
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-semibold">Display name</label>
+                    <input required minLength={2} maxLength={120} value={newAdminDisplayName} onChange={(e) => setNewAdminDisplayName(e.target.value)}
+                      className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white" />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-slate-300 block mb-1 font-semibold">Temporary administrator password</label>
+                  <input type="password" required minLength={16} maxLength={128} value={newAdminPassword} onChange={(e) => setNewAdminPassword(e.target.value)}
+                    autoComplete="new-password" className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white" />
+                  <span className="text-[10px] text-slate-500">At least 16 characters. The server stores only a password hash. Share it securely and require a password change after first login.</span>
+                </div>
+              </div>
+
               <div>
                 <label className="text-slate-300 block mb-1 font-semibold">Restaurant Name</label>
                 <input
@@ -1546,7 +1607,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 type="submit"
                 className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs transition-colors shadow-sm mt-2 cursor-pointer"
               >
-                Onboard Tenant &amp; Issue {newMaxStations}-Station License
+                Create Restaurant &amp; Administrator
               </button>
             </form>
           </div>
