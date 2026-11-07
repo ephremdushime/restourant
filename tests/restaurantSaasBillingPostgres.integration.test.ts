@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { calculateComplimentaryEnd } from '../src/services/restaurantSaasBilling';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
-import { calculateComplimentaryEnd } from '../src/services/restaurantSaasBilling';
 
 test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant entitlement', { skip: !databaseUrl }, async () => {
   process.env.NODE_ENV = 'test';
@@ -284,9 +284,14 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     assert.equal(repeatedMismatch.body.status, 'review_required');
 
     // Once the complimentary end date passes, the restaurant can make its first payment.
+    const simulatedComplimentaryExpiry = new Date(Date.now() - 1000).toISOString();
     await pool!.query(
-      "UPDATE restaurant_subscriptions SET complimentary_ends_at=NOW()-INTERVAL '1 second' WHERE restaurant_code=$1",
-      [freeRestaurantCode]
+      'UPDATE restaurant_subscriptions SET complimentary_ends_at=$2 WHERE restaurant_code=$1',
+      [freeRestaurantCode, simulatedComplimentaryExpiry]
+    );
+    await pool!.query(
+      'UPDATE licenses SET valid_until=$2 WHERE restaurant_code=$1',
+      [freeRestaurantCode, simulatedComplimentaryExpiry]
     );
     const complimentaryExpired = await request(
       'GET', '/api/restaurant-saas/subscription?restaurantCode=' + encodeURIComponent(freeRestaurantCode),
@@ -311,7 +316,7 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
       [freeRestaurantCode]
     );
     assert.equal(firstPaidPeriod.rows[0].status, 'active');
-    assert.ok(Date.parse(firstPaidPeriod.rows[0].current_period_start) >= Date.parse(expectedComplimentaryEnd));
+    assert.ok(Date.parse(firstPaidPeriod.rows[0].current_period_start) >= Date.parse(simulatedComplimentaryExpiry));
 
     await pool!.query(
       "UPDATE restaurant_subscriptions SET status='restricted',current_period_end=NOW()-INTERVAL '73 hours' WHERE restaurant_code=$1",
