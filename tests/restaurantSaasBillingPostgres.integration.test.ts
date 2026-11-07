@@ -66,7 +66,7 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
   const originalFetch = globalThis.fetch;
   let requestToPayCount = 0;
   let requestBody: any = null;
-  let providerAmount = '64999';
+  let providerAmount = '194999';
   let providerStatus = 'PENDING';
   (globalThis as any).fetch = async (input: any, init?: any) => {
     const url = String(input);
@@ -130,11 +130,12 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
 
     const idempotencyKey = 'saas-init-' + restaurantCode + '-001';
     const initiated = await request('POST', '/api/restaurant-saas/payment/initiate', adminToken, {
-      payerMsisdn: '+250 788 123 456', idempotencyKey,
+      payerMsisdn: '+250 788 123 456', idempotencyKey, months: 3,
     });
     assert.equal(initiated.status, 202);
     const paymentId = initiated.body.paymentId;
     assert.ok(paymentId);
+    assert.equal(requestBody.amount, '195000');
 
     const duplicateAttempt = await request('POST', '/api/restaurant-saas/payment/initiate', adminToken, {
       payerMsisdn: '+250 788 123 456', idempotencyKey: 'saas-init-' + restaurantCode + '-002',
@@ -165,7 +166,7 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     assert.equal(noLicense.rowCount, 0);
 
     providerStatus = 'SUCCESSFUL';
-    providerAmount = '65000';
+    providerAmount = '195000';
     const verified = await request(
       'POST', '/api/restaurant-saas/payment/' + encodeURIComponent(paymentId) + '/verify',
       adminToken, {}
@@ -187,6 +188,13 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     assert.equal(persisted.rows[0].payment_status, 'successful');
     assert.ok(persisted.rows[0].entitlement_applied_at);
     assert.ok(persisted.rows[0].current_period_end);
+    const paidStart = new Date(persisted.rows[0].current_period_start);
+    const expectedPaidEnd = new Date(paidStart);
+    expectedPaidEnd.setUTCMonth(expectedPaidEnd.getUTCMonth() + 3);
+    assert.equal(new Date(persisted.rows[0].current_period_end).getTime(), expectedPaidEnd.getTime());
+    const monthsRow = await pool!.query('SELECT months_purchased,amount_rwf FROM restaurant_subscription_payments WHERE id=$1', [paymentId]);
+    assert.equal(Number(monthsRow.rows[0].months_purchased), 3);
+    assert.equal(Number(monthsRow.rows[0].amount_rwf), 195000);
 
     const repeatedVerify = await request(
       'POST', '/api/restaurant-saas/payment/' + encodeURIComponent(paymentId) + '/verify',
