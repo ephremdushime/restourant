@@ -420,8 +420,6 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                           <Building2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                           <span>{stationCount} Stations Licensed</span>
                         </div>
-                        <div className="text-[11px] text-slate-400 mt-0.5">
-                        </div>
                         <div className="text-[11px] text-slate-400">
                           Single Plate: <strong className="text-slate-300">{(resto.defaultPlatePriceRwf || 1200).toLocaleString()} RWF</strong>
                         </div>
@@ -1551,7 +1549,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="text-slate-300 block mb-1 font-semibold">
                       Extra Station
@@ -1565,10 +1563,6 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                       className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white font-mono"
                     />
                   </div>
-
-                  <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">
-/div>
 
                   <div>
                     <label className="text-slate-300 block mb-1 font-semibold">
