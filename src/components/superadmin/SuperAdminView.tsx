@@ -60,6 +60,11 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
   // Global Student Fee State
   const [globalStudentFeeInput, setGlobalStudentFeeInput] = useState<number>(studentSubSettings.priceRwf || 500);
+  const [promoAccessEnabledInput, setPromoAccessEnabledInput] = useState<boolean>(Boolean(studentSubSettings.promoAccessEnabled));
+  const [promoStartInput, setPromoStartInput] = useState<string>(studentSubSettings.promoStartsAt ? studentSubSettings.promoStartsAt.slice(0, 16) : '');
+  const [promoEndInput, setPromoEndInput] = useState<string>(studentSubSettings.promoEndsAt ? studentSubSettings.promoEndsAt.slice(0, 16) : '');
+  const [promoMessageInput, setPromoMessageInput] = useState<string>(studentSubSettings.promoMessage || 'You are enjoying complimentary RestoPass access during our launch promotion.');
+  const [customerGraceDaysInput, setCustomerGraceDaysInput] = useState<number>(studentSubSettings.graceDays ?? 3);
   const [feedbackToast, setFeedbackToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
@@ -707,7 +712,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 leading-relaxed max-w-2xl">
-                  Sets the monthly digital access fee at <strong>{studentSubSettings.priceRwf.toLocaleString()} RWF / month</strong>. Customers pay at reception; Super Admin verifies and activates access.
+                  Sets the platform-wide customer access fee at <strong>{studentSubSettings.priceRwf.toLocaleString()} RWF / calendar month</strong>. Customers can prepay multiple months through MTN MoMo after payment enforcement is enabled.
                   Activation is controlled entirely by this platform feature flag without requiring a code release.
                 </p>
               </div>
@@ -756,7 +761,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   <span>Platform-Wide Student Subscription Monthly Fee</span>
                 </div>
                 <p className="text-xs text-slate-400">
-                  Default fee charged to students across cafeterias for optional digital pass access. Individual cafeterias can also be customized with specific per-restaurant rates.
+                  One platform-wide monthly fee for all restaurant customers. Restaurant meal purchases are paid directly to each restaurant and are not part of this subscription.
                 </p>
               </div>
 
@@ -764,7 +769,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 <div className="relative">
                   <input
                     type="number"
-                    min={0}
+                    min={1}
                     step={50}
                     value={globalStudentFeeInput}
                     onChange={(e) => setGlobalStudentFeeInput(Math.max(0, parseInt(e.target.value) || 0))}
@@ -775,14 +780,59 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    restoStore.updateStudentSubscriptionSettings({ priceRwf: Number(globalStudentFeeInput) });
-                    showToast(`Updated default student subscription fee to ${globalStudentFeeInput.toLocaleString()} RWF/mo!`);
+                    const promoStartsAt = promoStartInput ? new Date(promoStartInput).toISOString() : undefined;
+                    const promoEndsAt = promoEndInput ? new Date(promoEndInput).toISOString() : undefined;
+                    if (promoStartsAt && promoEndsAt && Date.parse(promoStartsAt) >= Date.parse(promoEndsAt)) {
+                      showToast('Promotional end date must be after its start date.', 'error');
+                      return;
+                    }
+                    restoStore.updateStudentSubscriptionSettings({
+                      priceRwf: Number(globalStudentFeeInput),
+                      graceDays: Number(customerGraceDaysInput),
+                      promoAccessEnabled: promoAccessEnabledInput,
+                      promoStartsAt,
+                      promoEndsAt,
+                      promoMessage: promoMessageInput,
+                    });
+                    showToast('Customer subscription pricing and promotional policy saved.');
                   }}
                   className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md transition-colors cursor-pointer"
                 >
                   Save Fee
                 </button>
               </div>
+            </div>
+
+            <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-bold text-white">Customer launch promotion</div>
+                  <p className="text-xs text-slate-400">Make the free period visible to customers before paid access begins.</p>
+                </div>
+                <label className="inline-flex items-center gap-2 text-xs font-semibold text-emerald-300">
+                  <input type="checkbox" checked={promoAccessEnabledInput} onChange={(e) => setPromoAccessEnabledInput(e.target.checked)} />
+                  Promotional access enabled
+                </label>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Promotion starts</label>
+                  <input type="datetime-local" value={promoStartInput} onChange={(e) => setPromoStartInput(e.target.value)} className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-white text-xs" />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Promotion ends</label>
+                  <input type="datetime-local" value={promoEndInput} onChange={(e) => setPromoEndInput(e.target.value)} className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-white text-xs" />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Renewal grace (days)</label>
+                  <input type="number" min={0} max={365} value={customerGraceDaysInput} onChange={(e) => setCustomerGraceDaysInput(Math.max(0, Math.min(365, Number(e.target.value) || 0)))} className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-white text-xs" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Customer-facing promotion message</label>
+                <textarea rows={2} maxLength={500} value={promoMessageInput} onChange={(e) => setPromoMessageInput(e.target.value)} className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-white text-xs" />
+              </div>
+              <p className="text-[11px] text-slate-500">When customer payment enforcement is disabled, customer access remains free. When enforcement is enabled, the configured promotion temporarily keeps approved customers free until its end date.</p>
             </div>
 
             {/* Policy & Architectural Safeguards Overview */}
