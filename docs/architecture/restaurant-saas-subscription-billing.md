@@ -124,7 +124,7 @@ When the complimentary period ends, the restaurant enters `pending_payment`. The
 
 Complimentary expiry does not receive a post-expiry renewal grace period. Renewal grace applies only to a paid subscription period.
 
-Existing valid licences issued before this policy are migrated into the SaaS subscription record using their existing validity dates. The migration must not unexpectedly suspend existing active tenants.
+Existing valid licences issued before this policy are migrated into the SaaS subscription record using their existing validity dates. The migration must not unexpectedly suspend existing active tenants. Legacy restaurants without a configured SaaS price receive a zero-price pending record and cannot initiate payment until Super Admin explicitly sets the agreed monthly amount; the system must never invent a commercial price.
 
 ### Customer dashboard access policy
 
