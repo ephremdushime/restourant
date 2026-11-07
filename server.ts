@@ -5386,7 +5386,7 @@ app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['cu
   if (!config) {
     return res.status(503).json({
       success: false, code: 'PAYMENT_PROVIDER_NOT_CONFIGURED',
-      error: 'MTN Collections is not enabled. No payment request has been sent.',
+      error: 'Mobile Money checkout is not available yet: MTN Collections is not enabled. No payment request has been sent.',
       supportedProviders: ['mtn_momo'],
     });
   }
@@ -5520,7 +5520,7 @@ app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['cu
 // POST /api/payments/mobile-money/callback: Webhook callback from Mobile Money provider with Idempotency
 app.post('/api/payments/mobile-money/callback', apiRateLimiter, async (req, res) => {
   const webhookSecret = process.env.RESTOPASS_MOBILE_MONEY_WEBHOOK_SECRET;
-  if (!webhookSecret) return res.status(503).json({ success: false, error: 'Legacy customer payment callback is disabled.' });
+  if (!webhookSecret) return res.status(503).json({ success: false, error: 'Payment callback verification is not configured; the legacy customer callback is disabled.' });
   const payloadBody = req.body || {};
   const providedSig = String(req.headers['x-restopass-signature'] || '');
   const canonicalPayload = JSON.stringify({
