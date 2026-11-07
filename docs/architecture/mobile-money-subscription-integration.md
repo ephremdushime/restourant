@@ -172,3 +172,47 @@ The current generic callback route is deliberately disabled. Prefer provider-spe
 - Normalized provider-neutral payment-attempt and webhook-event tables are now present in PostgreSQL. No provider adapter is enabled and no customer is charged by this feature.
 
 **Next implementation phase:** add normalized payment-attempt persistence, provider adapter interfaces and mock contract tests without activating a live provider. Complete provider-specific adapters only after merchant onboarding and sandbox credentials are available.
+
+
+---
+
+## RestoPass subscription purposes — 8 November 2026
+
+RestoPass uses MTN MoMo Collections for two separate subscription purposes, subject to the same BESTIE COMPANIES LTD merchant configuration and MTN approval:
+
+- Restaurant software subscription: internal reference prefix `RESTO-`.
+- Customer dashboard access subscription: internal reference prefix `PATRON-`.
+
+These references are separate from restaurant meal purchases. Meal and drink payments are made directly to each restaurant and are not collected or settled by RestoPass.
+
+Both subscription purposes use RWF and calendar-month billing. The requested amount is:
+
+`configured_monthly_price_rwf × months_purchased`
+
+The supported checkout interface offers 1–6 months. The server validates a 1–24 month API range, snapshots the monthly price and term, and verifies the provider's amount, currency, payer MSISDN, external reference, and financial transaction ID before activating access.
+
+### Customer dashboard collection
+
+Customer checkout uses the same server-side MTN Collections configuration as restaurant SaaS checkout. It must not use the legacy mock-capable generic mobile-money service for production activation.
+
+The customer payment flow is:
+
+1. Check global customer payment policy and active promotional window.
+2. Validate customer tenant and registration approval.
+3. Persist a unique payment attempt and idempotency fingerprint before requesting payment.
+4. Send MTN Request to Pay with a unique provider reference UUID.
+5. Poll MTN Request to Pay status server-to-server.
+6. Keep pending transactions unresolved; never activate on HTTP 202 alone.
+7. On provider success, compare amount, currency, payer, external reference and provider transaction ID.
+8. Reject duplicate provider transaction IDs and duplicate activation.
+9. Calculate the purchased calendar-month period and update the customer subscription only after verification.
+
+The legacy custom-HMAC customer callback is not an MTN-authenticated webhook and cannot activate a successful subscription. Direct MTN status verification is authoritative.
+
+### Environment and production safeguards
+
+Restaurant and customer subscriptions share the `RESTOPASS_SAAS_MTN_ENABLED` gate and MTN Collections credentials/environment. Keep the feature disabled until sandbox credentials and the correct Rwanda target environment are configured.
+
+Sandbox UAT must be executed with actual provider requests and responses. Mock or local simulation results do not count as MTN UAT passes. Keep secrets in environment variables or the deployment secret manager; never paste API keys into source control, issue comments, or chat.
+
+Production enablement requires MTN merchant approval, verified production credentials, reconciliation procedures, refund handling, monitoring, incident response, and the required legal/compliance approvals.
