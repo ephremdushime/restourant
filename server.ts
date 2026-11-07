@@ -5085,10 +5085,10 @@ function checkServerStudentEntitlement(
       reason: 'Your restaurant registration must be approved before customer dashboard access is activated.',
     };
   }
-  const promoStartMs = settings?.promoStartsAt ? Date.parse(settings.promoStartsAt) : Number.NEGATIVE_INFINITY;
+  const promoStartMs = settings?.promoStartsAt ? Date.parse(settings.promoStartsAt) : 0;
   const promoEndMs = settings?.promoEndsAt ? Date.parse(settings.promoEndsAt) : Number.POSITIVE_INFINITY;
   const promotionalAccessActive = Boolean(settings?.promoAccessEnabled) &&
-    Number.isFinite(promoStartMs) && Number.isFinite(promoEndMs) &&
+    (!settings?.promoStartsAt || Number.isFinite(promoStartMs)) && (!settings?.promoEndsAt || Number.isFinite(promoEndMs)) &&
     lifecycleNow >= promoStartMs && lifecycleNow < promoEndMs;
   if (lifecycleCustomer?.registrationStatus === 'approved' && (!settings?.enabled || promotionalAccessActive)) {
     return {
@@ -5620,6 +5620,16 @@ app.post('/api/superadmin/customer/subscription/activate-paid', apiRateLimiter, 
   }
 
   const settings = serverDbState.studentSubscriptionSettings || {};
+  const nowForPolicy = Date.now();
+  const promoStartForPolicy = settings.promoStartsAt ? Date.parse(settings.promoStartsAt) : 0;
+  const promoEndForPolicy = settings.promoEndsAt ? Date.parse(settings.promoEndsAt) : Number.POSITIVE_INFINITY;
+  const promoCurrentlyActive = Boolean(settings.promoAccessEnabled) &&
+    (!settings.promoStartsAt || Number.isFinite(promoStartForPolicy)) &&
+    (!settings.promoEndsAt || Number.isFinite(promoEndForPolicy)) &&
+    nowForPolicy >= promoStartForPolicy && nowForPolicy < promoEndForPolicy;
+  if (!settings.enabled || promoCurrentlyActive) {
+    return res.status(409).json({ success: false, error: 'Customer access is currently free. Manual paid activation is disabled by the active platform policy.' });
+  }
   const monthlyPriceRwf = Number(settings.priceRwf);
   let amountRwf: number;
   try { amountRwf = calculateSubscriptionAmount(monthlyPriceRwf, months); }
@@ -5647,7 +5657,7 @@ app.post('/api/superadmin/customer/subscription/activate-paid', apiRateLimiter, 
     restaurantCode: customer.restaurantCode,
     status: 'active',
     planName: 'Student Digital Pass',
-    priceRwf: amountRwf,
+    priceRwf: monthlyPriceRwf,
     currency: 'RWF',
     createdAt: now,
     updatedAt: now,
@@ -5655,7 +5665,7 @@ app.post('/api/superadmin/customer/subscription/activate-paid', apiRateLimiter, 
   Object.assign(subscription, {
     status: 'active',
     planName: 'Student Digital Pass',
-    priceRwf: amountRwf,
+    priceRwf: monthlyPriceRwf,
     currency: 'RWF',
     currentPeriodStart: period.periodStart,
     currentPeriodEnd: periodEnd,
@@ -5944,10 +5954,12 @@ app.patch('/api/admin/settings/student-subscriptions', apiRateLimiter, requireAu
   }
   const promoStartsAt = body.promoStartsAt === undefined ? current.promoStartsAt : body.promoStartsAt;
   const promoEndsAt = body.promoEndsAt === undefined ? current.promoEndsAt : body.promoEndsAt;
+  const promoEnabled = typeof body.promoAccessEnabled === 'boolean' ? body.promoAccessEnabled : Boolean(current.promoAccessEnabled);
   if ((promoStartsAt && !Number.isFinite(Date.parse(promoStartsAt))) ||
       (promoEndsAt && !Number.isFinite(Date.parse(promoEndsAt))) ||
-      (promoStartsAt && promoEndsAt && Date.parse(promoStartsAt) >= Date.parse(promoEndsAt))) {
-    return res.status(400).json({ success: false, error: 'Promotional start and end dates must be valid, with the end after the start.' });
+      (promoStartsAt && promoEndsAt && Date.parse(promoStartsAt) >= Date.parse(promoEndsAt)) ||
+      (promoEnabled && !promoEndsAt)) {
+    return res.status(400).json({ success: false, error: 'An enabled promotion requires valid start/end dates, with the end after the start.' });
   }
   serverDbState.studentSubscriptionSettings = {
     ...current,
@@ -5956,7 +5968,7 @@ app.patch('/api/admin/settings/student-subscriptions', apiRateLimiter, requireAu
     currency: 'RWF',
     period: 'monthly',
     graceDays,
-    promoAccessEnabled: typeof body.promoAccessEnabled === 'boolean' ? body.promoAccessEnabled : Boolean(current.promoAccessEnabled),
+    promoAccessEnabled: promoEnabled,
     promoStartsAt: promoStartsAt || undefined,
     promoEndsAt: promoEndsAt || undefined,
     promoMessage: typeof body.promoMessage === 'string' ? body.promoMessage.trim().slice(0, 500) : current.promoMessage,
