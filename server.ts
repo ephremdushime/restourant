@@ -5591,7 +5591,7 @@ app.post('/api/superadmin/customer/subscription/activate-paid', apiRateLimiter, 
   if (!Number.isSafeInteger(months) || months < 1 || months > 24) {
     return res.status(400).json({ success: false, error: 'Choose between 1 and 24 calendar months.' });
   }
-  if (!customerId || !['cash', 'mtn_momo', 'bank_transfer'].includes(paymentMethod)) {
+  if (!customerId || !['cash', 'bank_transfer'].includes(paymentMethod)) {
     return res.status(400).json({ success: false, error: 'Select a customer and valid payment method.' });
   }
   if (paymentMethod !== 'cash' && (!referenceInput || referenceInput.length > 100)) {
