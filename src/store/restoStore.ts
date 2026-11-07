@@ -7298,7 +7298,7 @@ export class RestoStore {
         reason: 'Your restaurant registration must be approved before customer dashboard access is activated.',
       };
     }
-    const eligibleForGlobalFreeAccess = Boolean(lifecycleCustomer) &&
+    const eligibleForGlobalFreeAccess = lifecycleCustomer !== undefined && lifecycleCustomer !== null &&
       (!lifecycleCustomer.registrationStatus || lifecycleCustomer.registrationStatus === 'approved');
     if (eligibleForGlobalFreeAccess && (!settings.enabled || promoActive)) {
       return {
