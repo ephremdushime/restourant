@@ -4368,6 +4368,9 @@ export class RestoStore {
     licensedScanPoints?: number;
     basePriceRwf?: number;
     saasSubscriptionPriceRwf?: number;
+    saasComplimentaryDurationValue?: number;
+    saasComplimentaryDurationUnit?: 'days' | 'months' | 'years';
+    saasRenewalGraceDays?: number;
     pricePerExtraScanPointRwf?: number;
     studentSubscriptionPriceRwf?: number;
     singlePlatePriceRwf?: number;
@@ -4399,6 +4402,9 @@ export class RestoStore {
       defaultPlatePriceRwf: data.singlePlatePriceRwf ? Number(data.singlePlatePriceRwf) : 1200,
       studentSubscriptionPriceRwf: data.studentSubscriptionPriceRwf !== undefined ? Number(data.studentSubscriptionPriceRwf) : undefined,
       saasSubscriptionPriceRwf: data.saasSubscriptionPriceRwf !== undefined ? Number(data.saasSubscriptionPriceRwf) : Number(selectedPlan?.terms?.basePriceRwf || 0),
+      saasComplimentaryDurationValue: Math.max(0, Number(data.saasComplimentaryDurationValue || 0)),
+      saasComplimentaryDurationUnit: data.saasComplimentaryDurationUnit || 'days',
+      saasRenewalGraceDays: Math.min(365, Math.max(0, Number(data.saasRenewalGraceDays ?? 3))),
       highestTimeSeen: Date.now(),
       lastSyncAt: now,
       softwareVersion: '1.1.0-authority',
