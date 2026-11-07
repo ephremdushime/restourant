@@ -2310,7 +2310,7 @@ export class RestoStore {
     }
 
     const validUntilMs = new Date(license.validUntil).getTime();
-    const graceDays = Number.isSafeInteger(Number(license.graceDays)) ? Math.min(365, Math.max(0, Number(license.graceDays))) : 3;
+    const graceDays = license.complimentary ? 0 : (Number.isSafeInteger(Number(license.graceDays)) ? Math.min(365, Math.max(0, Number(license.graceDays))) : 3);
     const graceEndsAtMs = validUntilMs + graceDays * 24 * 60 * 60 * 1000;
     const msRemaining = validUntilMs - guardedNow;
     const graceMsRemaining = graceEndsAtMs - guardedNow;
