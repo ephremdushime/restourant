@@ -55,6 +55,9 @@ export interface Restaurant {
   planId: string;
   defaultPlatePriceRwf?: number;
   saasSubscriptionPriceRwf?: number;
+  saasComplimentaryDurationValue?: number;
+  saasComplimentaryDurationUnit?: 'days' | 'months' | 'years';
+  saasRenewalGraceDays?: number;
   studentSubscriptionPriceRwf?: number;
   bundlePricing?: PlateBundlePricing;
   welcomeMessage?: string;
