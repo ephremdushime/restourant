@@ -165,5 +165,5 @@ export function validateSaasPaymentMatch(input: {
 }
 
 export function normalizeMsisdn(value: string): string {
-  return String(value || '').replace(/[+\\s-]/g, '');
+  return String(value || '').replace(/[+\s-]/g, '');
 }
