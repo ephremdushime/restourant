@@ -87,7 +87,6 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   const [newComplimentaryUnit, setNewComplimentaryUnit] = useState<'days' | 'months' | 'years'>('months');
   const [newRenewalGraceDays, setNewRenewalGraceDays] = useState(3);
   const [newExtraScanFee, setNewExtraScanFee] = useState(15000);
-  const [newStudentSubPrice, setNewStudentSubPrice] = useState(500);
   const [newSinglePlatePrice, setNewSinglePlatePrice] = useState(1200);
   const [newAdminUsername, setNewAdminUsername] = useState('admin');
   const [newAdminDisplayName, setNewAdminDisplayName] = useState('Restaurant Administrator');
@@ -145,19 +144,16 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   const [editRestoMaxStations, setEditRestoMaxStations] = useState(2);
   const [editRestoBasePrice, setEditRestoBasePrice] = useState(140000);
   const [editRestoExtraScanFee, setEditRestoExtraScanFee] = useState(15000);
-  const [editRestoStudentSubPrice, setEditRestoStudentSubPrice] = useState(500);
   const [editRestoPlatePrice, setEditRestoPlatePrice] = useState(1200);
 
   const handleOpenEditResto = (resto: Restaurant) => {
     setEditingResto(resto);
     const plan = state.plans.find((p) => p.id === resto.planId) || state.plans[0];
     const lic = restoStore.getRestaurantLicense(resto.code);
-    const customStudentFee = resto.studentSubscriptionPriceRwf ?? resto.termsOverride?.studentSubscriptionPriceRwf ?? studentSubSettings.priceRwf ?? 500;
 
     setEditRestoMaxStations(lic?.maxScanPoints || resto.termsOverride?.maxScanPointsIncluded || plan.terms.maxScanPointsIncluded || 2);
     setEditRestoBasePrice(resto.saasSubscriptionPriceRwf || plan.terms.basePriceRwf);
     setEditRestoExtraScanFee(resto.termsOverride?.pricePerExtraScanPointRwf || plan.terms.pricePerExtraScanPointRwf);
-    setEditRestoStudentSubPrice(customStudentFee);
     setEditRestoPlatePrice(resto.defaultPlatePriceRwf || 1200);
   };
 
@@ -180,7 +176,6 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
     restoStore.updateRestaurantPricingAndTerms(editingResto.code, {
       saasSubscriptionPriceRwf: Number(editRestoBasePrice),
       pricePerExtraScanPointRwf: Number(editRestoExtraScanFee),
-      studentSubscriptionPriceRwf: Number(editRestoStudentSubPrice),
       defaultPlatePriceRwf: Number(editRestoPlatePrice),
       maxScanPoints: Number(editRestoMaxStations),
     });
@@ -410,8 +405,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   const licStatus = restoStore.getRestaurantLicenseStatus(resto.code);
                   const lic = licStatus.license;
                   const isCurrent = state.currentRestaurantCode === resto.code;
-                  const customStudentFee = resto.studentSubscriptionPriceRwf ?? resto.termsOverride?.studentSubscriptionPriceRwf ?? studentSubSettings.priceRwf ?? 500;
-                  const stationCount = lic?.maxScanPoints || resto.termsOverride?.maxScanPointsIncluded || 2;
+                                const stationCount = lic?.maxScanPoints || resto.termsOverride?.maxScanPointsIncluded || 2;
                   return (
                     <tr key={resto.code} className="hover:bg-slate-800/40">
                       <td className="py-3.5 px-4">
@@ -427,7 +421,6 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                           <span>{stationCount} Stations Licensed</span>
                         </div>
                         <div className="text-[11px] text-slate-400 mt-0.5">
-                          Student Sub: <strong className="text-emerald-400">{customStudentFee.toLocaleString()} RWF</strong>
                         </div>
                         <div className="text-[11px] text-slate-400">
                           Single Plate: <strong className="text-slate-300">{(resto.defaultPlatePriceRwf || 1200).toLocaleString()} RWF</strong>
@@ -1525,7 +1518,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                     </label>
                     <input
                       type="number"
-                      min={0}
+                      min={1}
                       step={5000}
                       required
                       value={newBasePrice}
@@ -1536,7 +1529,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="text-slate-300 block mb-1 font-semibold">Complimentary Access</label>
                     <input type="number" min={0} max={120} value={newComplimentaryDuration}
@@ -1575,17 +1568,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
                   <div>
                     <label className="text-slate-300 block mb-1 font-semibold">
-                      Student Sub
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      step={50}
-                      value={newStudentSubPrice}
-                      onChange={(e) => setNewStudentSubPrice(Math.max(0, parseInt(e.target.value) || 0))}
-                      className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white font-mono"
-                    />
-                  </div>
+/div>
 
                   <div>
                     <label className="text-slate-300 block mb-1 font-semibold">
@@ -1653,7 +1636,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   <label className="text-slate-300 block mb-1 font-semibold">Monthly Base Fee (RWF) *</label>
                   <input
                     type="number"
-                    min={0}
+                    min={1}
                     step={5000}
                     required
                     value={editRestoBasePrice}
@@ -1678,16 +1661,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 </div>
 
                 <div>
-                  <label className="text-slate-300 block mb-1 font-semibold">Student Sub (RWF)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    step={50}
-                    value={editRestoStudentSubPrice}
-                    onChange={(e) => setEditRestoStudentSubPrice(Math.max(0, parseInt(e.target.value) || 0))}
-                    className="w-full p-2 rounded bg-slate-950 border border-slate-700 text-white font-mono focus:border-amber-500 outline-hidden"
-                  />
-                </div>
+div>
 
                 <div>
                   <label className="text-slate-300 block mb-1 font-semibold">Plate Price (RWF)</label>
