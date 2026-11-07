@@ -5090,7 +5090,8 @@ function checkServerStudentEntitlement(
   const promotionalAccessActive = Boolean(settings?.promoAccessEnabled) &&
     (!settings?.promoStartsAt || Number.isFinite(promoStartMs)) && (!settings?.promoEndsAt || Number.isFinite(promoEndMs)) &&
     lifecycleNow >= promoStartMs && lifecycleNow < promoEndMs;
-  if (lifecycleCustomer?.registrationStatus === 'approved' && (!settings?.enabled || promotionalAccessActive)) {
+  const customerIsEligibleForGlobalFreeAccess = Boolean(lifecycleCustomer) && (!lifecycleCustomer.registrationStatus || lifecycleCustomer.registrationStatus === 'approved');
+  if (customerIsEligibleForGlobalFreeAccess && (!settings?.enabled || promotionalAccessActive)) {
     return {
       allowed: true, feature, status: 'complimentary', inGracePeriod: false, enforcementEnabled: Boolean(settings?.enabled),
       expiresAt: promotionalAccessActive ? settings.promoEndsAt : undefined,
@@ -5177,7 +5178,7 @@ function checkServerStudentEntitlement(
       status: 'inactive',
       inGracePeriod: false,
       enforcementEnabled: true,
-      reason: 'An active student subscription (500 RWF/mo) is required for this digital feature.',
+      reason: `An active customer subscription (${Number(settings?.priceRwf || 0).toLocaleString()} RWF per calendar month) is required for this digital feature.`,
     };
   }
 
@@ -5465,6 +5466,12 @@ app.post('/api/payments/mobile-money/callback', apiRateLimiter, async (req, res)
   const { internalReference, providerTransactionId, amountRwf, currency = 'RWF', status } = payloadBody;
   if (!internalReference || !providerTransactionId) {
     return res.status(400).json({ success: false, error: 'Missing internalReference or providerTransactionId' });
+  }
+
+  // This legacy HMAC callback is not an MTN-authenticated webhook. It must never
+  // grant subscription entitlement; MTN server-to-server status verification is authoritative.
+  if (String(status || '').toUpperCase() === 'SUCCESSFUL') {
+    return res.status(409).json({ success: false, error: 'Successful customer subscriptions must be verified directly with MTN. This legacy callback cannot activate access.' });
   }
 
   if (Number(amountRwf) !== 500 || currency !== 'RWF') {
