@@ -7209,7 +7209,7 @@ export class RestoStore {
     const updated: StudentSubscriptionSettings = {
       ...current,
       ...updates,
-      priceRwf: updates.priceRwf !== undefined ? Math.max(0, Math.floor(Number(updates.priceRwf))) : (current.priceRwf ?? 500),
+      priceRwf: updates.priceRwf !== undefined ? Math.max(1, Math.floor(Number(updates.priceRwf))) : (current.priceRwf ?? 500),
       currency: 'RWF',
       period: 'monthly',
       graceDays: updates.graceDays !== undefined ? Math.min(365, Math.max(0, Math.floor(Number(updates.graceDays)))) : (current.graceDays ?? 3),
