@@ -193,7 +193,7 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
       'POST', '/api/restaurant-saas/payment/' + encodeURIComponent(paymentId) + '/verify',
       adminToken, {}
     );
-    assert.equal(mismatch.status, 200);
+    assert.equal(mismatch.status, 200, JSON.stringify(mismatch.body));
     assert.equal(mismatch.body.status, 'provider_pending');
     const notActivated = await pool!.query(
       'SELECT status,current_period_end FROM restaurant_subscriptions WHERE restaurant_code=$1',
