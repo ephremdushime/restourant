@@ -5276,83 +5276,167 @@ app.get('/api/customer/subscription', apiRateLimiter, requireAuth(), (req, res) 
   });
 });
 
-// POST /api/customer/subscription/checkout: Server-authoritative Mobile Money initiation (Workstream F)
+// POST /api/customer/subscription/checkout: shared MTN Collections adapter for patron subscriptions.
 app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
-  if (process.env.RESTOPASS_MOBILE_MONEY_ENABLED !== 'true') {
+  ensureServerDbDefaults(serverDbState);
+  const user = req.user!;
+  const settings = serverDbState.studentSubscriptionSettings || {};
+  const nowMs = Date.now();
+  const promoStartMs = settings.promoStartsAt ? Date.parse(settings.promoStartsAt) : 0;
+  const promoEndMs = settings.promoEndsAt ? Date.parse(settings.promoEndsAt) : Number.POSITIVE_INFINITY;
+  const promoActive = Boolean(settings.promoAccessEnabled) &&
+    (!settings.promoStartsAt || Number.isFinite(promoStartMs)) &&
+    (!settings.promoEndsAt || Number.isFinite(promoEndMs)) &&
+    nowMs >= promoStartMs && nowMs < promoEndMs;
+  if (!settings.enabled || promoActive) {
+    return res.status(409).json({
+      success: false, code: 'CUSTOMER_ACCESS_IS_FREE',
+      message: promoActive
+        ? (settings.promoMessage || 'Your account is still in its promotional access period.')
+        : 'Customer subscription payments are currently disabled by RestoPass.',
+      promotionalEndsAt: promoActive ? settings.promoEndsAt || null : null,
+    });
+  }
+  const customer = (serverDbState.customers || []).find((item: any) =>
+    item.id === user.userId && item.restaurantCode === user.restaurantCode
+  );
+  if (!customer) return res.status(404).json({ success: false, error: 'Customer account not found in this restaurant.' });
+  if (customer.registrationStatus && customer.registrationStatus !== 'approved') {
+    return res.status(409).json({ success: false, error: 'Your restaurant registration must be approved before purchasing dashboard access.' });
+  }
+
+  const config = getSaasMtnConfig();
+  if (!config) {
     return res.status(503).json({
-      success: false,
-      code: 'PAYMENT_PROVIDER_NOT_CONFIGURED',
-      error: 'Mobile Money checkout is not available yet. RestoPass will enable dashboard payments after provider API onboarding and security verification.',
+      success: false, code: 'PAYMENT_PROVIDER_NOT_CONFIGURED',
+      error: 'MTN Collections is not enabled. No payment request has been sent.',
       supportedProviders: ['mtn_momo'],
     });
   }
 
-  ensureServerDbDefaults(serverDbState);
-  const user = req.user!;
-  const provider = 'mtn_momo';
-  const phone = String(req.body?.phone || req.body?.phoneNumber || '').replace(/\s+/g, '');
-  const idempotencyKey = String(req.body?.idempotencyKey || `momo_chk_${user.userId}_${Date.now()}`).trim();
-
-  if (!/^(?:\+?250|0)?7\d{8}$/.test(phone)) {
-    return res.status(400).json({ success: false, error: 'Valid Rwanda Mobile Money phone number is required' });
+  const phoneInput = String(req.body?.phone || req.body?.phoneNumber || '').replace(/\s+/g, '');
+  const payer = normalizeSaasPayer(phoneInput.startsWith('0') ? '250' + phoneInput.slice(1) : phoneInput);
+  const months = Number(req.body?.months ?? 1);
+  const idempotencyKey = String(req.body?.idempotencyKey || '').trim();
+  if (!/^2507[89]\d{7}$/.test(payer)) {
+    return res.status(400).json({ success: false, error: 'Valid Rwanda MTN phone number is required.' });
+  }
+  if (!Number.isSafeInteger(months) || months < 1 || months > 24) {
+    return res.status(400).json({ success: false, error: 'Choose between 1 and 24 calendar months.' });
+  }
+  if (!/^[A-Za-z0-9._:-]{12,128}$/.test(idempotencyKey)) {
+    return res.status(400).json({ success: false, error: 'A valid unique payment idempotency key is required.' });
   }
 
-  const existing = (serverDbState.studentSubscriptionPayments || []).find(
-    (p: any) => p.idempotencyKey === idempotencyKey && p.customerId === user.userId
-  );
+  const monthlyPriceRwf = Number(settings.priceRwf);
+  let amountRwf: number;
+  try { amountRwf = calculateSubscriptionAmount(monthlyPriceRwf, months); }
+  catch (error: any) { return res.status(409).json({ success: false, error: error.message }); }
+
+  const requestFingerprint = crypto.createHash('sha256').update(JSON.stringify({
+    customerId: user.userId, restaurantCode: user.restaurantCode, payer, amountRwf, months, currency: 'RWF',
+  })).digest('hex');
+  const payments: any[] = serverDbState.studentSubscriptionPayments || [];
+  const existing = payments.find((p: any) => p.idempotencyKey === idempotencyKey && p.customerId === user.userId);
   if (existing) {
+    if (existing.requestFingerprint && existing.requestFingerprint !== requestFingerprint) {
+      return res.status(409).json({ success: false, error: 'Idempotency key was already used with different payment details.' });
+    }
     return res.json({ success: true, idempotentReplay: true, paymentAttempt: existing, payment: existing });
   }
-
-  const internalReference = `RP-SUB-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
-  const referenceUuid = crypto.randomUUID();
-  const momoRes = await momoService.requestToPay({
-    referenceId: referenceUuid,
-    amount: '500',
-    currency: 'RWF',
-    externalId: internalReference,
-    payerPhone: phone.startsWith('0') ? `250${phone.slice(1)}` : phone.replace(/^\+/, ''),
-    payerMessage: 'RestoPass Monthly Subscription (500 RWF)',
-    payeeNote: `RestoPass Sub ${user.username}`,
-  });
-
-  if (momoRes.status !== 202 && momoRes.status !== 200) {
-    return res.status(502).json({
-      success: false,
-      error: 'Payment provider did not accept the request',
+  const unresolved = payments.find((p: any) =>
+    p.customerId === user.userId && ['created', 'provider_pending', 'review_required'].includes(p.status)
+  );
+  if (unresolved) {
+    return res.status(202).json({
+      success: true, reused: true, paymentAttempt: unresolved, payment: unresolved,
+      message: 'An earlier payment is unresolved. Verify or reconcile it before starting another payment.',
     });
   }
 
-  const attempt = {
-    id: `sp_${crypto.randomUUID()}`,
+  const internalReference = 'PATRON-' + crypto.randomUUID().replace(/-/g, '').toUpperCase();
+  const referenceUuid = crypto.randomUUID();
+  const attempt: any = {
+    id: 'sp_' + crypto.randomUUID(),
     customerId: user.userId,
     memberNo: user.username,
     restaurantCode: user.restaurantCode,
-    provider,
-    phone,
-    phoneNumber: phone,
-    amountRwf: 500,
+    provider: 'mtn_momo',
+    providerEnvironment: config.environment,
+    phone: payer,
+    phoneNumber: payer,
+    payerMsisdn: payer,
+    amountRwf,
+    monthlyPriceRwf,
+    monthsPurchased: months,
     currency: 'RWF',
     internalReference,
+    externalId: internalReference,
     providerReferenceUuid: referenceUuid,
     momoReferenceId: referenceUuid,
     idempotencyKey,
-    status: 'pending',
+    requestFingerprint,
+    status: 'created',
     createdAt: new Date().toISOString(),
   };
+  payments.push(attempt);
+  const savedBeforeRequest = await queueDbSave(serverDbState);
+  if (!savedBeforeRequest) {
+    serverDbState.studentSubscriptionPayments = payments.filter((p: any) => p.id !== attempt.id);
+    return res.status(503).json({ success: false, error: 'Payment attempt could not be durably recorded. No payment prompt was sent.' });
+  }
 
-  serverDbState.studentSubscriptionPayments.push(attempt);
-  await queueDbSave(serverDbState);
-
-  return res.status(202).json({
-    success: true,
-    paymentAttempt: attempt,
-    payment: attempt,
-    referenceId: referenceUuid,
-    internalReference,
-    statusUrl: `/api/customer/subscription/payments/${encodeURIComponent(internalReference)}/status`,
-    message: 'Payment request submitted to provider. Subscription will activate only after verified provider confirmation.',
-  });
+  try {
+    const token = await getSaasMtnAccessToken(config);
+    const providerResponse = await fetch(config.baseUrl + '/collection/v1_0/requesttopay', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + token,
+        'X-Reference-Id': referenceUuid,
+        'X-Target-Environment': config.targetEnvironment,
+        'Ocp-Apim-Subscription-Key': config.subscriptionKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        amount: String(amountRwf),
+        currency: 'RWF',
+        externalId: internalReference,
+        payer: { partyIdType: 'MSISDN', partyId: payer },
+        payerMessage: 'RestoPass customer access - ' + months + ' month(s)',
+        payeeNote: 'RestoPass patron dashboard subscription',
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (providerResponse.status !== 202) {
+      attempt.status = 'failed';
+      attempt.failureReason = 'MTN_REQUEST_REJECTED_HTTP_' + providerResponse.status;
+      attempt.updatedAt = new Date().toISOString();
+      await queueDbSave(serverDbState);
+      return res.status(502).json({ success: false, error: 'MTN did not accept the request. No dashboard access was activated.' });
+    }
+    attempt.status = 'provider_pending';
+    attempt.updatedAt = new Date().toISOString();
+    await queueDbSave(serverDbState);
+    return res.status(202).json({
+      success: true, paymentAttempt: attempt, payment: attempt,
+      referenceId: referenceUuid, internalReference,
+      statusUrl: '/api/customer/subscription/payments/' + encodeURIComponent(internalReference) + '/status',
+      amountRwf, monthsPurchased: months,
+      message: 'MTN payment request submitted. Access activates only after independent provider verification.',
+    });
+  } catch (error) {
+    // Keep the attempt unresolved: the network may have failed after MTN accepted it.
+    attempt.status = 'provider_pending';
+    attempt.failureReason = 'PROVIDER_REQUEST_OUTCOME_UNKNOWN';
+    attempt.updatedAt = new Date().toISOString();
+    await queueDbSave(serverDbState);
+    console.error('[Patron MTN checkout]', error);
+    return res.status(202).json({
+      success: true, paymentAttempt: attempt, payment: attempt,
+      internalReference, statusUrl: '/api/customer/subscription/payments/' + encodeURIComponent(internalReference) + '/status',
+      message: 'The provider response was interrupted. Check this payment status before attempting another payment.',
+    });
+  }
 });
 
 // POST /api/payments/mobile-money/callback: Webhook callback from Mobile Money provider with Idempotency
@@ -5648,163 +5732,164 @@ app.post('/api/superadmin/customer/subscription/activate-paid', apiRateLimiter, 
 
 // GET /api/customer/subscription/payments/:internalReference/status: Server-side MTN MoMo payment status verification
 app.get('/api/customer/subscription/payments/:internalReference/status', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
-  if (process.env.RESTOPASS_MOBILE_MONEY_ENABLED !== 'true') {
-    return res.status(503).json({ success: false, error: 'Mobile Money status verification is disabled until provider onboarding is enabled.' });
-  }
   ensureServerDbDefaults(serverDbState);
   const internalReference = String(req.params.internalReference || '');
   const user = req.user!;
   const payment: any = (serverDbState.studentSubscriptionPayments || []).find(
-    (p: any) => p.internalReference === internalReference && p.customerId === user.userId
+    (p: any) => p.internalReference === internalReference && p.customerId === user.userId && p.restaurantCode === user.restaurantCode
   );
-
-  if (!payment) {
-    return res.status(404).json({ success: false, error: 'Payment record not found.' });
-  }
-  const refUuid = payment.momoReferenceId || payment.providerReferenceUuid;
-  if (!refUuid) {
-    return res.status(400).json({ success: false, error: 'This payment does not have an MTN MoMo transaction reference.' });
-  }
+  if (!payment) return res.status(404).json({ success: false, error: 'Payment record not found.' });
   if (payment.status === 'verified') {
-    const subscription = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === payment.customerId);
-    return res.json({ success: true, status: 'SUCCESSFUL', payment, subscription });
+    const subscription = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === payment.customerId && s.restaurantCode === payment.restaurantCode);
+    return res.json({ success: true, status: 'SUCCESSFUL', payment, subscription, alreadyApplied: true });
   }
-  if (payment.status === 'failed') {
-    return res.json({ success: true, status: 'FAILED', payment });
+  if (payment.status === 'failed') return res.json({ success: true, status: 'FAILED', payment });
+  if (payment.status === 'review_required') {
+    return res.json({ success: true, status: 'REVIEW_REQUIRED', payment, message: 'Provider reported success but payment details require manual reconciliation. No access was granted.' });
   }
+
+  const config = getSaasMtnConfig();
+  if (!config) return res.status(503).json({ success: false, error: 'MTN status verification is not configured.' });
+  if (payment.providerEnvironment && payment.providerEnvironment !== config.environment) {
+    return res.status(409).json({ success: false, error: 'Payment environment does not match the configured MTN environment.' });
+  }
+  const referenceUuid = payment.providerReferenceUuid || payment.momoReferenceId;
+  if (!referenceUuid) return res.status(409).json({ success: false, error: 'Payment is missing its MTN reference. No entitlement changed.' });
 
   try {
-    const statusRes = await momoService.getRequestToPayStatus(refUuid);
-    const providerStatus = String(statusRes.data?.status || 'PENDING').toUpperCase();
-    if (providerStatus === 'SUCCESSFUL') {
-      const receivedAmount = Number(statusRes.data?.amount ?? 0);
-      if (receivedAmount !== 500) {
-        payment.status = 'failed';
-        payment.failureReason = `MTN transaction amount mismatch (received ${receivedAmount}).`;
-        payment.failedAt = new Date().toISOString();
-        await queueDbSave(serverDbState);
-        return res.status(400).json({
-          success: false,
-          status: 'FAILED',
-          error: 'Provider-confirmed payment amount does not match 500 RWF.',
-        });
+    const token = await getSaasMtnAccessToken(config);
+    const response = await fetch(
+      config.baseUrl + '/collection/v1_0/requesttopay/' + encodeURIComponent(referenceUuid),
+      {
+        method: 'GET',
+        headers: {
+          Authorization: 'Bearer ' + token,
+          'X-Target-Environment': config.targetEnvironment,
+          'Ocp-Apim-Subscription-Key': config.subscriptionKey,
+        },
+        signal: AbortSignal.timeout(10000),
       }
-
-      const nowMs = Date.now();
-      const periodEndMs = nowMs + 30 * 24 * 3600 * 1000;
-      const graceEndMs = periodEndMs + 3 * 24 * 3600 * 1000;
-      payment.status = 'verified';
-      payment.verifiedAt = new Date(nowMs).toISOString();
-      payment.providerTransactionId = statusRes.data?.financialTransactionId || refUuid;
-
-      let sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === payment.customerId);
-      if (!sub) {
-        sub = {
-          id: `sub_${payment.customerId}_${nowMs}`,
-          customerId: payment.customerId,
-          memberNo: payment.memberNo,
-          restaurantCode: payment.restaurantCode,
-          plan: 'monthly',
-          priceRwf: 500,
-          currency: 'RWF',
-          status: 'active',
-          currentPeriodStart: new Date(nowMs).toISOString(),
-          currentPeriodEnd: new Date(periodEndMs).toISOString(),
-          gracePeriodEndsAt: new Date(graceEndMs).toISOString(),
-          lastPaymentId: payment.id,
-          updatedAt: new Date(nowMs).toISOString(),
-        };
-        serverDbState.customerSubscriptions.push(sub);
-      } else {
-        sub.status = 'active';
-        sub.currentPeriodStart = new Date(nowMs).toISOString();
-        sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
-        sub.gracePeriodEndsAt = new Date(graceEndMs).toISOString();
-        sub.lastPaymentId = payment.id;
-        sub.updatedAt = new Date(nowMs).toISOString();
-      }
-      await queueDbSave(serverDbState);
-      return res.json({ success: true, status: 'SUCCESSFUL', payment, subscription: sub });
-    }
-
-    if (providerStatus === 'FAILED') {
+    );
+    if (!response.ok) return res.status(502).json({ success: false, error: 'MTN status unavailable. No subscription changed.' });
+    const provider: any = await response.json();
+    const providerStatus = String(provider?.status || 'PENDING').toUpperCase();
+    if (providerStatus === 'FAILED' || providerStatus === 'REJECTED' || providerStatus === 'TIMEOUT' || providerStatus === 'EXPIRED') {
       payment.status = 'failed';
-      payment.failedAt = new Date().toISOString();
+      payment.failureReason = providerStatus;
+      payment.providerStatus = providerStatus;
+      payment.updatedAt = new Date().toISOString();
       await queueDbSave(serverDbState);
       return res.json({ success: true, status: 'FAILED', payment });
     }
+    if (providerStatus !== 'SUCCESSFUL') {
+      payment.status = 'provider_pending';
+      payment.providerStatus = providerStatus;
+      await queueDbSave(serverDbState);
+      return res.json({ success: true, status: providerStatus, payment, message: 'MTN has not confirmed payment yet.' });
+    }
 
-    return res.json({ success: true, status: providerStatus, payment });
-  } catch (err: any) {
-    return res.status(502).json({
-      success: false,
-      error: 'Unable to retrieve payment status from MTN Mobile Money.',
-      details: err.message,
+    const expectedAmount = Number(payment.amountRwf);
+    const expectedPayer = String(payment.payerMsisdn || payment.phoneNumber || payment.phone || '');
+    const verified = validateSaasPaymentMatch({
+      providerStatus,
+      providerAmount: provider?.amount,
+      expectedAmountRwf: expectedAmount,
+      providerCurrency: provider?.currency,
+      expectedCurrency: 'RWF',
+      providerExternalId: provider?.externalId,
+      expectedExternalId: payment.internalReference,
+      providerPayerMsisdn: provider?.payer?.partyId,
+      expectedPayerMsisdn: expectedPayer,
+    }) && provider?.payer?.partyIdType === 'MSISDN'
+      && typeof provider?.financialTransactionId === 'string'
+      && provider.financialTransactionId.length > 0;
+    if (!verified) {
+      payment.status = 'review_required';
+      payment.providerStatus = providerStatus;
+      payment.providerTransactionId = typeof provider?.financialTransactionId === 'string' ? provider.financialTransactionId : undefined;
+      payment.failureReason = 'MTN_SUCCESS_DETAILS_MISMATCH';
+      payment.updatedAt = new Date().toISOString();
+      await queueDbSave(serverDbState);
+      return res.json({
+        success: true, status: 'REVIEW_REQUIRED', payment,
+        message: 'MTN reports success but amount, currency, payer, reference or transaction details do not match. No access was activated.',
+      });
+    }
+
+    const duplicate = (serverDbState.studentSubscriptionPayments || []).find((item: any) =>
+      item.id !== payment.id && item.providerTransactionId === provider.financialTransactionId && item.status === 'verified'
+    );
+    if (duplicate) return res.status(409).json({ success: false, error: 'MTN transaction ID was already applied to another payment.' });
+
+    const verifiedAt = new Date().toISOString();
+    const settings = serverDbState.studentSubscriptionSettings || {};
+    const monthsPurchased = Number(payment.monthsPurchased || 1);
+    const existingSub = (serverDbState.customerSubscriptions || []).find(
+      (item: any) => item.customerId === payment.customerId && item.restaurantCode === payment.restaurantCode
+    );
+    const period = calculateRenewalPeriod(
+      existingSub?.currentPeriodEnd || null,
+      verifiedAt,
+      monthsPurchased,
+      Number(settings.graceDays ?? 3)
+    );
+    const sub = existingSub || {
+      id: 'sub_' + payment.customerId + '_' + crypto.randomUUID(),
+      customerId: payment.customerId,
+      memberNo: payment.memberNo,
+      restaurantCode: payment.restaurantCode,
+      createdAt: verifiedAt,
+    };
+    Object.assign(sub, {
+      status: 'active',
+      planName: 'RestoPass Customer Access',
+      priceRwf: Number(payment.monthlyPriceRwf || settings.priceRwf),
+      currency: 'RWF',
+      currentPeriodStart: period.periodStart,
+      currentPeriodEnd: period.periodEnd,
+      gracePeriodEnd: period.gracePeriodEnd,
+      cancelAtPeriodEnd: false,
+      paymentMethod: 'mtn_momo',
+      lastPaymentId: payment.id,
+      lastPaymentRef: payment.internalReference,
+      updatedAt: verifiedAt,
     });
-  }
-});
-
-// GET /api/admin/payments/mobile-money/reconcile: Reconciles provider payment attempts against subscriptions & ledger (Workstream F10)
-app.get(
-  '/api/admin/payments/mobile-money/reconcile',
-  apiRateLimiter,
-  requireAuth(['super_admin', 'restaurant_admin']),
-  (req, res) => {
-    ensureServerDbDefaults(serverDbState);
-    const user = req.user!;
-    const rCode = user.role === 'super_admin' ? null : user.restaurantCode;
-
-    const attempts = (serverDbState.studentSubscriptionPayments || []).filter(
-      (p: any) => !rCode || p.restaurantCode === rCode
+    if (!existingSub) {
+      if (!Array.isArray(serverDbState.customerSubscriptions)) serverDbState.customerSubscriptions = [];
+      serverDbState.customerSubscriptions.push(sub);
+    }
+    const customer = (serverDbState.customers || []).find((item: any) =>
+      item.id === payment.customerId && item.restaurantCode === payment.restaurantCode
     );
-    const subs = (serverDbState.customerSubscriptions || []).filter(
-      (s: any) => !rCode || s.restaurantCode === rCode
-    );
-
-    const verifiedAttempts = attempts.filter((a: any) => a.status === 'verified');
-    const pendingAttempts = attempts.filter((a: any) => a.status === 'pending' || a.status === 'provider_pending');
-    const failedAttempts = attempts.filter((a: any) => a.status === 'failed' || a.status === 'rejected');
-
-    const orphanedVerified = verifiedAttempts.filter(
-      (a: any) => !subs.some((s: any) => s.customerId === a.customerId && (s.status === 'active' || s.status === 'grace_period'))
-    );
-
-    return res.json({
-      success: true,
-      reconciledAt: new Date().toISOString(),
-      summary: {
-        totalAttempts: attempts.length,
-        verifiedCount: verifiedAttempts.length,
-        pendingCount: pendingAttempts.length,
-        failedCount: failedAttempts.length,
-        orphanedVerifiedCount: orphanedVerified.length,
-        consistent: orphanedVerified.length === 0,
+    if (customer) {
+      customer.customerAccessStatus = 'active';
+      customer.freeAccessStartedAt = undefined;
+      customer.freeAccessExpiresAt = undefined;
+    }
+    payment.status = 'verified';
+    payment.providerStatus = providerStatus;
+    payment.providerTransactionId = provider.financialTransactionId;
+    payment.verifiedAt = verifiedAt;
+    payment.updatedAt = verifiedAt;
+    if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
+    serverDbState.auditLogs.unshift({
+      id: 'audit_' + crypto.randomUUID(),
+      timestamp: verifiedAt,
+      restaurantCode: payment.restaurantCode,
+      userId: payment.customerId,
+      action: 'PATRON_SUBSCRIPTION_PAYMENT_VERIFIED',
+      details: {
+        paymentId: payment.id, internalReference, providerTransactionId: provider.financialTransactionId,
+        amountRwf: expectedAmount, monthsPurchased, periodStart: period.periodStart, periodEnd: period.periodEnd,
       },
-      orphanedVerified,
     });
+    const saved = await queueDbSave(serverDbState);
+    if (!saved) return res.status(503).json({ success: false, error: 'Payment was verified but subscription state could not be durably saved. Contact support for reconciliation.' });
+    return res.json({ success: true, status: 'SUCCESSFUL', payment, subscription: sub });
+  } catch (error: any) {
+    console.error('[Patron MTN status verification]', error);
+    return res.status(502).json({ success: false, error: 'Unable to verify payment with MTN. No access was granted.', details: error.message });
   }
-);
-
-// POST /api/customer/subscription/cancel: Cancels future subscription renewal
-app.post('/api/customer/subscription/cancel', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
-  ensureServerDbDefaults(serverDbState);
-  const user = req.user!;
-  const sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === user.userId);
-  if (!sub) {
-    return res.status(404).json({ success: false, error: 'Subscription not found' });
-  }
-  sub.cancelAtPeriodEnd = true;
-  sub.updatedAt = new Date().toISOString();
-  await queueDbSave(serverDbState);
-  return res.json({ success: true, message: 'Subscription cancellation scheduled at end of paid period', subscription: sub });
-});
-
-// GET /api/customer/subscription/payments: Returns customer payment history
-app.get('/api/customer/subscription/payments', apiRateLimiter, requireAuth(['customer']), (req, res) => {
-  ensureServerDbDefaults(serverDbState);
-  const user = req.user!;
-  const payments = (serverDbState.studentSubscriptionPayments || []).filter((p: any) => p.customerId === user.userId);
-  return res.json({ success: true, payments });
 });
 
 // GET /api/admin/subscriptions/overview: Administrator subscription metrics and revenue
