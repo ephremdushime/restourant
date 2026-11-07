@@ -270,8 +270,10 @@ function ensureServerDbDefaults(state: any) {
   if (!state.studentSubscriptionSettings) {
     state.studentSubscriptionSettings = {
       enabled: false, // strictly disabled at launch per spec
-      priceRwf: 500, // exact 500 RWF per month
+      priceRwf: 500, // configurable platform-wide monthly fee
       currency: 'RWF',
+      promoAccessEnabled: false,
+      promoMessage: 'You are enjoying complimentary RestoPass access during our launch promotion.',
       period: 'monthly',
       graceDays: 3, // 3 calendar days (72 hours)
       requireForTransfers: true,
@@ -5071,9 +5073,32 @@ function checkServerStudentEntitlement(
     };
   }
 
-  const lifecycleCustomer = (serverDbState?.customers || []).find((c: any) => c.id === customerId);
-  const lifecycleSub = (serverDbState?.customerSubscriptions || []).find((sub: any) => sub.customerId === customerId);
+  const lifecycleCustomer = (targetState?.customers || []).find((c: any) => c.id === customerId);
+  const lifecycleSub = (targetState?.customerSubscriptions || []).find((sub: any) => sub.customerId === customerId);
   const lifecycleNow = Date.now();
+
+  // The global launch/promotion policy takes precedence over legacy per-customer
+  // complimentary states. Registration approval remains a separate prerequisite.
+  if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.registrationStatus !== 'approved') {
+    return {
+      allowed: false, feature, status: 'inactive', inGracePeriod: false, enforcementEnabled: Boolean(settings?.enabled),
+      reason: 'Your restaurant registration must be approved before customer dashboard access is activated.',
+    };
+  }
+  const promoStartMs = settings?.promoStartsAt ? Date.parse(settings.promoStartsAt) : Number.NEGATIVE_INFINITY;
+  const promoEndMs = settings?.promoEndsAt ? Date.parse(settings.promoEndsAt) : Number.POSITIVE_INFINITY;
+  const promotionalAccessActive = Boolean(settings?.promoAccessEnabled) &&
+    Number.isFinite(promoStartMs) && Number.isFinite(promoEndMs) &&
+    lifecycleNow >= promoStartMs && lifecycleNow < promoEndMs;
+  if (lifecycleCustomer?.registrationStatus === 'approved' && (!settings?.enabled || promotionalAccessActive)) {
+    return {
+      allowed: true, feature, status: 'complimentary', inGracePeriod: false, enforcementEnabled: Boolean(settings?.enabled),
+      expiresAt: promotionalAccessActive ? settings.promoEndsAt : undefined,
+      reason: promotionalAccessActive
+        ? (settings.promoMessage || 'Your account is enjoying RestoPass promotional access.')
+        : 'Customer subscription payments are currently disabled by Super Admin.',
+    };
+  }
   if (lifecycleCustomer?.registrationStatus && lifecycleCustomer.customerAccessStatus === 'complimentary') {
     const freeEnd = new Date(lifecycleCustomer.freeAccessExpiresAt || lifecycleSub?.currentPeriodEnd || 0).getTime();
     if (!freeEnd || lifecycleNow > freeEnd) {
@@ -5816,27 +5841,46 @@ app.get('/api/admin/subscriptions/overview', apiRateLimiter, requireAuth(['super
 // PATCH /api/admin/settings/student-subscriptions: Administrator toggle and configuration
 app.patch('/api/admin/settings/student-subscriptions', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
   ensureServerDbDefaults(serverDbState);
-  const { enabled, requireForTransfers, graceDays } = req.body;
-
+  const body = req.body || {};
   const current = serverDbState.studentSubscriptionSettings;
+  const priceRwf = body.priceRwf === undefined ? Number(current.priceRwf || 500) : Number(body.priceRwf);
+  const graceDays = body.graceDays === undefined ? Number(current.graceDays || 3) : Number(body.graceDays);
+  if (!Number.isSafeInteger(priceRwf) || priceRwf < 1 || priceRwf > 100000000) {
+    return res.status(400).json({ success: false, error: 'Monthly customer subscription price must be a positive whole RWF amount.' });
+  }
+  if (!Number.isSafeInteger(graceDays) || graceDays < 0 || graceDays > 365) {
+    return res.status(400).json({ success: false, error: 'Renewal grace period must be between 0 and 365 calendar days.' });
+  }
+  const promoStartsAt = body.promoStartsAt === undefined ? current.promoStartsAt : body.promoStartsAt;
+  const promoEndsAt = body.promoEndsAt === undefined ? current.promoEndsAt : body.promoEndsAt;
+  if ((promoStartsAt && !Number.isFinite(Date.parse(promoStartsAt))) ||
+      (promoEndsAt && !Number.isFinite(Date.parse(promoEndsAt))) ||
+      (promoStartsAt && promoEndsAt && Date.parse(promoStartsAt) >= Date.parse(promoEndsAt))) {
+    return res.status(400).json({ success: false, error: 'Promotional start and end dates must be valid, with the end after the start.' });
+  }
   serverDbState.studentSubscriptionSettings = {
     ...current,
-    enabled: typeof enabled === 'boolean' ? enabled : current.enabled,
-    priceRwf: 500, // Price is strictly 500 RWF per specification
+    enabled: typeof body.enabled === 'boolean' ? body.enabled : current.enabled,
+    priceRwf,
     currency: 'RWF',
     period: 'monthly',
-    graceDays: typeof graceDays === 'number' ? graceDays : current.graceDays || 3,
-    requireForTransfers: typeof requireForTransfers === 'boolean' ? requireForTransfers : current.requireForTransfers,
+    graceDays,
+    promoAccessEnabled: typeof body.promoAccessEnabled === 'boolean' ? body.promoAccessEnabled : Boolean(current.promoAccessEnabled),
+    promoStartsAt: promoStartsAt || undefined,
+    promoEndsAt: promoEndsAt || undefined,
+    promoMessage: typeof body.promoMessage === 'string' ? body.promoMessage.trim().slice(0, 500) : current.promoMessage,
+    requireForTransfers: typeof body.requireForTransfers === 'boolean' ? body.requireForTransfers : current.requireForTransfers,
+    requireForDashboard: typeof body.requireForDashboard === 'boolean' ? body.requireForDashboard : current.requireForDashboard,
     updatedAt: new Date().toISOString(),
     updatedBy: req.user!.username,
   };
 
-  await queueDbSave(serverDbState);
-
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) return res.status(503).json({ success: false, error: 'Customer subscription settings could not be saved.' });
   return res.json({
     success: true,
     settings: serverDbState.studentSubscriptionSettings,
-    message: `Student subscription settings updated: enabled=${serverDbState.studentSubscriptionSettings.enabled}`,
+    message: 'Customer subscription policy updated.',
   });
 });
 
