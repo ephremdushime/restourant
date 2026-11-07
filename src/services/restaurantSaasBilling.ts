@@ -8,9 +8,7 @@
 export const RESTAURANT_SAAS_TERM_MONTHS = 1;
 export const RESTAURANT_SAAS_GRACE_DAYS = 3;
 /** @deprecated Use calendar-month periods and configurable grace days. */
-export const RESTAURANT_SAAS_TERM_DAYS = 30;
 /** @deprecated Use configurable calendar-day grace periods. */
-export const RESTAURANT_SAAS_GRACE_HOURS = 72;
 
 export type SubscriptionDurationUnit = 'days' | 'months' | 'years';
 
