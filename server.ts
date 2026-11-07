@@ -4885,6 +4885,11 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
     const subscription = subResult.rows[0];
     const verifiedAt = new Date();
     const monthsPurchased = Number(pay.months_purchased || 1);
+    const monthlyPriceSnapshot = Number(pay.amount_rwf) / monthsPurchased;
+    if (!Number.isSafeInteger(monthlyPriceSnapshot) || monthlyPriceSnapshot <= 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, error: 'Stored payment amount cannot be reconciled to its purchased month count.' });
+    }
     const graceDays = Number(subscription.renewal_grace_days ?? 3);
     const period = calculateRenewalPeriod(subscription.current_period_end, verifiedAt.toISOString(), monthsPurchased, graceDays);
     const end = period.periodEnd;
@@ -4908,7 +4913,7 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
     await client.query("UPDATE restaurant_subscription_payments SET status='successful',provider_transaction_id=$2,provider_status='SUCCESSFUL',verified_at=$3,entitlement_applied_at=$3,updated_at=NOW() WHERE id=$1",
       [pay.id, provider.financialTransactionId, verifiedAt.toISOString()]);
     await client.query("INSERT INTO restaurant_subscription_audit_logs (id,restaurant_code,actor_type,actor_id,action,payment_id,data) VALUES ($1,$2,'mtn_momo',$3,'SAAS_PAYMENT_VERIFIED',$4,$5)",
-      ['rsa_' + crypto.randomUUID(), pay.restaurant_code, provider.financialTransactionId, pay.id, JSON.stringify({ amountRwf: Number(pay.amount_rwf), monthsPurchased, monthlyPriceRwf: Number(subscription.price_rwf), currency: 'RWF', periodStart: period.periodStart, periodEnd: end, licenseId })]);
+      ['rsa_' + crypto.randomUUID(), pay.restaurant_code, provider.financialTransactionId, pay.id, JSON.stringify({ amountRwf: Number(pay.amount_rwf), monthsPurchased, monthlyPriceRwf: monthlyPriceSnapshot, currency: 'RWF', periodStart: period.periodStart, periodEnd: end, licenseId })]);
     await client.query('COMMIT');
     if (serverDbState) {
       serverDbState.restaurants = (serverDbState.restaurants || []).map((item: any) => item.code === pay.restaurant_code ? updatedRestaurant : item);
@@ -5403,7 +5408,7 @@ app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['cu
     });
   }
 
-  const internalReference = 'PATRON-' + crypto.randomUUID().replace(/-/g, '').toUpperCase();
+  const internalReference = 'PATRON-' + crypto.randomUUID().replace(/-/g, '').slice(0, 24).toUpperCase();
   const referenceUuid = crypto.randomUUID();
   const attempt: any = {
     id: 'sp_' + crypto.randomUUID(),
