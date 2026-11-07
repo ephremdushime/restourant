@@ -661,6 +661,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
             recentActivity={customerHistory}
             unreadNotifCount={unreadNotifCount}
             graceInfo={graceInfo}
+            subscriptionSettings={subSettings}
             language={language}
             lowBalanceTitle={t.scanner.lowBalanceWarning}
             lowBalanceMessage={t.customer.lowBalanceBanner}
