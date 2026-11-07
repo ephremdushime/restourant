@@ -273,8 +273,9 @@ describe('Customer Dashboard Redesign & Security Preservation Protocol (Items 1â
     // 13 & 14. Subscription expiry never deactivates physical card or alters meal balance, and manual renewal is documented
     const subSource = readRepoFile('src/components/customer/CustomerSubscriptionPage.tsx');
     assert.match(subSource, /Dashboard Subscription Is Separate From Your Meal Balance/);
-    assert.match(subSource, /Manual Renewal &amp; Verification Instructions/);
-    assert.match(subSource, /Verified Subscription Payment History/);
+    assert.match(subSource, /Request MTN MoMo payment/);
+    assert.match(subSource, /Subscription Payment History/);
+    assert.match(subSource, /Check status/);
 
     const state = restoStore.getState();
     const customer = state.customers.find((c) => c.restaurantCode === 'RW01');
