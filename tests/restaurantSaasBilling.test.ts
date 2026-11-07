@@ -25,6 +25,7 @@ test('calendar-month arithmetic clamps month-end dates and handles leap years', 
   assert.equal(addCalendarMonths('2027-01-31T08:00:00.000Z', 1).toISOString(), '2027-02-28T08:00:00.000Z');
   assert.equal(addCalendarMonths('2028-01-31T08:00:00.000Z', 1).toISOString(), '2028-02-29T08:00:00.000Z');
   assert.equal(addCalendarMonths('2027-01-31T08:00:00.000Z', 2).toISOString(), '2027-03-31T08:00:00.000Z');
+  assert.equal(addCalendarMonths(addCalendarMonths('2027-01-31T08:00:00.000Z', 1), 1).toISOString(), '2027-03-31T08:00:00.000Z');
 });
 
 test('subscription grace period is configurable in calendar days', () => {
