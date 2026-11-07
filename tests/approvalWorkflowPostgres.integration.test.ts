@@ -73,7 +73,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
         displayName: 'Tenant Owner',
         password,
       });
-      assert.equal(created.status, 201);
+      assert.equal(created.status, 201, JSON.stringify(created.body));
       assert.equal(created.body.administrator.username, 'tenant.owner');
       const stored = await pool!.query(
         'SELECT password_hash,status FROM restaurant_admins WHERE id=$1',
