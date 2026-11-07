@@ -1,5 +1,5 @@
 import React from 'react';
-import { Customer, Language, LedgerEntry, Restaurant } from '../../types';
+import { Customer, Language, LedgerEntry, Restaurant, StudentSubscriptionSettings } from '../../types';
 import { translations } from '../../services/i18n';
 import { CustomerPortalPage, CustomerProfileSubPage } from './CustomerPortalLayout';
 import {
@@ -18,6 +18,7 @@ import {
   ArrowDownLeft,
   ChevronRight,
   CheckCircle2,
+  Gift,
 } from 'lucide-react';
 
 interface CustomerHomePageProps {
@@ -27,6 +28,7 @@ interface CustomerHomePageProps {
   recentActivity: LedgerEntry[];
   unreadNotifCount: number;
   graceInfo?: { allowed: number; consumed: number; remaining: number };
+  subscriptionSettings?: StudentSubscriptionSettings;
   language?: Language;
   lowBalanceTitle: string;
   lowBalanceMessage: string;
@@ -44,6 +46,7 @@ export const CustomerHomePage: React.FC<CustomerHomePageProps> = ({
   recentActivity,
   unreadNotifCount,
   graceInfo,
+  subscriptionSettings,
   language,
   lowBalanceTitle,
   lowBalanceMessage,
@@ -80,9 +83,31 @@ export const CustomerHomePage: React.FC<CustomerHomePageProps> = ({
     ? graceInfo.remaining
     : Math.max(0, customer.gracePlatesRemaining ?? (customer.gracePlatesAllowed || 4));
   const allowedGrace = graceInfo ? graceInfo.allowed : (customer.gracePlatesAllowed || 4);
+  const promoStartMs = subscriptionSettings?.promoStartsAt ? Date.parse(subscriptionSettings.promoStartsAt) : 0;
+  const promoEndMs = subscriptionSettings?.promoEndsAt ? Date.parse(subscriptionSettings.promoEndsAt) : Number.POSITIVE_INFINITY;
+  const promoActive = Boolean(subscriptionSettings?.promoAccessEnabled) &&
+    (!subscriptionSettings?.promoStartsAt || Number.isFinite(promoStartMs)) &&
+    (!subscriptionSettings?.promoEndsAt || Number.isFinite(promoEndMs)) &&
+    Date.now() >= promoStartMs && Date.now() < promoEndMs;
+  const customerAccessIsFree = subscriptionSettings?.enabled === false || promoActive;
 
   return (
     <div className="space-y-5 animate-in fade-in duration-150">
+      {customerAccessIsFree && (
+        <div className="p-4 rounded-2xl bg-emerald-950/50 border border-emerald-600/60 flex items-start gap-3">
+          <Gift className="w-5 h-5 text-emerald-300 shrink-0 mt-0.5" />
+          <div className="text-xs sm:text-sm text-emerald-100 leading-relaxed">
+            <strong className="block text-white mb-1">{promoActive ? 'Complimentary promotional access' : 'Customer dashboard access is free'}</strong>
+            {promoActive
+              ? (subscriptionSettings?.promoMessage || 'You are enjoying complimentary RestoPass access during our launch promotion.')
+              : 'RestoPass has temporarily disabled customer subscription payments. Your dashboard access is free.'}
+            {promoActive && subscriptionSettings?.promoEndsAt && (
+              <span className="block mt-1 font-semibold">Promotional access ends {new Date(subscriptionSettings.promoEndsAt).toLocaleDateString()}.</span>
+            )}
+            <span className="block mt-1 text-emerald-200/80">No automatic charge will occur. Any future access fee requires a separate subscription and your approval of an MTN MoMo request.</span>
+          </div>
+        </div>
+      )}
       {/* Relevant Account Warnings Only When Applicable */}
       {customer.provisionalStatus === 'pending_approval' && (
         <div className="p-4 rounded-2xl bg-amber-950/60 border border-amber-500/50 flex items-center justify-between gap-4">
