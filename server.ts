@@ -4573,6 +4573,23 @@ async function ensureRestaurantSaasSubscription(client: any, restaurantCode: str
     try { legacyLicenseData = JSON.parse(legacyLicenseData); } catch { legacyLicenseData = {}; }
   }
   const legacyLicenseIsComplimentary = Boolean(legacyLicenseData.complimentary);
+  if (legacyLicense && !restaurant.currentLicenseId) {
+    const shouldRemainActive = !['suspended', 'inactive', 'blocked'].includes(String(restaurant.status || '').toLowerCase());
+    restaurant = {
+      ...restaurant,
+      currentLicenseId: legacyLicense.id,
+      ...(shouldRemainActive ? { status: 'active' } : {}),
+    };
+    await client.query(
+      'UPDATE restaurants SET status=$2,data=$3,updated_at=NOW() WHERE code=$1',
+      [restaurantCode, restaurant.status || found.rows[0].status, JSON.stringify(restaurant)]
+    );
+    if (serverDbState) {
+      serverDbState.restaurants = (serverDbState.restaurants || []).map((item: any) =>
+        item.code === restaurantCode ? restaurant : item
+      );
+    }
+  }
   const legacyPaidPeriodStart = legacyLicense && !legacyLicenseIsComplimentary
     ? (legacyLicenseData.issuedAt || restaurant.createdAt || new Date().toISOString()) : null;
   const legacyPaidPeriodEnd = legacyLicense && !legacyLicenseIsComplimentary
@@ -4652,7 +4669,9 @@ async function ensureRestaurantSaasSubscription(client: any, restaurantCode: str
         'SELECT id FROM licenses WHERE restaurant_code=$1 AND valid_until >= $2 ORDER BY created_at DESC LIMIT 1',
         [restaurantCode, current.complimentary_ends_at]
       );
-      if (!existingLicense.rows[0]) {
+      if (existingLicense.rows[0]) {
+        updatedRestaurant.currentLicenseId = existingLicense.rows[0].id;
+      } else {
         const maxScanPoints = Number(plan?.terms?.maxScanPointsIncluded || 1);
         const licenseId = 'LIC-' + restaurantCode + '-FREE-' + crypto.randomUUID().slice(0, 8).toUpperCase();
         const validUntil = new Date(current.complimentary_ends_at).toISOString();
