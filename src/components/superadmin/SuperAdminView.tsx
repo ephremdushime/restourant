@@ -1657,10 +1657,6 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                     className="w-full p-2 rounded bg-slate-950 border border-slate-700 text-white font-mono focus:border-amber-500 outline-hidden"
                   />
                 </div>
-
-                <div>
-div>
-
                 <div>
                   <label className="text-slate-300 block mb-1 font-semibold">Plate Price (RWF)</label>
                   <input
