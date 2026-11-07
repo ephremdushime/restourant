@@ -34,7 +34,7 @@ import {
   deletePrivatePatronPhoto,
 } from './src/services/storage/objectStorage';
 import { momoService } from './src/services/momoService';
-import { calculateRenewalPeriod, validateSaasPaymentMatch } from './src/services/restaurantSaasBilling';
+import { calculateComplimentaryEnd, calculateRenewalPeriod, calculateSubscriptionAmount, getRestaurantSaasStatus, validateSaasPaymentMatch } from './src/services/restaurantSaasBilling';
 
 const app = express();
 if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
@@ -4516,16 +4516,110 @@ function normalizeSaasPayer(value: unknown): string {
   return typeof value === 'string' ? value.replace(/[+\s-]/g, '') : '';
 }
 async function ensureRestaurantSaasSubscription(client: any, restaurantCode: string) {
-  const found = await client.query('SELECT code,data FROM restaurants WHERE code=$1 FOR UPDATE', [restaurantCode]);
+  const found = await client.query('SELECT code,status,data FROM restaurants WHERE code=$1 FOR UPDATE', [restaurantCode]);
   if (!found.rows[0]) return null;
-  const restaurant = found.rows[0].data || {};
+  let restaurant = found.rows[0].data || {};
   const plan = (serverDbState?.plans || []).find((item: any) => item.id === restaurant.planId);
   const price = Number(restaurant.saasSubscriptionPriceRwf || restaurant.termsOverride?.saasSubscriptionPriceRwf || restaurant.termsOverride?.basePriceRwf || plan?.terms?.basePriceRwf);
   if (!Number.isSafeInteger(price) || price <= 0) throw new Error('Valid SaaS price must be configured.');
-  await client.query("INSERT INTO restaurant_subscriptions (id,restaurant_code,status,price_rwf) VALUES ($1,$2,'pending_payment',$3) ON CONFLICT (restaurant_code) DO NOTHING",
-    ['rs_' + crypto.randomUUID(), restaurantCode, price]);
-  const subscription = await client.query('SELECT * FROM restaurant_subscriptions WHERE restaurant_code=$1 FOR UPDATE', [restaurantCode]);
-  return { restaurant, subscription: subscription.rows[0] };
+
+  const durationValue = Number(restaurant.saasComplimentaryDurationValue || 0);
+  const durationUnit = ['days', 'months', 'years'].includes(restaurant.saasComplimentaryDurationUnit)
+    ? restaurant.saasComplimentaryDurationUnit : 'days';
+  if (!Number.isSafeInteger(durationValue) || durationValue < 0 || durationValue > 120) {
+    throw new Error('Invalid restaurant complimentary duration.');
+  }
+  const complimentaryStartedAt = durationValue > 0
+    ? (restaurant.createdAt || new Date().toISOString()) : null;
+  const complimentaryEndsAt = durationValue > 0
+    ? calculateComplimentaryEnd(complimentaryStartedAt, durationValue, durationUnit) : null;
+  const graceDays = Number.isSafeInteger(Number(restaurant.saasRenewalGraceDays))
+    ? Math.min(365, Math.max(0, Number(restaurant.saasRenewalGraceDays))) : 3;
+  const complimentaryActive = Boolean(complimentaryEndsAt && Date.parse(complimentaryEndsAt) > Date.now());
+
+  await client.query(
+    `INSERT INTO restaurant_subscriptions
+      (id,restaurant_code,status,price_rwf,complimentary_started_at,complimentary_ends_at,
+       complimentary_duration_value,complimentary_duration_unit,renewal_grace_days)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     ON CONFLICT (restaurant_code) DO NOTHING`,
+    ['rs_' + crypto.randomUUID(), restaurantCode, complimentaryActive ? 'complimentary' : 'pending_payment',
+      price, complimentaryStartedAt, complimentaryEndsAt, durationValue, durationUnit, graceDays]
+  );
+  const subscriptionResult = await client.query(
+    'SELECT * FROM restaurant_subscriptions WHERE restaurant_code=$1 FOR UPDATE', [restaurantCode]
+  );
+  const subscription = subscriptionResult.rows[0];
+
+  // Upgrade legacy pending rows once only; never overwrite an existing paid period.
+  if (!subscription.current_period_end && !subscription.complimentary_started_at && durationValue > 0) {
+    await client.query(
+      `UPDATE restaurant_subscriptions SET status=$2,complimentary_started_at=$3,complimentary_ends_at=$4,
+       complimentary_duration_value=$5,complimentary_duration_unit=$6,renewal_grace_days=$7,price_rwf=$8,updated_at=NOW()
+       WHERE restaurant_code=$1 AND current_period_end IS NULL AND complimentary_started_at IS NULL`,
+      [restaurantCode, complimentaryActive ? 'complimentary' : 'pending_payment',
+        complimentaryStartedAt, complimentaryEndsAt, durationValue, durationUnit, graceDays, price]
+    );
+  }
+
+  const fresh = await client.query('SELECT * FROM restaurant_subscriptions WHERE restaurant_code=$1 FOR UPDATE', [restaurantCode]);
+  const current = fresh.rows[0];
+  const hasPaidPeriod = Boolean(current.current_period_end);
+  const isComplimentary = !hasPaidPeriod && current.complimentary_ends_at &&
+    Date.parse(current.complimentary_ends_at) > Date.now();
+
+  if (!hasPaidPeriod && !isComplimentary && current.status !== 'cancelled' && current.status !== 'pending_payment') {
+    await client.query("UPDATE restaurant_subscriptions SET status='pending_payment',updated_at=NOW() WHERE restaurant_code=$1", [restaurantCode]);
+    current.status = 'pending_payment';
+  } else if (!hasPaidPeriod && isComplimentary && current.status !== 'complimentary') {
+    await client.query("UPDATE restaurant_subscriptions SET status='complimentary',updated_at=NOW() WHERE restaurant_code=$1", [restaurantCode]);
+    current.status = 'complimentary';
+  }
+
+  if (!hasPaidPeriod && current.status !== 'cancelled') {
+    const restaurantStatus = isComplimentary ? 'active' : 'pending_payment';
+    const updatedRestaurant = { ...restaurant, status: restaurantStatus };
+    if (isComplimentary) {
+      const existingLicense = await client.query(
+        'SELECT id FROM licenses WHERE restaurant_code=$1 AND valid_until >= $2 ORDER BY created_at DESC LIMIT 1',
+        [restaurantCode, current.complimentary_ends_at]
+      );
+      if (!existingLicense.rows[0]) {
+        const maxScanPoints = Number(plan?.terms?.maxScanPointsIncluded || 1);
+        const licenseId = 'LIC-' + restaurantCode + '-FREE-' + crypto.randomUUID().slice(0, 8).toUpperCase();
+        const validUntil = new Date(current.complimentary_ends_at).toISOString();
+        const licensePayload = {
+          licenseId, restaurantCode, planId: restaurant.planId, maxScanPoints, validUntil,
+          graceDays: Number(current.renewal_grace_days || 3)
+        };
+        const signature = 'ed25519_' + serverHmac(MASTER_KEY, 'LICENSE_SIGNATURE:' + JSON.stringify(licensePayload)).slice(0, 48);
+        const license = {
+          ...licensePayload, featureFlags: {
+            spotChecksEnabled: true, multiStationEnabled: maxScanPoints > 1,
+            secondPlateAllowed: true, customerTransfersEnabled: true
+          }, signature, issuedAt: new Date().toISOString(), paidUntil: validUntil,
+          complimentary: true
+        };
+        await client.query(
+          'INSERT INTO licenses (id,restaurant_code,plan_id,valid_until,data) VALUES ($1,$2,$3,$4,$5)',
+          [licenseId, restaurantCode, restaurant.planId, validUntil, JSON.stringify(license)]
+        );
+        updatedRestaurant.currentLicenseId = licenseId;
+        if (serverDbState) {
+          serverDbState.licenses = [...(serverDbState.licenses || []).filter((item: any) => item.id !== licenseId), license];
+        }
+      }
+    }
+    await client.query('UPDATE restaurants SET status=$2,data=$3,updated_at=NOW() WHERE code=$1',
+      [restaurantCode, restaurantStatus, JSON.stringify(updatedRestaurant)]);
+    restaurant = updatedRestaurant;
+    if (serverDbState) {
+      serverDbState.restaurants = (serverDbState.restaurants || []).map((item: any) =>
+        item.code === restaurantCode ? updatedRestaurant : item
+      );
+    }
+  }
+  return { restaurant, subscription: current };
 }
 
 app.get('/api/restaurant-saas/subscription', apiRateLimiter, requireAuth(['restaurant_admin', 'super_admin']), async (req, res) => {
@@ -4540,12 +4634,14 @@ app.get('/api/restaurant-saas/subscription', apiRateLimiter, requireAuth(['resta
     const ensured = await ensureRestaurantSaasSubscription(client, code);
     if (!ensured) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Restaurant not found.' }); }
     const subscription = ensured.subscription;
-    const periodEndMs = subscription.current_period_end ? new Date(subscription.current_period_end).getTime() : NaN;
     const nowMs = Date.now();
+    const periodEndMs = subscription.current_period_end ? new Date(subscription.current_period_end).getTime() : NaN;
+    const complimentaryEndMs = subscription.complimentary_ends_at ? new Date(subscription.complimentary_ends_at).getTime() : NaN;
     const computedStatus = subscription.status === 'cancelled' ? 'cancelled'
-      : !Number.isFinite(periodEndMs) ? 'pending_payment'
-        : nowMs < periodEndMs ? 'active'
-          : nowMs < periodEndMs + 72 * 60 * 60 * 1000 ? 'grace_period' : 'restricted';
+      : Number.isFinite(periodEndMs)
+        ? getRestaurantSaasStatus(subscription.current_period_end, nowMs, false, Number(subscription.renewal_grace_days ?? 3)).status
+        : Number.isFinite(complimentaryEndMs) && nowMs < complimentaryEndMs ? 'complimentary'
+          : 'pending_payment';
     if (subscription.status !== computedStatus) {
       const updated = await client.query('UPDATE restaurant_subscriptions SET status=$2,updated_at=NOW() WHERE restaurant_code=$1 AND status<>$2 RETURNING *', [code, computedStatus]);
       if (updated.rowCount) {
@@ -4587,8 +4683,11 @@ app.post('/api/restaurant-saas/subscription/price', apiRateLimiter, requireAuth(
 app.post('/api/restaurant-saas/payment/initiate', apiRateLimiter, requireAuth(['restaurant_admin']), async (req, res) => {
   const payer = normalizeSaasPayer(req.body?.payerMsisdn);
   const idempotencyKey = typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey.trim() : '';
+  const months = Number(req.body?.months ?? 1);
   if (!/^2507[89]\d{7}$/.test(payer) || !/^[A-Za-z0-9._:-]{12,128}$/.test(idempotencyKey))
     return res.status(400).json({ success: false, error: 'Valid Rwanda MTN number and unique idempotency key required.' });
+  if (!Number.isSafeInteger(months) || months < 1 || months > 24)
+    return res.status(400).json({ success: false, error: 'Choose between 1 and 24 calendar months.' });
   const config = getSaasMtnConfig();
   if (!config) return res.status(503).json({ success: false, error: 'MTN collection disabled pending merchant credentials and approval.' });
   const pool = getPostgresPool();
@@ -4600,8 +4699,14 @@ app.post('/api/restaurant-saas/payment/initiate', apiRateLimiter, requireAuth(['
     await client.query('BEGIN');
     const ensured = await ensureRestaurantSaasSubscription(client, req.user!.restaurantCode);
     if (!ensured) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, error: 'Restaurant not found.' }); }
-    const amount = Number(ensured.subscription.price_rwf);
-    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ restaurantCode: req.user!.restaurantCode, payer, amount, currency: 'RWF' })).digest('hex');
+    const subscription = ensured.subscription;
+    if (subscription.status === 'complimentary' && subscription.complimentary_ends_at && Date.parse(subscription.complimentary_ends_at) > Date.now()) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, code: 'COMPLIMENTARY_PERIOD_ACTIVE', complimentaryEndsAt: subscription.complimentary_ends_at, error: 'Your complimentary access is still active. The first paid period begins after it ends.' });
+    }
+    const monthlyPrice = Number(subscription.price_rwf);
+    const amount = calculateSubscriptionAmount(monthlyPrice, months);
+    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ restaurantCode: req.user!.restaurantCode, payer, amount, months, currency: 'RWF' })).digest('hex');
     const prior = await client.query('SELECT * FROM restaurant_subscription_payments WHERE idempotency_key=$1 FOR UPDATE', [idempotencyKey]);
     if (prior.rows[0]) {
       if (prior.rows[0].request_fingerprint !== fingerprint) { await client.query('ROLLBACK'); return res.status(409).json({ success: false, error: 'Idempotency key reused with different details.' }); }
@@ -4615,10 +4720,10 @@ app.post('/api/restaurant-saas/payment/initiate', apiRateLimiter, requireAuth(['
       await client.query('COMMIT');
       return res.status(202).json({ success: true, payment: pending.rows[0], reused: true, message: 'An earlier MTN payment is unresolved or requires manual reconciliation. Do not start another payment until it is resolved.' });
     }
-    await client.query("INSERT INTO restaurant_subscription_payments (id,restaurant_code,provider,provider_environment,internal_reference,payer_msisdn,amount_rwf,currency,status,idempotency_key,request_fingerprint) VALUES ($1,$2,'mtn_momo',$3,$4,$5,$6,'RWF','created',$7,$8)",
-      [paymentId, req.user!.restaurantCode, config.environment, reference, payer, amount, idempotencyKey, fingerprint]);
+    await client.query("INSERT INTO restaurant_subscription_payments (id,restaurant_code,provider,provider_environment,internal_reference,payer_msisdn,amount_rwf,months_purchased,currency,status,idempotency_key,request_fingerprint) VALUES ($1,$2,'mtn_momo',$3,$4,$5,$6,$7,'RWF','created',$8,$9)",
+      [paymentId, req.user!.restaurantCode, config.environment, reference, payer, amount, months, idempotencyKey, fingerprint]);
     await client.query("INSERT INTO restaurant_subscription_audit_logs (id,restaurant_code,actor_type,actor_id,action,payment_id,data) VALUES ($1,$2,'restaurant_admin',$3,'SAAS_PAYMENT_INITIATED',$4,$5)",
-      ['rsa_' + crypto.randomUUID(), req.user!.restaurantCode, req.user!.userId, paymentId, JSON.stringify({ amountRwf: amount, currency: 'RWF', provider: 'mtn_momo', environment: config.environment })]);
+      ['rsa_' + crypto.randomUUID(), req.user!.restaurantCode, req.user!.userId, paymentId, JSON.stringify({ amountRwf: amount, monthlyPriceRwf: monthlyPrice, monthsPurchased: months, currency: 'RWF', provider: 'mtn_momo', environment: config.environment })]);
     await client.query('COMMIT');
     const token = await getSaasMtnAccessToken(config);
     const response = await fetch(config.baseUrl + '/collection/v1_0/requesttopay', {
@@ -4627,7 +4732,7 @@ app.post('/api/restaurant-saas/payment/initiate', apiRateLimiter, requireAuth(['
         'Ocp-Apim-Subscription-Key': config.subscriptionKey, 'Content-Type': 'application/json'
       }, body: JSON.stringify({
         amount: String(amount), currency: 'RWF', externalId: reference, payer: { partyIdType: 'MSISDN', partyId: payer },
-        payerMessage: 'RestoPass restaurant software subscription', payeeNote: 'RestoPass SaaS access - 30 days'
+        payerMessage: 'RestoPass restaurant subscription - ' + months + ' month(s)', payeeNote: 'RestoPass SaaS access - ' + months + ' calendar month(s)'
       }), signal: AbortSignal.timeout(10000)
     });
     if (response.status !== 202) {
@@ -4635,7 +4740,7 @@ app.post('/api/restaurant-saas/payment/initiate', apiRateLimiter, requireAuth(['
       return res.status(502).json({ success: false, error: 'MTN did not accept the request. No subscription time was granted.' });
     }
     await pool.query("UPDATE restaurant_subscription_payments SET status='provider_pending',provider_status='PENDING',updated_at=NOW() WHERE id=$1", [paymentId]);
-    return res.status(202).json({ success: true, status: 'provider_pending', paymentId, message: 'Approve the MTN MoMo prompt. Access activates only after independent status verification.' });
+    return res.status(202).json({ success: true, status: 'provider_pending', paymentId, amountRwf: amount, monthsPurchased: months, message: 'Approve the MTN MoMo prompt. Access activates only after independent status verification.' });
   } catch (error) { try { await client.query('ROLLBACK') } catch { }; console.error('[SaaS payment initiation]', error); return res.status(503).json({ success: false, error: 'Payment request unavailable. Check payment history before retrying.' }); }
   finally { client.release(); }
 });
@@ -4711,17 +4816,19 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
     const restaurant = restaurantResult.rows[0].data || {};
     const subscription = subResult.rows[0];
     const verifiedAt = new Date();
-    const period = calculateRenewalPeriod(subscription.current_period_end, verifiedAt.toISOString());
+    const monthsPurchased = Number(pay.months_purchased || 1);
+    const graceDays = Number(subscription.renewal_grace_days ?? 3);
+    const period = calculateRenewalPeriod(subscription.current_period_end, verifiedAt.toISOString(), monthsPurchased, graceDays);
     const end = period.periodEnd;
     const graceEnd = period.gracePeriodEnd;
     const plan = (serverDbState?.plans || []).find((item: any) => item.id === restaurant.planId);
     const oldLicense = (serverDbState?.licenses || []).find((item: any) => item.id === restaurant.currentLicenseId);
     const maxScanPoints = Number(oldLicense?.maxScanPoints || plan?.terms?.maxScanPointsIncluded || 1);
     const licenseId = 'LIC-' + pay.restaurant_code + '-' + crypto.randomUUID().slice(0, 8).toUpperCase();
-    const payload = { licenseId, restaurantCode: pay.restaurant_code, planId: restaurant.planId, maxScanPoints, validUntil: end, graceDays: 3 };
+    const payload = { licenseId, restaurantCode: pay.restaurant_code, planId: restaurant.planId, maxScanPoints, validUntil: end, graceDays };
     const signature = 'ed25519_' + serverHmac(MASTER_KEY, 'LICENSE_SIGNATURE:' + JSON.stringify(payload)).slice(0, 48);
     const license = {
-      id: licenseId, restaurantCode: pay.restaurant_code, planId: restaurant.planId, maxScanPoints, validUntil: end, graceDays: 3,
+      id: licenseId, restaurantCode: pay.restaurant_code, planId: restaurant.planId, maxScanPoints, validUntil: end, graceDays,
       featureFlags: oldLicense?.featureFlags || { spotChecksEnabled: true, multiStationEnabled: maxScanPoints > 1, secondPlateAllowed: true, customerTransfersEnabled: true },
       signature, issuedAt: verifiedAt.toISOString(), paidUntil: end
     };
@@ -4733,7 +4840,7 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
     await client.query("UPDATE restaurant_subscription_payments SET status='successful',provider_transaction_id=$2,provider_status='SUCCESSFUL',verified_at=$3,entitlement_applied_at=$3,updated_at=NOW() WHERE id=$1",
       [pay.id, provider.financialTransactionId, verifiedAt.toISOString()]);
     await client.query("INSERT INTO restaurant_subscription_audit_logs (id,restaurant_code,actor_type,actor_id,action,payment_id,data) VALUES ($1,$2,'mtn_momo',$3,'SAAS_PAYMENT_VERIFIED',$4,$5)",
-      ['rsa_' + crypto.randomUUID(), pay.restaurant_code, provider.financialTransactionId, pay.id, JSON.stringify({ amountRwf: Number(pay.amount_rwf), currency: 'RWF', periodStart: period.periodStart, periodEnd: end, licenseId })]);
+      ['rsa_' + crypto.randomUUID(), pay.restaurant_code, provider.financialTransactionId, pay.id, JSON.stringify({ amountRwf: Number(pay.amount_rwf), monthsPurchased, monthlyPriceRwf: Number(subscription.price_rwf), currency: 'RWF', periodStart: period.periodStart, periodEnd: end, licenseId })]);
     await client.query('COMMIT');
     if (serverDbState) {
       serverDbState.restaurants = (serverDbState.restaurants || []).map((item: any) => item.code === pay.restaurant_code ? updatedRestaurant : item);
