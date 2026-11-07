@@ -73,11 +73,11 @@ export const CustomerSubscriptionPage: React.FC<CustomerSubscriptionPageProps> =
     } finally { setBusy(false); }
   };
 
-  const verifyPayment = async () => {
-    if (!pendingReference) return;
+  const verifyPayment = async (reference = pendingReference) => {
+    if (!reference) return;
     setBusy(true); setError(''); setMessage('');
     try {
-      const response = await fetch('/api/customer/subscription/payments/' + encodeURIComponent(pendingReference) + '/status', {
+      const response = await fetch('/api/customer/subscription/payments/' + encodeURIComponent(reference) + '/status', {
         headers: authHeaders,
         cache: 'no-store',
       });
@@ -220,9 +220,15 @@ export const CustomerSubscriptionPage: React.FC<CustomerSubscriptionPageProps> =
                     Ref: {payment.providerTransactionId || payment.internalReference} · {new Date(payment.verifiedAt || payment.initiatedAt).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' })}
                   </div>
                 </div>
-                <span className={`px-2.5 py-0.5 rounded-md font-mono font-bold text-xs uppercase ${payment.status === 'verified'
-                  ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                  : 'bg-slate-800 text-slate-300'}`}>{payment.status}</span>
+                <div className="flex items-center gap-2">
+                  <span className={`px-2.5 py-0.5 rounded-md font-mono font-bold text-xs uppercase ${payment.status === 'verified'
+                    ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                    : 'bg-slate-800 text-slate-300'}`}>{payment.status}</span>
+                  {['created', 'provider_pending', 'pending'].includes(payment.status) && (
+                    <button type="button" disabled={busy} onClick={() => { setPendingReference(payment.internalReference); void verifyPayment(payment.internalReference); }}
+                      className="text-xs font-bold text-emerald-300 hover:text-white disabled:opacity-50">Check status</button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
