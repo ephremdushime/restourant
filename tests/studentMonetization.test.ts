@@ -89,7 +89,7 @@ describe('RestoPass Student Monetization — Specification & Business Rules', ()
       assert.equal(sub.status, 'pending_payment');
     });
 
-    test('verified mobile money callback activates subscription and sets 30-day period + 72h grace', () => {
+    test('verified demo payment activates subscription for one calendar month + configured grace', () => {
       const checkout = restoStore.initiateStudentCheckout({
         customerId: 'cust_28491',
         phoneNumber: '+250 788 123 456',
@@ -108,11 +108,12 @@ describe('RestoPass Student Monetization — Specification & Business Rules', ()
       const endMs = new Date(verifyRes.subscription.currentPeriodEnd!).getTime();
       const graceMs = new Date(verifyRes.subscription.gracePeriodEnd!).getTime();
 
-      const expectedDurationMs = 30 * 24 * 3600 * 1000;
-      const expectedGraceMs = 3 * 24 * 3600 * 1000; // 72 hours
+      const expectedEnd = new Date(startMs);
+      expectedEnd.setUTCMonth(expectedEnd.getUTCMonth() + 1);
+      const expectedGraceMs = 3 * 24 * 3600 * 1000;
 
-      assert.ok(Math.abs(endMs - startMs - expectedDurationMs) < 5000, 'Current period must be ~30 days');
-      assert.ok(Math.abs(graceMs - endMs - expectedGraceMs) < 5000, 'Grace period must be exactly 72h (3 days)');
+      assert.equal(endMs, expectedEnd.getTime(), 'Current period must end one calendar month after payment');
+      assert.ok(Math.abs(graceMs - endMs - expectedGraceMs) < 5000, 'Grace period must be exactly 3 calendar days');
     });
 
     test('duplicate payment callbacks are handled idempotently without extending subscription period', () => {
