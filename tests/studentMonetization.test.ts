@@ -58,6 +58,21 @@ describe('RestoPass Student Monetization — Specification & Business Rules', ()
   });
 
   describe('2. Subscription Pricing & Integer-Safe Currency Representation', () => {
+    test('customer monthly fee is global and ignores legacy restaurant-specific overrides', () => {
+      const state = restoStore.getState();
+      const existing = state.restaurants.find((r) => r.code === 'PRICE_POLICY_TEST');
+      if (!existing) {
+        state.restaurants.push({
+          code: 'PRICE_POLICY_TEST', name: 'Price Policy Test', legalEntity: 'Test Entity',
+          phone: '+250788000000', email: 'test@example.invalid', address: 'Kigali',
+          currency: 'RWF', planId: 'plan_test', status: 'active',
+          studentSubscriptionPriceRwf: 9000,
+        } as any);
+      }
+      restoStore.updateStudentSubscriptionSettings({ priceRwf: 1250 });
+      assert.equal(restoStore.getStudentSubscriptionPrice('PRICE_POLICY_TEST'), 1250);
+    });
+
     test('monthly subscription price is exactly 500 RWF integer safe (no fractional minor unit errors)', () => {
       const settings = restoStore.getStudentSubscriptionSettings();
       assert.equal(typeof settings.priceRwf, 'number');
@@ -255,6 +270,62 @@ describe('RestoPass Student Monetization — Specification & Business Rules', ()
       const revokeRes = restoStore.revokeComplimentarySubscription('cust_28492', 'Term ended');
       assert.equal(revokeRes.success, true);
       assert.equal(restoStore.checkStudentEntitlement('cust_28492', 'digital_plate_transfer').allowed, false);
+    });
+  });
+
+  describe('5A. Global Promotional Access Policy', () => {
+    test('approved customers receive promotional access before payment enforcement', () => {
+      const now = Date.now();
+      const endsAt = new Date(now + 30 * 86400000).toISOString();
+      const state: any = {
+        studentSubscriptionSettings: {
+          enabled: true, priceRwf: 1250, currency: 'RWF', period: 'monthly', graceDays: 3,
+          promoAccessEnabled: true,
+          promoStartsAt: new Date(now - 86400000).toISOString(),
+          promoEndsAt: endsAt,
+          promoMessage: 'Launch promotion',
+          requireForTransfers: true, requireForDashboard: true,
+        },
+        customers: [{ id: 'promo_customer', restaurantCode: 'RW01', registrationStatus: 'approved', customerAccessStatus: 'payment_required' }],
+        customerSubscriptions: [],
+      };
+      const entitlement = checkServerStudentEntitlement('promo_customer', 'customer_dashboard', state);
+      assert.equal(entitlement.allowed, true);
+      assert.equal(entitlement.status, 'complimentary');
+      assert.equal(entitlement.expiresAt, endsAt);
+      assert.match(entitlement.reason || '', /launch promotion/i);
+    });
+
+    test('expired promotion requires payment when global enforcement is enabled', () => {
+      const state: any = {
+        studentSubscriptionSettings: {
+          enabled: true, priceRwf: 1250, currency: 'RWF', period: 'monthly', graceDays: 3,
+          promoAccessEnabled: true,
+          promoStartsAt: new Date(Date.now() - 60 * 86400000).toISOString(),
+          promoEndsAt: new Date(Date.now() - 1000).toISOString(),
+          requireForTransfers: true, requireForDashboard: true,
+        },
+        customers: [{ id: 'promo_expired', restaurantCode: 'RW01', registrationStatus: 'approved', customerAccessStatus: 'payment_required' }],
+        customerSubscriptions: [],
+      };
+      const entitlement = checkServerStudentEntitlement('promo_expired', 'customer_dashboard', state);
+      assert.equal(entitlement.allowed, false);
+      assert.equal(entitlement.enforcementEnabled, true);
+    });
+
+    test('disabling customer payment enforcement restores free access despite legacy expired status', () => {
+      const state: any = {
+        studentSubscriptionSettings: {
+          enabled: false, priceRwf: 1250, currency: 'RWF', period: 'monthly', graceDays: 3,
+          promoAccessEnabled: false, requireForTransfers: true, requireForDashboard: true,
+        },
+        customers: [{ id: 'promo_disabled', restaurantCode: 'RW01', registrationStatus: 'approved', customerAccessStatus: 'expired' }],
+        customerSubscriptions: [{ id: 'sub-expired', customerId: 'promo_disabled', restaurantCode: 'RW01', status: 'expired' }],
+      };
+      const entitlement = checkServerStudentEntitlement('promo_disabled', 'customer_dashboard', state);
+      assert.equal(entitlement.allowed, true);
+      assert.equal(entitlement.status, 'complimentary');
+      assert.equal(entitlement.enforcementEnabled, false);
     });
   });
 
