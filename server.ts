@@ -5580,6 +5580,10 @@ app.post('/api/superadmin/customer/subscription/activate-paid', apiRateLimiter, 
   const paymentMethod = typeof body.paymentMethod === 'string' ? body.paymentMethod : '';
   const referenceInput = typeof body.paymentReference === 'string' ? body.paymentReference.trim().toUpperCase() : '';
   const verificationNote = typeof body.verificationNote === 'string' ? body.verificationNote.trim().slice(0, 500) : '';
+  const months = Number(body.months ?? 1);
+  if (!Number.isSafeInteger(months) || months < 1 || months > 24) {
+    return res.status(400).json({ success: false, error: 'Choose between 1 and 24 calendar months.' });
+  }
   if (!customerId || !['cash', 'mtn_momo', 'bank_transfer'].includes(paymentMethod)) {
     return res.status(400).json({ success: false, error: 'Select a customer and valid payment method.' });
   }
@@ -5615,12 +5619,11 @@ app.post('/api/superadmin/customer/subscription/activate-paid', apiRateLimiter, 
     return res.status(409).json({ success: false, error: 'This customer is not currently due for a paid access renewal.' });
   }
 
-  const restaurant = (serverDbState.restaurants || []).find((r: any) => r.code === customer.restaurantCode);
-  const settingsPrice = Number(serverDbState.studentSubscriptionSettings?.priceRwf) || 500;
-  const amountRwf = Number(restaurant?.studentSubscriptionPriceRwf ?? restaurant?.termsOverride?.studentSubscriptionPriceRwf ?? settingsPrice);
-  if (!Number.isInteger(amountRwf) || amountRwf <= 0) {
-    return res.status(409).json({ success: false, error: 'The monthly access fee is not configured correctly.' });
-  }
+  const settings = serverDbState.studentSubscriptionSettings || {};
+  const monthlyPriceRwf = Number(settings.priceRwf);
+  let amountRwf: number;
+  try { amountRwf = calculateSubscriptionAmount(monthlyPriceRwf, months); }
+  catch (error: any) { return res.status(409).json({ success: false, error: error.message }); }
   const paymentReference = referenceInput || `CASH-ACCESS-${crypto.randomUUID()}`;
   if ((serverDbState.studentSubscriptionPayments || []).some((p: any) =>
     p.restaurantCode === customer.restaurantCode &&
@@ -5634,8 +5637,9 @@ app.post('/api/superadmin/customer/subscription/activate-paid', apiRateLimiter, 
   const paymentId = `spay_${crypto.randomUUID()}`;
   const subscriptionId = existingSub?.id || `sub_${customer.id}_${crypto.randomUUID()}`;
   const internalReference = `MANUAL-ACCESS-${crypto.randomUUID()}`;
-  const periodEnd = new Date(nowMs + 30 * 24 * 60 * 60 * 1000).toISOString();
-  const graceEnd = new Date(nowMs + 33 * 24 * 60 * 60 * 1000).toISOString();
+  const period = calculateRenewalPeriod(existingSub?.currentPeriodEnd || null, now, months, Number(settings.graceDays ?? 3));
+  const periodEnd = period.periodEnd;
+  const graceEnd = period.gracePeriodEnd;
   const subscription = existingSub || {
     id: subscriptionId,
     customerId: customer.id,
@@ -5653,7 +5657,7 @@ app.post('/api/superadmin/customer/subscription/activate-paid', apiRateLimiter, 
     planName: 'Student Digital Pass',
     priceRwf: amountRwf,
     currency: 'RWF',
-    currentPeriodStart: now,
+    currentPeriodStart: period.periodStart,
     currentPeriodEnd: periodEnd,
     gracePeriodEnd: graceEnd,
     cancelAtPeriodEnd: false,
@@ -5680,6 +5684,8 @@ app.post('/api/superadmin/customer/subscription/activate-paid', apiRateLimiter, 
     phoneNumber: customer.phone,
     providerTransactionId: paymentReference,
     amountRwf,
+    monthlyPriceRwf,
+    monthsPurchased: months,
     currency: 'RWF',
     status: 'verified',
     initiatedAt: now,
