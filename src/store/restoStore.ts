@@ -7556,7 +7556,8 @@ export class RestoStore {
       existingSubscription?.currentPeriodEnd || null,
       verifiedAt,
       monthsPurchased,
-      Number(this.state.studentSubscriptionSettings?.graceDays ?? 3)
+      Number(this.state.studentSubscriptionSettings?.graceDays ?? 3),
+      existingSubscription?.billingAnchorDay ?? null
     );
 
     payment.status = 'verified';
@@ -7577,6 +7578,7 @@ export class RestoStore {
         currency: 'RWF',
         currentPeriodStart: period.periodStart,
         currentPeriodEnd: period.periodEnd,
+        billingAnchorDay: period.billingAnchorDay,
         gracePeriodEnd: period.gracePeriodEnd,
         cancelAtPeriodEnd: false,
         paymentMethod: payment.provider,
@@ -7591,6 +7593,7 @@ export class RestoStore {
       sub.currency = 'RWF';
       sub.currentPeriodStart = period.periodStart;
       sub.currentPeriodEnd = period.periodEnd;
+      sub.billingAnchorDay = period.billingAnchorDay;
       sub.gracePeriodEnd = period.gracePeriodEnd;
       sub.cancelAtPeriodEnd = false;
       sub.paymentMethod = payment.provider;
