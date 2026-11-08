@@ -344,7 +344,7 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
       // The same-station consecutive-scan guard must see a different customer,
       // while the seeded customer scan above independently triggers the meal limit.
       await pool!.query(
-        "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data,created_at) VALUES ($1,$2,$3,$4,'approved',$5,NOW())",
+        "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data,created_at) VALUES ($1,$2,$3,$4,'approved',$5,NOW() + INTERVAL '10 seconds')",
         ['scan_seed_race_station_' + seedTime, rCode1, custA_id, stationId, JSON.stringify({ customerId: custA_id, platesDeducted: 1, status: 'approved' })]
       );
       const cardToken = await post('/api/qr/token/card', tokenCustB, { restaurantCode: rCode1, memberNo: custB_member });
