@@ -23,6 +23,12 @@ DRIVE_REMOTE="${RESTOPASS_GOOGLE_DRIVE_REMOTE:-$(env_value RESTOPASS_GOOGLE_DRIV
 RCLONE_CONFIG_FILE="${RCLONE_CONFIG:-$(env_value RCLONE_CONFIG)}"
 RCLONE_CONFIG_FILE="${RCLONE_CONFIG_FILE:-$HOME/.config/rclone/rclone.conf}"
 [[ -n "$DRIVE_REMOTE" && "$DRIVE_REMOTE" == *:* && -s "$RCLONE_CONFIG_FILE" ]] || { echo "Configure RESTOPASS_GOOGLE_DRIVE_REMOTE and rclone OAuth first." >&2; exit 1; }
+drive_path="${DRIVE_REMOTE#*:}"
+drive_path="${drive_path#/}"
+drive_path="${drive_path%/}"
+[[ -n "$drive_path" && "$drive_path" != "." ]] || { echo "RESTOPASS_GOOGLE_DRIVE_REMOTE must target a dedicated non-root backup folder." >&2; exit 1; }
+case "/$drive_path/" in */../*) echo "Google Drive backup path cannot contain parent-directory traversal." >&2; exit 1 ;; esac
+chmod 600 "$RCLONE_CONFIG_FILE" || { echo "Could not restrict rclone OAuth config permissions to 0600." >&2; exit 1; }
 
 manifest="$(find "$ROOT_DIR/backups" -maxdepth 1 -type f -name 'restopass_*.manifest' -printf '%f\n' | sort -r | head -n 1)"
 [[ -n "$manifest" ]] || { echo "No local paired backup manifest found." >&2; exit 1; }
