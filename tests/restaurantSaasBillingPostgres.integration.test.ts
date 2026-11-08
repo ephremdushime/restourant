@@ -162,6 +162,38 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     const forgedLicense = await pool!.query('SELECT id FROM licenses WHERE id=$1', ['LIC-BYPASS-' + suffix]);
     assert.equal(forgedLicense.rowCount, 0);
 
+    // Generic Super Admin browser sync must not manufacture customer entitlements
+    // or provider-settled payment history. Those writes use dedicated server APIs.
+    const forgedCustomerId = 'sync_customer_' + suffix;
+    const forgedSubscriptionId = 'sync_sub_' + suffix;
+    const forgedPaymentId = 'sync_payment_' + suffix;
+    const syncEntitlementBypass = await request('POST', '/api/sync', superAdminToken, {
+      fullState: {
+        customerSubscriptions: [{
+          id: forgedSubscriptionId, customerId: forgedCustomerId, memberNo: suffix,
+          restaurantCode, status: 'active', planName: 'Forged Subscription',
+          priceRwf: 0, currency: 'RWF', currentPeriodStart: new Date().toISOString(),
+          currentPeriodEnd: '2099-01-01T00:00:00.000Z', gracePeriodEnd: '2099-01-04T00:00:00.000Z',
+        }],
+        studentSubscriptionPayments: [{
+          id: forgedPaymentId, customerId: forgedCustomerId, memberNo: suffix,
+          restaurantCode, internalReference: 'PATRON-SYNC-' + suffix,
+          provider: 'mtn_momo', providerEnvironment: 'sandbox',
+          providerTransactionId: 'MTN-SYNC-FORGED-' + suffix,
+          payerMsisdn: payer, phoneNumber: payer, amountRwf: 1,
+          monthlyPriceRwf: 1, monthsPurchased: 1, currency: 'RWF',
+          status: 'verified', idempotencyKey: 'sync-forged-' + suffix,
+          requestFingerprint: 'b'.repeat(64), initiatedAt: new Date().toISOString(),
+          verifiedAt: new Date().toISOString(),
+        }],
+      },
+    });
+    assert.equal(syncEntitlementBypass.status, 200);
+    const forgedSubscription = await pool!.query('SELECT id FROM customer_subscriptions WHERE id=$1', [forgedSubscriptionId]);
+    assert.equal(forgedSubscription.rowCount, 0, 'browser sync must not create a customer entitlement');
+    const forgedPayment = await pool!.query('SELECT id FROM customer_subscription_payments WHERE id=$1', [forgedPaymentId]);
+    assert.equal(forgedPayment.rowCount, 0, 'browser sync must not create a verified customer payment');
+
     const initial = await request('GET', '/api/restaurant-saas/subscription', adminToken);
     assert.equal(initial.status, 200);
     assert.equal(initial.body.subscription.status, 'pending_payment');
