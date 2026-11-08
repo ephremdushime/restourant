@@ -504,7 +504,7 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
           `INSERT INTO customer_subscription_payments
            (id,customer_id,restaurant_code,provider,provider_environment,internal_reference,provider_transaction_id,
             payer_msisdn,amount_rwf,months_purchased,currency,status,idempotency_key,request_fingerprint,data,verified_at,created_at,updated_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'RWF',$11,$12,$13,$14,$15,NOW())
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'RWF',$11,$12,$13,$14,$15,COALESCE($16::timestamptz,NOW()),NOW())
            ON CONFLICT (id) DO UPDATE SET
              provider_transaction_id=EXCLUDED.provider_transaction_id,
              payer_msisdn=EXCLUDED.payer_msisdn,
@@ -515,7 +515,7 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
             item.providerTransactionId || null,
             item.payerMsisdn || item.phoneNumber || item.phone || null,
             amountRwf, monthsPurchased, status, idempotencyKey, requestFingerprint,
-            JSON.stringify(item), item.verifiedAt || null,
+            JSON.stringify(item), item.verifiedAt || null, item.initiatedAt || item.createdAt || null,
           ]
         );
       }
