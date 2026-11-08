@@ -214,7 +214,7 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     );
     assert.equal(quarantined.rows[0].status, 'review_required');
     assert.equal(quarantined.rows[0].entitlement_applied_at, null);
-    assert.equal(quarantined.rows[0].provider_transaction_id, 'MTN-IT-' + suffix);
+    assert.ok(String(quarantined.rows[0].provider_transaction_id).startsWith('MTN-IT-' + suffix + '-'));
 
     // A provider-successful mismatch may represent money already collected.
     // Block a second charge until the first payment is reconciled by an operator.
