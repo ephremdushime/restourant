@@ -174,9 +174,9 @@ jobs:
           openssl req -x509 -nodes -newkey rsa:2048 -keyout "$tls_dir/server.key" -out "$tls_dir/server.crt" \
             -days 1 -subj "/CN=postgres" -addext "subjectAltName=DNS:postgres"
           chmod 755 "$tls_dir"
-          sudo chown 70:70 "$tls_dir/server.key"
           chmod 600 "$tls_dir/server.key"
           chmod 644 "$tls_dir/server.crt"
+          sudo chown 70:70 "$tls_dir/server.key"
           cleanup() {
             docker logs restopass-app-smoke || true
             docker rm --force restopass-app-smoke restopass-postgres-smoke restopass-redis-smoke >/dev/null 2>&1 || true
