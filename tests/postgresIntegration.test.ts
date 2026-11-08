@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   initPostgres,
   loadStateFromPostgres,
@@ -7,8 +9,19 @@ import {
   commitPlateTransferPostgres,
   closePostgres,
   checkPostgresReady,
+  getPostgresPool,
 } from '../src/services/db/postgresAdapter';
 import { checkRedisReady, recordTokenScan, closeRedis, revokeSessionToken, isSessionTokenRevoked } from '../src/services/cache/redisClient';
+
+test('P0-01: schema.sql indexes balance_checkpoints.cutoff_timestamp and never references cutoff_date', () => {
+  const schemaPath = path.join(process.cwd(), 'src', 'services', 'db', 'schema.sql');
+  const ddl = fs.readFileSync(schemaPath, 'utf8');
+  assert.doesNotMatch(ddl, /\bcutoff_date\b/, 'schema.sql must not reference non-existent cutoff_date column');
+  assert.match(
+    ddl,
+    /CREATE INDEX IF NOT EXISTS idx_checkpoints_customer_cutoff\s+ON balance_checkpoints\s*\(\s*customer_id\s*,\s*cutoff_timestamp\s+DESC\s*\)/i
+  );
+});
 
 test('PostgreSQL persistence round-trip and concurrent transfer invariants', {
   skip: !process.env.TEST_DATABASE_URL,
@@ -26,7 +39,17 @@ test('PostgreSQL persistence round-trip and concurrent transfer invariants', {
 
   try {
     assert.equal(await initPostgres(), true);
+    // Repeat initialization must be safe and idempotent (P0-01).
+    assert.equal(await initPostgres(), true);
     assert.equal(await checkPostgresReady(), true);
+
+    const pool = getPostgresPool();
+    assert.ok(pool);
+    const idxCheck = await pool.query(
+      `SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'balance_checkpoints' AND indexname = 'idx_checkpoints_customer_cutoff'`
+    );
+    assert.equal(idxCheck.rowCount, 1);
+    assert.match(String(idxCheck.rows[0]?.indexdef || ''), /cutoff_timestamp/i);
 
     const state = {
       restaurants: [{ code: restaurantCode, name: 'Integration Test Restaurant', status: 'active' }],
