@@ -449,14 +449,12 @@ function normalizeStationUserCredentials(state: any): boolean {
   for (const stationUser of state.stationUsers) {
     if (!stationUser || typeof stationUser !== 'object') continue;
 
-    // Station authentication reads pinHash, never plaintext or a hash in the legacy pin field.
-    // Move already-hashed legacy values safely and hash plaintext values exactly once.
-    if (typeof stationUser.pin === 'string' && stationUser.pin.trim()) {
-      if (!stationUser.pinHash || typeof stationUser.pinHash !== 'string') {
+    // Authentication reads pinHash only. Migrate the legacy pin field once,
+    // preserve an existing hash, and never leave plaintext credentials behind.
+    if (Object.prototype.hasOwnProperty.call(stationUser, 'pin')) {
+      if (typeof stationUser.pin === 'string' && stationUser.pin.trim() &&
+          !(typeof stationUser.pinHash === 'string' && stationUser.pinHash.length > 0)) {
         stationUser.pinHash = stationUser.pin.startsWith('scrypt
-  }
-  return changed;
-}
 
 function getCurrentServerTimeStep(clockOffsetMs = 0): number {
   const effectiveTime = Date.now() + clockOffsetMs;
@@ -7205,9 +7203,6 @@ export {
     if (typeof stationUser.passwordHash === 'string' &&
         stationUser.passwordHash.length > 0 &&
         !stationUser.passwordHash.startsWith('scrypt
-  }
-  return changed;
-}
 
 function getCurrentServerTimeStep(clockOffsetMs = 0): number {
   const effectiveTime = Date.now() + clockOffsetMs;
