@@ -173,6 +173,8 @@ jobs:
           docker network create "$network"
           openssl req -x509 -nodes -newkey rsa:2048 -keyout "$tls_dir/server.key" -out "$tls_dir/server.crt" \
             -days 1 -subj "/CN=postgres" -addext "subjectAltName=DNS:postgres"
+          chmod 755 "$tls_dir"
+          sudo chown 70:70 "$tls_dir/server.key"
           chmod 600 "$tls_dir/server.key"
           chmod 644 "$tls_dir/server.crt"
           cleanup() {
