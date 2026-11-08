@@ -207,10 +207,12 @@ jobs:
       - name: Smoke-test production Docker container
         run: |
           docker run --detach --name restopass-app-smoke \
-            --publish 127.0.0.1:3300:3000 \
+            --network host \
             --env NODE_ENV=production \
-            --env RESTOPASS_DEPLOYMENT_MODE=standalone \
+            --env RESTOPASS_DEPLOYMENT_MODE=cloud \
             --env PORT=3000 \
+            --env DATABASE_URL="$TEST_DATABASE_URL" \
+            --env REDIS_URL="$TEST_REDIS_URL" \
             --env SESSION_SECRET="$(openssl rand -hex 32)" \
             --env RESTOPASS_MASTER_SECRET="$(openssl rand -hex 32)" \
             --env RESTOPASS_SUPERADMIN_PASSWORD="$(openssl rand -hex 24)" \
@@ -220,7 +222,7 @@ jobs:
           trap cleanup EXIT
           ready=0
           for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:3300/api/ready >/tmp/restopass-ready.json; then
+            if curl --fail --silent http://127.0.0.1:3000/api/ready >/tmp/restopass-ready.json; then
               ready=1
               break
             fi
@@ -232,7 +234,7 @@ jobs:
             exit 1
           fi
           grep -q '"status":"ready"' /tmp/restopass-ready.json
-          curl --fail --silent http://127.0.0.1:3300/api/health >/dev/null
+          curl --fail --silent http://127.0.0.1:3000/api/health >/dev/null
 
       - name: Build Production Bundle
         run: npm run build
