@@ -89,7 +89,12 @@ find "$POSTGRES_DIR" -type f \( -name 'restopass_*.dump.enc' -o -name 'restopass
 find "$PHOTOS_DIR" -type f \( -name 'restopass_photos_*.tar.gz.enc' -o -name 'restopass_photos_*.tar.gz.enc.sha256' -o -name 'restopass_photos_*.tar.gz.enc.hmac' \) -mtime +"$retention_days" -delete
 find "$ROOT_DIR/backups" -maxdepth 1 -type f -name 'restopass_*.manifest' -mtime +"$retention_days" -delete
 
-echo "Paired encrypted backup uploaded and read-back verified in Google Drive."
+# Apply the same retention window to the dedicated RestoPass Google Drive backup root.
+# The completion manifest is retained with its paired artifacts until the age cutoff.
+rclone delete "$DRIVE_REMOTE" --min-age "${retention_days}d" --drive-use-trash=false --config "$RCLONE_CONFIG_FILE" || fail "Google Drive retention cleanup failed."
+rclone rmdirs "$DRIVE_REMOTE" --leave-root --config "$RCLONE_CONFIG_FILE" || fail "Google Drive empty-directory cleanup failed."
+
+echo "Paired encrypted backup uploaded, read-back verified, and remote retention enforced in Google Drive."
 echo "Timestamp: $TIMESTAMP"
 echo "Remote: $remote/"
 echo "Completion manifest: $remote/restopass_$TIMESTAMP.manifest"
