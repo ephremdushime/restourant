@@ -152,8 +152,8 @@ CREATE TABLE IF NOT EXISTS customer_subscriptions (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-// Dedicated ledger for RestoPass customer-dashboard subscription payments.
-// Meal top-ups and restaurant SaaS subscriptions are deliberately separate.
+-- Dedicated ledger for RestoPass customer-dashboard subscription payments.
+-- Meal top-ups and restaurant SaaS subscriptions are deliberately separate.
 CREATE TABLE IF NOT EXISTS customer_subscription_payments (
     id VARCHAR(64) PRIMARY KEY,
     customer_id VARCHAR(64) NOT NULL,
