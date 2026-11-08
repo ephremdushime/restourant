@@ -50,7 +50,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
     ['sub_' + restaurantCode, restaurantCode, validUntil]
   );
   serverModule.setServerDbState({
-    restaurants: [{ code: restaurantCode, name: 'Approval Integration Test', status: 'active' }],
+    restaurants: [{ code: restaurantCode, name: 'Approval Integration Test', status: 'active', currentLicenseId: licenseId, planId }],
     scanPoints: [
       { id: stationId, restaurantCode, status: 'active', isPaired: true, name: 'Integration Scanner' },
       { id: otherStationId, restaurantCode, status: 'active', isPaired: true, name: 'Other Integration Scanner' },
