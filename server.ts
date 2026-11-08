@@ -4859,9 +4859,11 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
   const config = getSaasMtnConfig();
   if (!config) return res.status(503).json({ success: false, error: 'MTN verification is disabled pending merchant credentials and approval.' });
   const client = await pool.connect();
+  let payment: any = null;
+  let provider: any = null;
   try {
     const found = await client.query('SELECT * FROM restaurant_subscription_payments WHERE id=$1', [req.params.paymentId]);
-    const payment = found.rows[0];
+    payment = found.rows[0];
     if (!payment) return res.status(404).json({ success: false, error: 'Payment attempt not found.' });
     if (actor.role !== 'super_admin' && payment.restaurant_code !== actor.restaurantCode) return res.status(403).json({ success: false, error: 'Payment belongs to another restaurant.' });
     if (payment.provider_environment !== config.environment) return res.status(409).json({ success: false, error: 'Payment environment mismatch.' });
@@ -4875,7 +4877,7 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
       }, signal: AbortSignal.timeout(10000)
     });
     if (!response.ok) return res.status(502).json({ success: false, error: 'MTN status unavailable; no entitlement changed.' });
-    const provider: any = await response.json();
+    provider = await response.json();
     const verified = validateSaasPaymentMatch({
       providerStatus: provider?.status,
       providerAmount: provider?.amount,
