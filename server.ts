@@ -6112,20 +6112,76 @@ app.post('/api/admin/customers/:customerId/entitlements', apiRateLimiter, requir
 // DELETE /api/admin/customers/:customerId/entitlements/:entitlementId: Revokes complimentary access
 app.delete('/api/admin/customers/:customerId/entitlements/:entitlementId', apiRateLimiter, requireAuth(['super_admin']), async (req, res) => {
   ensureServerDbDefaults(serverDbState);
-  const { customerId } = req.params;
-  const sub = (serverDbState.customerSubscriptions || []).find((s: any) => s.customerId === customerId);
-  if (!sub) {
-    return res.status(404).json({ success: false, error: 'Subscription not found' });
+  const { customerId, entitlementId } = req.params;
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  if (reason.length < 3 || reason.length > 500) {
+    return res.status(400).json({ success: false, error: 'A mandatory revocation reason of 3–500 characters is required.' });
   }
 
-  sub.status = 'expired';
-  sub.currentPeriodEnd = new Date().toISOString();
-  sub.gracePeriodEnd = new Date().toISOString();
-  sub.updatedAt = new Date().toISOString();
+  const customer = (serverDbState.customers || []).find((item: any) => item.id === customerId);
+  const sub = (serverDbState.customerSubscriptions || []).find((item: any) =>
+    item.customerId === customerId && item.id === entitlementId
+  );
+  if (!sub) {
+    return res.status(404).json({ success: false, error: 'Complimentary subscription not found.' });
+  }
+  if (sub.status !== 'complimentary') {
+    return res.status(409).json({ success: false, error: 'Only an active complimentary entitlement can be revoked.' });
+  }
 
-  await queueDbSave(serverDbState);
+  const now = new Date().toISOString();
+  const previousSub = { ...sub };
+  const previousCustomer = customer ? { ...customer } : null;
+  Object.assign(sub, {
+    status: 'expired',
+    currentPeriodEnd: now,
+    gracePeriodEnd: now,
+    updatedAt: now,
+  });
+  if (customer?.registrationStatus === 'approved' && customer.customerAccessStatus === 'complimentary') {
+    customer.customerAccessStatus = 'payment_required';
+  }
 
-  return res.json({ success: true, message: 'Complimentary entitlement revoked', subscription: sub });
+  if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
+  const auditId = 'audit_' + crypto.randomUUID();
+  serverDbState.auditLogs.unshift({
+    id: auditId,
+    timestamp: now,
+    restaurantCode: sub.restaurantCode,
+    actorRole: 'super_admin',
+    actorName: req.user!.username,
+    action: 'COMPLIMENTARY_STUDENT_SUBSCRIPTION_REVOKED',
+    details: 'Revoked complimentary dashboard access for #' + sub.memberNo + '. Reason: ' + reason,
+  });
+
+  if (!Array.isArray(serverDbState.notifications)) serverDbState.notifications = [];
+  const notificationId = 'notif_' + crypto.randomUUID();
+  serverDbState.notifications.unshift({
+    id: notificationId,
+    restaurantCode: sub.restaurantCode,
+    target: customerId,
+    targetName: '#' + sub.memberNo,
+    senderRole: 'system',
+    senderName: req.user!.username,
+    type: 'system_broadcast',
+    title: 'Complimentary Dashboard Access Revoked',
+    message: 'Your complimentary dashboard access has been revoked. Reason: ' + reason + '. Your physical meal card remains unaffected.',
+    priority: 'important',
+    timestamp: now,
+    readByCustomerIds: [],
+    actionTab: 'my_card',
+  });
+
+  const saved = await queueDbSave(serverDbState);
+  if (!saved) {
+    Object.assign(sub, previousSub);
+    if (customer && previousCustomer) Object.assign(customer, previousCustomer);
+    serverDbState.auditLogs = serverDbState.auditLogs.filter((item: any) => item.id !== auditId);
+    serverDbState.notifications = serverDbState.notifications.filter((item: any) => item.id !== notificationId);
+    return res.status(503).json({ success: false, error: 'Complimentary access revocation could not be saved. Please retry.' });
+  }
+
+  return res.json({ success: true, message: 'Complimentary entitlement revoked and audited.', subscription: sub });
 });
 
 // ----------------------------------------------------
