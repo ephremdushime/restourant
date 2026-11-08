@@ -113,7 +113,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
 
     await t.test('registration creates customer and approval atomically; grace usage reconciles once', async () => {
       const created = await post('/api/approvals/registration', bossToken, registration('A', 60, '+250780000001'));
-      assert.equal(created.status, 201);
+      assert.equal(created.status, 201, JSON.stringify(created.body));
       assert.equal(created.body.success, true);
       const customerId = created.body.customer.id;
       const approvalId = created.body.approval.id;
