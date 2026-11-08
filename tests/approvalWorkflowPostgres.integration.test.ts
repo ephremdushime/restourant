@@ -34,6 +34,21 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
     'INSERT INTO restaurants (code,name,status,data) VALUES ($1,$2,$3,$4)',
     [restaurantCode, 'Approval Integration Test', 'active', JSON.stringify({ code: restaurantCode, name: 'Approval Integration Test', status: 'active' })]
   );
+  const licenseId = 'license_' + restaurantCode;
+  const planId = 'plan_' + restaurantCode;
+  const validUntil = new Date(Date.now() + 365 * 86400000).toISOString();
+  await pool!.query(
+    'INSERT INTO licenses (id,restaurant_code,plan_id,valid_until,data) VALUES ($1,$2,$3,$4,$5)',
+    [licenseId, restaurantCode, planId, validUntil, JSON.stringify({ id: licenseId, restaurantCode, planId, status: 'active', validUntil })]
+  );
+  await pool!.query(
+    "UPDATE restaurants SET data=data || jsonb_build_object('currentLicenseId',$2::text,'planId',$3::text) WHERE code=$1",
+    [restaurantCode, licenseId, planId]
+  );
+  await pool!.query(
+    "INSERT INTO restaurant_subscriptions (id,restaurant_code,status,price_rwf,current_period_start,current_period_end) VALUES ($1,$2,'active',60000,NOW(),$3)",
+    ['sub_' + restaurantCode, restaurantCode, validUntil]
+  );
   serverModule.setServerDbState({
     restaurants: [{ code: restaurantCode, name: 'Approval Integration Test', status: 'active' }],
     scanPoints: [
@@ -41,6 +56,8 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       { id: otherStationId, restaurantCode, status: 'active', isPaired: true, name: 'Other Integration Scanner' },
     ],
     packages: [{ id: 'pkg_test_60', restaurantCode, name: '60 plates', platesCount: 60, priceRwf: 60000 }],
+    licenses: [{ id: licenseId, restaurantCode, planId, validUntil, status: 'active' }],
+    plans: [{ id: planId, terms: { servingWindowMinutes: 120, plateLimitPerWindow: 3 } }],
     customers: [], pendingApprovals: [], ledgerEntries: [], payments: [], auditLogs: [], stationUsers: [],
   });
 
