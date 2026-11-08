@@ -317,7 +317,7 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
       freeAdminToken, {}
     );
     assert.equal(firstPaidVerified.status, 200);
-    assert.equal(firstPaidVerified.body.status, 'successful');
+    assert.equal(firstPaidVerified.body.status, 'successful', JSON.stringify(firstPaidVerified.body));
     const firstPaidPeriod = await pool!.query(
       'SELECT current_period_start,current_period_end,status FROM restaurant_subscriptions WHERE restaurant_code=$1',
       [freeRestaurantCode]
