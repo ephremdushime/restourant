@@ -94,7 +94,11 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
     studentSubscriptionSettings: { enabled: false },
     licenses: licenseFixtures.map((license) => ({ ...license, status: 'active' })),
     plans: licenseFixtures.map((license) => ({ id: license.planId, terms: { servingWindowMinutes: 120, plateLimitPerWindow: 3 } })),
-    customers: [], pendingApprovals: [], ledgerEntries: [], payments: [], auditLogs: [], stationUsers: [],
+    customers: [
+      { id: custA_id, restaurantCode: rCode1, memberNo: custA_member, name: 'Customer A', cardStatus: 'active', cardVersion: 1, keyVersion: 1 },
+      { id: custB_id, restaurantCode: rCode1, memberNo: custB_member, name: 'Customer B', cardStatus: 'active', cardVersion: 1, keyVersion: 1 },
+      { id: custC_id, restaurantCode: rCode2, memberNo: custC_member, name: 'Customer C', cardStatus: 'active', cardVersion: 1, keyVersion: 1 },
+    ], pendingApprovals: [], ledgerEntries: [], payments: [], auditLogs: [], stationUsers: [],
   });
 
   const custA_id = 'cust_a_' + rCode1;
