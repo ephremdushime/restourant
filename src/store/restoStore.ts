@@ -8045,7 +8045,7 @@ export class RestoStore {
     if (check.status === 'pending_boss_approval') {
       return {
         success: false,
-        error: 'Your registration is awaiting Restaurant Boss approval. You can use up to 4 grace meals at the stand while waiting.',
+        error: 'Your registration is awaiting Restaurant Boss approval. You can use up to 3 grace meals at the stand while waiting.',
       };
     }
     if (check.status === 'rejected') {
@@ -8181,10 +8181,11 @@ export class RestoStore {
 
     const cust = this.state.customers.find(
       (c) =>
-        c.phone === cleanIdentifier ||
-        c.phone.replace(/\s+/g, '') === cleanIdentifier.replace(/\s+/g, '') ||
-        c.memberNo === cleanIdentifier ||
-        c.id === cleanIdentifier
+        (!params.restaurantCode || c.restaurantCode === params.restaurantCode) &&
+        (c.phone === cleanIdentifier ||
+          c.phone.replace(/\s+/g, '') === cleanIdentifier.replace(/\s+/g, '') ||
+          c.memberNo === cleanIdentifier ||
+          c.id === cleanIdentifier)
     );
     if (!cust) return { success: false, error: 'Invalid activation credentials or code.' };
 
@@ -8455,10 +8456,11 @@ export class RestoStore {
     // Development/test-only local verification fallback
     const cust = this.state.customers.find(
       (c) =>
-        c.phone === cleanPhone ||
-        c.phone.replace(/\s+/g, '') === cleanPhone.replace(/\s+/g, '') ||
-        c.memberNo === cleanPhone ||
-        c.id === cleanPhone
+        (!params.restaurantCode || c.restaurantCode === params.restaurantCode) &&
+        (c.phone === cleanPhone ||
+          c.phone.replace(/\s+/g, '') === cleanPhone.replace(/\s+/g, '') ||
+          c.memberNo === cleanPhone ||
+          c.id === cleanPhone)
     );
 
     // Account enumeration protection: Return generic error if customer does not exist
