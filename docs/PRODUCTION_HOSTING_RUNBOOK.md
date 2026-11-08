@@ -74,7 +74,7 @@ Configure the reverse proxy to forward HTTPS requests to http://127.0.0.1:3000. 
 
 ## 5. Backups and restore drills
 
-RestoPass production uses **paired encrypted PostgreSQL + private-photo backups at 00:00 and 18:00 Africa/Kigali time**, uploaded to a dedicated Google Drive account. These are fixed daily windows selected around restaurant operating periods. The gap is six hours from midnight to 18:00 on the same day only when interpreted across the clock boundary? The actual schedule alternates 6 and 18 hours; plan for a maximum nominal RPO exposure of 18 hours. This is not a 12-hour maximum. Missed or failed jobs increase the exposure until a successful backup completes.
+RestoPass production uses **paired encrypted PostgreSQL + private-photo backups at 00:00 and 18:00 Africa/Kigali time**, uploaded to a dedicated Google Drive account. These are fixed daily windows selected around restaurant operating periods. The intervals alternate between 6 hours (18:00 to midnight) and 18 hours (midnight to 18:00); therefore the maximum nominal recovery-point exposure is 18 hours. This is not a 12-hour maximum. Missed or failed jobs increase the exposure until a successful backup completes.
 
 ### Google Drive configuration
 
