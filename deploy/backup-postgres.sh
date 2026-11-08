@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$ROOT_DIR/.env"
 COMPOSE_FILE="$ROOT_DIR/deploy/docker-compose.prod.yml"
 BACKUP_DIR="${RESTOPASS_BACKUP_DIR:-$ROOT_DIR/backups/postgres}"
-RETENTION_DAYS="${RESTOPASS_BACKUP_RETENTION_DAYS:-14}"
+RETENTION_DAYS="${RESTOPASS_BACKUP_RETENTION_DAYS:-30}"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Missing $ENV_FILE. Configure production secrets before backing up." >&2
