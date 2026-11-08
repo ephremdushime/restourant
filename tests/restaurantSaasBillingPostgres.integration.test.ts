@@ -371,6 +371,8 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
   } finally {
     (globalThis as any).fetch = originalFetch;
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    await pool!.query('DELETE FROM customer_subscription_payments WHERE id=$1', ['sync_payment_' + suffix]);
+    await pool!.query('DELETE FROM customer_subscriptions WHERE id=$1', ['sync_sub_' + suffix]);
     await pool!.query('DELETE FROM restaurant_subscription_audit_logs WHERE restaurant_code = ANY($1::varchar[])', [[restaurantCode, otherRestaurantCode, freeRestaurantCode]]);
     await pool!.query('DELETE FROM restaurant_subscription_payments WHERE restaurant_code = ANY($1::varchar[])', [[restaurantCode, otherRestaurantCode]]);
     await pool!.query('DELETE FROM restaurant_subscriptions WHERE restaurant_code = ANY($1::varchar[])', [[restaurantCode, otherRestaurantCode]]);
