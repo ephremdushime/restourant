@@ -85,8 +85,8 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
 
   serverModule.setServerDbState({
     restaurants: [
-      { code: rCode1, name: 'Transfer Test ' + rCode1, status: 'active' },
-      { code: rCode2, name: 'Transfer Test ' + rCode2, status: 'active' },
+      { code: rCode1, name: 'Transfer Test ' + rCode1, status: 'active', currentLicenseId: licenseFixtures[0].id, planId: licenseFixtures[0].planId },
+      { code: rCode2, name: 'Transfer Test ' + rCode2, status: 'active', currentLicenseId: licenseFixtures[1].id, planId: licenseFixtures[1].planId },
     ],
     scanPoints: [
       { id: stationId, restaurantCode: rCode1, status: 'active', isPaired: true, name: 'Transfer Station 1' },
