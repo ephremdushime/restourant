@@ -39,6 +39,14 @@ interface SuperAdminViewProps {
   onSubTabChange: (tab: string) => void;
 }
 
+const toDateTimeLocalInput = (value?: string | null): string => {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return '';
+  const localDate = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60_000);
+  return localDate.toISOString().slice(0, 16);
+};
+
 export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   language,
   activeSubTab,
@@ -61,8 +69,8 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   // Global Student Fee State
   const [globalStudentFeeInput, setGlobalStudentFeeInput] = useState<number>(studentSubSettings.priceRwf || 500);
   const [promoAccessEnabledInput, setPromoAccessEnabledInput] = useState<boolean>(Boolean(studentSubSettings.promoAccessEnabled));
-  const [promoStartInput, setPromoStartInput] = useState<string>(studentSubSettings.promoStartsAt ? studentSubSettings.promoStartsAt.slice(0, 16) : '');
-  const [promoEndInput, setPromoEndInput] = useState<string>(studentSubSettings.promoEndsAt ? studentSubSettings.promoEndsAt.slice(0, 16) : '');
+  const [promoStartInput, setPromoStartInput] = useState<string>(toDateTimeLocalInput(studentSubSettings.promoStartsAt));
+  const [promoEndInput, setPromoEndInput] = useState<string>(toDateTimeLocalInput(studentSubSettings.promoEndsAt));
   const [promoMessageInput, setPromoMessageInput] = useState<string>(studentSubSettings.promoMessage || 'You are enjoying complimentary RestoPass access during our launch promotion.');
   const [customerGraceDaysInput, setCustomerGraceDaysInput] = useState<number>(studentSubSettings.graceDays ?? 3);
   const [feedbackToast, setFeedbackToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
