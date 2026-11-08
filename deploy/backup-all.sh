@@ -37,6 +37,12 @@ RCLONE_CONFIG_FILE="${RCLONE_CONFIG_FILE:-$HOME/.config/rclone/rclone.conf}"
 [[ "$RESTOPASS_BACKUP_ENCRYPTION_KEY" =~ ^[A-Fa-f0-9]{64}$ ]] || fail "Set RESTOPASS_BACKUP_ENCRYPTION_KEY to a 64-character random hex key."
 [[ -n "$DRIVE_REMOTE" && "$DRIVE_REMOTE" == *:* ]] || fail "Set RESTOPASS_GOOGLE_DRIVE_REMOTE to a configured rclone Drive remote, e.g. restopass-drive:restopass-backups."
 [[ -s "$RCLONE_CONFIG_FILE" ]] || fail "rclone config not found at $RCLONE_CONFIG_FILE; configure OAuth for the dedicated Google account."
+drive_path="${DRIVE_REMOTE#*:}"
+drive_path="${drive_path#/}"
+drive_path="${drive_path%/}"
+[[ -n "$drive_path" && "$drive_path" != "." ]] || fail "RESTOPASS_GOOGLE_DRIVE_REMOTE must target a dedicated non-root backup folder; retention cleanup is destructive."
+case "/$drive_path/" in */../*) fail "Google Drive backup path cannot contain parent-directory traversal." ;; esac
+chmod 600 "$RCLONE_CONFIG_FILE" || fail "Could not restrict rclone OAuth config permissions to 0600."
 export RCLONE_CONFIG="$RCLONE_CONFIG_FILE"
 
 mkdir -p "$(dirname "$LOCK_FILE")"
