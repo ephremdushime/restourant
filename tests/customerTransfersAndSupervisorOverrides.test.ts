@@ -362,14 +362,14 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
       const statuses = [s1.status, s2.status].sort();
       assert.deepEqual(statuses, [200, 409]);
       const failedScan = s1.status === 409 ? s1 : s2;
-      assert.ok(['SUPERVISOR_OVERRIDE_INVALID', 'MEAL_LIMIT_REACHED'].includes(failedScan.body.code), JSON.stringify(failedScan.body));
+      assert.equal(failedScan.body.code, 'SUPERVISOR_OVERRIDE_ALREADY_USED', JSON.stringify(failedScan.body));
 
       const repeatScan = await post('/api/scans/consume', tokenStaff, {
         payload: cardToken.body.token, stationId, supervisorOverrideId: overrideId,
         idempotencyKey: 'scan_race_3_' + Date.now(),
       });
-      assert.equal(repeatScan.status, 403);
-      assert.equal(repeatScan.body.code, 'SUPERVISOR_OVERRIDE_INVALID');
+      assert.equal(repeatScan.status, 409);
+      assert.equal(repeatScan.body.code, 'SUPERVISOR_OVERRIDE_ALREADY_USED');
     });
 
   } finally {
