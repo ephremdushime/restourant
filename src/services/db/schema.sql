@@ -204,7 +204,7 @@ SELECT
        THEN payment->>'status' ELSE 'pending' END,
   COALESCE(NULLIF(payment->>'idempotencyKey',''), payment->>'id'),
   COALESCE(NULLIF(payment->>'requestFingerprint',''), md5(payment::text)),
-  p,
+  payment,
   CASE WHEN NULLIF(payment->>'verifiedAt','') IS NOT NULL THEN (payment->>'verifiedAt')::timestamptz ELSE NULL END,
   COALESCE(
     CASE WHEN NULLIF(payment->>'initiatedAt','') IS NOT NULL THEN (payment->>'initiatedAt')::timestamptz ELSE NULL END,
