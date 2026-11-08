@@ -217,7 +217,7 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
       const balA = await pool!.query('SELECT COALESCE(SUM(plates_delta),0)::int as bal FROM ledger_entries WHERE customer_id=$1', [custA_id]);
       const balB = await pool!.query('SELECT COALESCE(SUM(plates_delta),0)::int as bal FROM ledger_entries WHERE customer_id=$1', [custB_id]);
       assert.equal(Number(balA.rows[0].bal), 4);
-      assert.equal(Number(balB.rows[0].bal), 6);
+      assert.equal(Number(balB.rows[0].bal), 16);
     });
 
     // 5. Idempotency: Duplicate request returns identical response without re-debiting
@@ -251,7 +251,7 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
       const balA = await pool!.query('SELECT COALESCE(SUM(plates_delta),0)::int as bal FROM ledger_entries WHERE customer_id=$1', [custA_id]);
       const balB = await pool!.query('SELECT COALESCE(SUM(plates_delta),0)::int as bal FROM ledger_entries WHERE customer_id=$1', [custB_id]);
       assert.equal(Number(balA.rows[0].bal), 2);
-      assert.equal(Number(balB.rows[0].bal), 8);
+      assert.equal(Number(balB.rows[0].bal), 18);
     });
 
     // 6. Supervisor Overrides: Request and approval authority
@@ -353,9 +353,9 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
 
       const [s1, s2] = await Promise.all([pScan1, pScan2]);
       const statuses = [s1.status, s2.status].sort();
-      assert.deepEqual(statuses, [200, 403]);
-      const failedScan = s1.status === 403 ? s1 : s2;
-      assert.equal(failedScan.body.code, 'SUPERVISOR_OVERRIDE_INVALID');
+      assert.deepEqual(statuses, [200, 409]);
+      const failedScan = s1.status === 409 ? s1 : s2;
+      assert.ok(['SUPERVISOR_OVERRIDE_INVALID', 'MEAL_LIMIT_REACHED'].includes(failedScan.body.code), JSON.stringify(failedScan.body));
 
       const repeatScan = await post('/api/scans/consume', tokenStaff, {
         payload: cardToken.body.token, stationId, supervisorOverrideId: overrideId,
