@@ -6,6 +6,8 @@ const databaseUrl = process.env.TEST_DATABASE_URL;
 test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (t) => {
   process.env.NODE_ENV = 'test';
   process.env.DATABASE_URL = databaseUrl!;
+  // This suite tests approval workflows, not SaaS entitlement enforcement.
+  process.env.RESTOPASS_TEST_ENFORCE_SAAS = 'false';
   const serverModule = await import('../server.ts');
   const adapter = await import('../src/services/db/postgresAdapter.ts');
   assert.equal(await adapter.initPostgres(), true);
