@@ -376,10 +376,26 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
 
       const [s1, s2] = await Promise.all([pScan1, pScan2]);
       const statuses = [s1.status, s2.status].sort();
-      assert.deepEqual(statuses, [200, 403]);
-      const failedScan = s1.status === 403 ? s1 : s2;
-      assert.equal(failedScan.body.code, 'SUPERVISOR_OVERRIDE_INVALID');
+      // The first transaction consumes the override. The concurrent request is
+      // serialized behind the customer row lock and may be rejected first by the
+      // same-station consecutive-scan guard (409), before the consumed-override
+      // check is reached.
+      assert.deepEqual(statuses, [200, 409]);
+      const failedScan = s1.status === 409 ? s1 : s2;
+      assert.match(failedScan.body.error, /consecutive scans/i);
 
+      // Model another customer using this station so the next attempt reaches the
+      // override lookup rather than the consecutive-scan guard.
+      const interveningEvent = {
+        id: 'intervening_' + rCode1,
+        customerId: custA_id,
+        platesDeducted: 1,
+        status: 'approved',
+      };
+      await pool!.query(
+        "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data,created_at) VALUES ($1,$2,$3,$4,'approved',$5,NOW())",
+        [interveningEvent.id, rCode1, custA_id, stationId, JSON.stringify(interveningEvent)]
+      );
       const repeatScan = await post('/api/scans/consume', tokenStaff, {
         payload,
         stationId,
