@@ -189,38 +189,38 @@ INSERT INTO customer_subscription_payments
   (id,customer_id,restaurant_code,provider,provider_environment,internal_reference,provider_transaction_id,
    payer_msisdn,amount_rwf,months_purchased,currency,status,idempotency_key,request_fingerprint,data,verified_at,created_at,updated_at)
 SELECT
-  p->>'id',
-  p->>'customerId',
-  p->>'restaurantCode',
-  CASE WHEN p->>'provider' IN ('mtn_momo','airtel_money','cash','bank_transfer') THEN p->>'provider' ELSE 'cash' END,
-  CASE WHEN p->>'providerEnvironment' IN ('sandbox','production') THEN p->>'providerEnvironment' ELSE NULL END,
-  COALESCE(NULLIF(p->>'internalReference',''), 'LEGACY-' || (p->>'id')),
-  NULLIF(p->>'providerTransactionId',''),
-  COALESCE(NULLIF(p->>'payerMsisdn',''), NULLIF(p->>'phoneNumber',''), NULLIF(p->>'phone','')),
-  (p->>'amountRwf')::integer,
-  GREATEST(1, LEAST(24, COALESCE(NULLIF(p->>'monthsPurchased','')::integer, 1))),
+  payment->>'id',
+  payment->>'customerId',
+  payment->>'restaurantCode',
+  CASE WHEN payment->>'provider' IN ('mtn_momo','airtel_money','cash','bank_transfer') THEN payment->>'provider' ELSE 'cash' END,
+  CASE WHEN payment->>'providerEnvironment' IN ('sandbox','production') THEN payment->>'providerEnvironment' ELSE NULL END,
+  COALESCE(NULLIF(payment->>'internalReference',''), 'LEGACY-' || (payment->>'id')),
+  NULLIF(payment->>'providerTransactionId',''),
+  COALESCE(NULLIF(payment->>'payerMsisdn',''), NULLIF(payment->>'phoneNumber',''), NULLIF(payment->>'phone','')),
+  (payment->>'amountRwf')::integer,
+  GREATEST(1, LEAST(24, COALESCE(NULLIF(payment->>'monthsPurchased','')::integer, 1))),
   'RWF',
-  CASE WHEN p->>'status' IN ('created','provider_pending','pending','verified','successful','failed','cancelled','expired','review_required')
-       THEN p->>'status' ELSE 'pending' END,
-  COALESCE(NULLIF(p->>'idempotencyKey',''), p->>'id'),
-  COALESCE(NULLIF(p->>'requestFingerprint',''), md5(p::text)),
+  CASE WHEN payment->>'status' IN ('created','provider_pending','pending','verified','successful','failed','cancelled','expired','review_required')
+       THEN payment->>'status' ELSE 'pending' END,
+  COALESCE(NULLIF(payment->>'idempotencyKey',''), payment->>'id'),
+  COALESCE(NULLIF(payment->>'requestFingerprint',''), md5(payment::text)),
   p,
-  CASE WHEN NULLIF(p->>'verifiedAt','') IS NOT NULL THEN (p->>'verifiedAt')::timestamptz ELSE NULL END,
+  CASE WHEN NULLIF(payment->>'verifiedAt','') IS NOT NULL THEN (payment->>'verifiedAt')::timestamptz ELSE NULL END,
   COALESCE(
-    CASE WHEN NULLIF(p->>'initiatedAt','') IS NOT NULL THEN (p->>'initiatedAt')::timestamptz ELSE NULL END,
-    CASE WHEN NULLIF(p->>'createdAt','') IS NOT NULL THEN (p->>'createdAt')::timestamptz ELSE NULL END,
+    CASE WHEN NULLIF(payment->>'initiatedAt','') IS NOT NULL THEN (payment->>'initiatedAt')::timestamptz ELSE NULL END,
+    CASE WHEN NULLIF(payment->>'createdAt','') IS NOT NULL THEN (payment->>'createdAt')::timestamptz ELSE NULL END,
     NOW()
   ),
   NOW()
 FROM system_settings s
 CROSS JOIN LATERAL jsonb_array_elements(
   CASE WHEN jsonb_typeof(s.value)='array' THEN s.value ELSE '[]'::jsonb END
-) AS p
+) AS payment_rows(payment)
 WHERE s.key='studentSubscriptionPayments'
-  AND p->>'id' IS NOT NULL
-  AND p->>'customerId' IS NOT NULL
-  AND p->>'restaurantCode' IS NOT NULL
-  AND COALESCE(NULLIF(p->>'amountRwf','')::integer, 0) > 0
+  AND payment->>'id' IS NOT NULL
+  AND payment->>'customerId' IS NOT NULL
+  AND payment->>'restaurantCode' IS NOT NULL
+  AND COALESCE(NULLIF(payment->>'amountRwf','')::integer, 0) > 0
 ON CONFLICT (id) DO NOTHING;
 
 
