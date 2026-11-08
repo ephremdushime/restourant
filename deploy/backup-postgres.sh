@@ -7,7 +7,7 @@ ENV_FILE="$ROOT_DIR/.env"
 COMPOSE_FILE="$ROOT_DIR/deploy/docker-compose.prod.yml"
 BACKUP_DIR="${RESTOPASS_BACKUP_DIR:-}"
 if [[ -z "$BACKUP_DIR" ]]; then
-  BACKUP_DIR="$(sed -n 's/^RESTOPASS_BACKUP_DIR=//p' "$ENV_FILE" | head -n 1 | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" | tr -d '\\r')"
+  BACKUP_DIR="$(sed -n 's/^RESTOPASS_BACKUP_DIR=//p' "$ENV_FILE" | head -n 1 | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" | tr -d '\r')"
 fi
 BACKUP_DIR="${BACKUP_DIR:-$ROOT_DIR/backups/postgres}"
 RETENTION_DAYS="${RESTOPASS_BACKUP_RETENTION_DAYS:-30}"
