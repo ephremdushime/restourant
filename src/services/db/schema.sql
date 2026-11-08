@@ -458,6 +458,7 @@ CREATE TABLE IF NOT EXISTS restaurant_subscriptions (
  );
 ALTER TABLE restaurant_subscriptions DROP CONSTRAINT IF EXISTS restaurant_subscriptions_price_rwf_check;
 ALTER TABLE restaurant_subscriptions ADD CONSTRAINT restaurant_subscriptions_price_rwf_check CHECK (price_rwf >= 0);
+ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS billing_anchor_day SMALLINT CHECK (billing_anchor_day BETWEEN 1 AND 31);
 ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS complimentary_started_at TIMESTAMPTZ;
 ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS complimentary_ends_at TIMESTAMPTZ;
 ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS complimentary_duration_value INT NOT NULL DEFAULT 0;
