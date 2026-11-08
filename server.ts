@@ -5665,7 +5665,8 @@ app.get('/api/customer/subscription/payments/:internalReference/status', apiRate
       existingSub?.currentPeriodEnd || null,
       verifiedAt,
       monthsPurchased,
-      Number(settings.graceDays ?? 3)
+      Number(settings.graceDays ?? 3),
+      existingSub?.billingAnchorDay ?? null
     );
     const sub = existingSub || {
       id: 'sub_' + payment.customerId + '_' + crypto.randomUUID(),
@@ -5681,6 +5682,7 @@ app.get('/api/customer/subscription/payments/:internalReference/status', apiRate
       currency: 'RWF',
       currentPeriodStart: period.periodStart,
       currentPeriodEnd: period.periodEnd,
+      billingAnchorDay: period.billingAnchorDay,
       gracePeriodEnd: period.gracePeriodEnd,
       cancelAtPeriodEnd: false,
       paymentMethod: 'mtn_momo',
