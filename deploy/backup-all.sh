@@ -62,15 +62,6 @@ pg_actual="$(openssl dgst -sha256 -hmac "$pg_hmac_key" "$pg" | awk '{print $NF}'
 source "$ROOT_DIR/deploy/lib/photo-backup.sh"
 verify_photo_backup "$photos" "$RESTOPASS_BACKUP_ENCRYPTION_KEY" || fail "Private-photo integrity verification failed."
 
-manifest="$ROOT_DIR/backups/restopass_$TIMESTAMP.manifest"
-cat > "$manifest" <<EOF
-format=restopass-paired-backup-v1
-timestamp=$TIMESTAMP
-postgres=postgres/restopass_$TIMESTAMP.dump.enc
-photos=patron-photos/restopass_photos_$TIMESTAMP.tar.gz.enc
-EOF
-chmod 600 "$manifest"
-
 date_path="${TIMESTAMP:0:4}/${TIMESTAMP:4:2}/${TIMESTAMP:6:2}/$TIMESTAMP"
 remote="$DRIVE_REMOTE/${date_path%/}"
 upload() {
@@ -81,11 +72,24 @@ upload() {
 }
 verify_dir="$(mktemp -d "${TMPDIR:-/tmp}/restopass-drive-upload.XXXXXX")"
 chmod 700 "$verify_dir"
+mkdir -m 700 "$verify_dir/readback"
 trap 'rm -rf "$verify_dir"' EXIT
-for file in "$pg" "$pg.sha256" "$pg.hmac"; do upload "$file" "$remote/postgres/$(basename "$file")" "$verify_dir/$(basename "$file")"; done
-for file in "$photos" "$photos.sha256" "$photos.hmac"; do upload "$file" "$remote/patron-photos/$(basename "$file")" "$verify_dir/$(basename "$file")"; done
-# Completion manifest is uploaded last; its presence marks a complete paired backup.
-upload "$manifest" "$remote/restopass_$TIMESTAMP.manifest" "$verify_dir/restopass_$TIMESTAMP.manifest"
+for file in "$pg" "$pg.sha256" "$pg.hmac"; do upload "$file" "$remote/postgres/$(basename "$file")" "$verify_dir/readback/$(basename "$file")"; done
+for file in "$photos" "$photos.sha256" "$photos.hmac"; do upload "$file" "$remote/patron-photos/$(basename "$file")" "$verify_dir/readback/$(basename "$file")"; done
+
+# Publish the completion manifest remotely only after all six paired artifacts
+# have passed remote read-back. Publish the local marker only after that succeeds,
+# so weekly recovery never selects a partially uploaded backup.
+manifest="$verify_dir/restopass_$TIMESTAMP.manifest"
+cat > "$manifest" <<EOF
+format=restopass-paired-backup-v1
+timestamp=$TIMESTAMP
+postgres=postgres/restopass_$TIMESTAMP.dump.enc
+photos=patron-photos/restopass_photos_$TIMESTAMP.tar.gz.enc
+EOF
+chmod 600 "$manifest"
+upload "$manifest" "$remote/restopass_$TIMESTAMP.manifest" "$verify_dir/readback/restopass_$TIMESTAMP.manifest"
+install -m 600 "$manifest" "$ROOT_DIR/backups/restopass_$TIMESTAMP.manifest"
 
 retention_days="${RESTOPASS_BACKUP_RETENTION_DAYS:-$(env_value RESTOPASS_BACKUP_RETENTION_DAYS)}"
 retention_days="${retention_days:-30}"
