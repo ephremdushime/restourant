@@ -7,10 +7,19 @@ import {
   loadStateFromPostgres,
   saveStateToPostgres,
   commitPlateTransferPostgres,
+  upsertCustomerRecordPostgres,
+  computeCustomerBalanceSql,
   closePostgres,
   checkPostgresReady,
   getPostgresPool,
 } from '../src/services/db/postgresAdapter';
+import {
+  app,
+  createSessionToken,
+  getServerCustomerBalance,
+  getServerDbState,
+  ensureServerDbDefaults,
+} from '../server';
 import { checkRedisReady, recordTokenScan, closeRedis, revokeSessionToken, isSessionTokenRevoked } from '../src/services/cache/redisClient';
 
 test('P0-01: schema.sql indexes balance_checkpoints.cutoff_timestamp and never references cutoff_date', () => {
@@ -21,6 +30,83 @@ test('P0-01: schema.sql indexes balance_checkpoints.cutoff_timestamp and never r
     ddl,
     /CREATE INDEX IF NOT EXISTS idx_checkpoints_customer_cutoff\s+ON balance_checkpoints\s*\(\s*customer_id\s*,\s*cutoff_timestamp\s+DESC\s*\)/i
   );
+});
+
+test('P0-02, P0-03, P0-10: monotonic snapshot SQL guards, checkpoint-aware balances, and gated transfer routes', async () => {
+  const adapterSource = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'db', 'postgresAdapter.ts'), 'utf8');
+  // P0-02 monotonic guards in saveStateToPostgres
+  assert.match(adapterSource, /WHERE COALESCE\(payments\.data->>'refundStatus', ''\) <> 'refunded'/);
+  assert.match(adapterSource, /WHERE COALESCE\(scan_events\.status, ''\) <> 'undone'/);
+  assert.match(adapterSource, /WHERE COALESCE\(transfers\.data->>'status', ''\) <> 'reversed'/);
+  assert.match(adapterSource, /WHERE pending_approvals\.status = 'pending'/);
+  assert.equal(typeof upsertCustomerRecordPostgres, 'function');
+  assert.equal(typeof computeCustomerBalanceSql, 'function');
+
+  // P0-03: getServerCustomerBalance honors both balanceCheckpoints and checkpoints
+  const cutoff = '2026-06-01T12:00:00.000Z';
+  const beforeCutoff = '2026-06-01T10:00:00.000Z';
+  const afterCutoff = '2026-06-01T14:00:00.000Z';
+  const mockStateWithCheckpoints = {
+    checkpoints: [{ id: 'cp_1', customerId: 'cust_cp_test', balance: 25, cutoffTimestamp: cutoff }],
+    ledgerEntries: [
+      { id: 'led_old', customerId: 'cust_cp_test', platesDelta: 100, timestamp: beforeCutoff },
+      { id: 'led_new', customerId: 'cust_cp_test', platesDelta: -3, timestamp: afterCutoff },
+    ],
+  };
+  assert.equal(getServerCustomerBalance(mockStateWithCheckpoints, 'cust_cp_test'), 22);
+
+  // P0-03: Both /api/customer/transfers and /api/customer/transfer fail closed with 503 when RESTOPASS_CUSTOMER_TRANSFERS_ENABLED !== 'true'
+  const prevTransferFlag = process.env.RESTOPASS_CUSTOMER_TRANSFERS_ENABLED;
+  delete process.env.RESTOPASS_CUSTOMER_TRANSFERS_ENABLED;
+  const state = getServerDbState();
+  ensureServerDbDefaults(state);
+  const custToken = createSessionToken({
+    userId: 'cust_28491',
+    username: '28491',
+    role: 'customer',
+    restaurantCode: 'RW01',
+  });
+
+  const invokeRoute = (method: string, urlPath: string, body: any, token: string) =>
+    new Promise<{ status: number; body: any }>((resolve) => {
+      let statusCode = 200;
+      const req: any = {
+        method,
+        url: urlPath,
+        path: urlPath,
+        query: {},
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body,
+        ip: '127.0.0.1',
+        socket: { remoteAddress: '127.0.0.1' },
+      };
+      const res: any = {
+        statusCode: 200,
+        status(code: number) { statusCode = code; this.statusCode = code; return this; },
+        json(data: any) { resolve({ status: statusCode, body: data }); return this; },
+        send(data: any) { resolve({ status: statusCode, body: data }); return this; },
+        setHeader() { return this; },
+        end(data?: any) { resolve({ status: statusCode, body: data || null }); return this; },
+      };
+      (app as any).handle(req, res);
+    });
+
+  try {
+    for (const endpoint of ['/api/customer/transfers', '/api/customer/transfer']) {
+      const resp = await invokeRoute('POST', endpoint, {
+        recipientMemberNo: '28492',
+        recipientIdentifier: '28492',
+        plates: 1,
+        pin: '123456',
+        idempotencyKey: 'idem_transfer_disabled_check_0001',
+      }, custToken);
+      assert.equal(resp.status, 503, `${endpoint} must return 503 when RESTOPASS_CUSTOMER_TRANSFERS_ENABLED is not 'true'`);
+      assert.equal(resp.body?.code, 'CUSTOMER_TRANSFERS_DISABLED');
+    }
+  } finally {
+    if (prevTransferFlag === undefined) delete process.env.RESTOPASS_CUSTOMER_TRANSFERS_ENABLED;
+    else process.env.RESTOPASS_CUSTOMER_TRANSFERS_ENABLED = prevTransferFlag;
+  }
 });
 
 test('PostgreSQL persistence round-trip and concurrent transfer invariants', {
