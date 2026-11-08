@@ -171,11 +171,24 @@ jobs:
           network=restopass-smoke-network
           tls_dir="$(mktemp -d)"
           docker network create "$network"
-          openssl req -x509 -nodes -newkey rsa:2048 -keyout "$tls_dir/server.key" -out "$tls_dir/server.crt" \
-            -days 1 -subj "/CN=postgres" -addext "subjectAltName=DNS:postgres"
+          openssl req -x509 -nodes -newkey rsa:2048 -keyout "$tls_dir/ca.key" -out "$tls_dir/ca.crt" \
+            -days 1 -subj "/CN=RestoPass CI PostgreSQL Test CA" \
+            -addext "basicConstraints=critical,CA:TRUE" \
+            -addext "keyUsage=critical,keyCertSign,cRLSign"
+          openssl req -new -nodes -newkey rsa:2048 -keyout "$tls_dir/server.key" -out "$tls_dir/server.csr" \
+            -subj "/CN=postgres"
+          cat > "$tls_dir/server.ext" <<'EOF'
+          subjectAltName=DNS:postgres
+          extendedKeyUsage=serverAuth
+          keyUsage=digitalSignature,keyEncipherment
+          basicConstraints=CA:FALSE
+          EOF
+          openssl x509 -req -in "$tls_dir/server.csr" -CA "$tls_dir/ca.crt" -CAkey "$tls_dir/ca.key" \
+            -CAcreateserial -out "$tls_dir/server.crt" -days 1 -extfile "$tls_dir/server.ext"
+          rm -f "$tls_dir/ca.key" "$tls_dir/ca.srl" "$tls_dir/server.csr" "$tls_dir/server.ext"
           chmod 755 "$tls_dir"
           chmod 600 "$tls_dir/server.key"
-          chmod 644 "$tls_dir/server.crt"
+          chmod 644 "$tls_dir/server.crt" "$tls_dir/ca.crt"
           sudo chown 70:70 "$tls_dir/server.key"
           cleanup() {
             docker logs restopass-app-smoke || true
@@ -206,11 +219,13 @@ jobs:
           fi
 
           docker run --detach --name restopass-app-smoke --network "$network" \
+            --volume "$tls_dir:/tls:ro" \
             --publish 127.0.0.1:3300:3000 \
             --env NODE_ENV=production \
             --env PORT=3000 \
             --env DATABASE_URL=postgres://restopass:ci-smoke-postgres-password@postgres:5432/restopass \
-            --env PGSSLMODE=require \
+            --env PGSSLMODE=verify-full \
+            --env NODE_EXTRA_CA_CERTS=/tls/ca.crt \
             --env REDIS_URL=redis://redis:6379 \
             --env SESSION_SECRET="$(openssl rand -hex 32)" \
             --env RESTOPASS_MASTER_SECRET="$(openssl rand -hex 32)" \
