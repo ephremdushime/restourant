@@ -4930,7 +4930,13 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
       return res.status(409).json({ success: false, error: 'Stored payment amount cannot be reconciled to its purchased month count.' });
     }
     const graceDays = Number(subscription.renewal_grace_days ?? 3);
-    const period = calculateRenewalPeriod(subscription.current_period_end, verifiedAt.toISOString(), monthsPurchased, graceDays);
+    const period = calculateRenewalPeriod(
+      subscription.current_period_end,
+      verifiedAt.toISOString(),
+      monthsPurchased,
+      graceDays,
+      subscription.billing_anchor_day ? Number(subscription.billing_anchor_day) : null
+    );
     const end = period.periodEnd;
     const graceEnd = period.gracePeriodEnd;
     const plan = (serverDbState?.plans || []).find((item: any) => item.id === restaurant.planId);
@@ -4947,8 +4953,8 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
     await client.query('INSERT INTO licenses (id,restaurant_code,plan_id,valid_until,data) VALUES ($1,$2,$3,$4,$5)', [licenseId, pay.restaurant_code, restaurant.planId, end, JSON.stringify(license)]);
     const updatedRestaurant = { ...restaurant, status: 'active', currentLicenseId: licenseId, highestTimeSeen: Date.now() };
     await client.query('UPDATE restaurants SET status=$2,data=$3,updated_at=NOW() WHERE code=$1', [pay.restaurant_code, 'active', JSON.stringify(updatedRestaurant)]);
-    await client.query("UPDATE restaurant_subscriptions SET status='active',current_period_start=$2,current_period_end=$3,grace_period_end=$4,last_payment_id=$5,updated_at=NOW() WHERE restaurant_code=$1",
-      [pay.restaurant_code, period.periodStart, end, graceEnd, pay.id]);
+    await client.query("UPDATE restaurant_subscriptions SET status='active',current_period_start=$2,current_period_end=$3,grace_period_end=$4,billing_anchor_day=$5,last_payment_id=$6,updated_at=NOW() WHERE restaurant_code=$1",
+      [pay.restaurant_code, period.periodStart, end, graceEnd, period.billingAnchorDay, pay.id]);
     await client.query("UPDATE restaurant_subscription_payments SET status='successful',provider_transaction_id=$2,provider_status='SUCCESSFUL',verified_at=$3,entitlement_applied_at=$3,updated_at=NOW() WHERE id=$1",
       [pay.id, provider.financialTransactionId, verifiedAt.toISOString()]);
     await client.query("INSERT INTO restaurant_subscription_audit_logs (id,restaurant_code,actor_type,actor_id,action,payment_id,data) VALUES ($1,$2,'mtn_momo',$3,'SAAS_PAYMENT_VERIFIED',$4,$5)",
