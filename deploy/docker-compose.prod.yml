@@ -166,6 +166,7 @@ services:
   # 4. Automated Encrypted Backup & Off-Site Sync Worker
   # ----------------------------------------------------------------------------
   backup:
+    profiles: [legacy-s3-backup]
     build:
       context: ..
       dockerfile: deploy/backup.Dockerfile

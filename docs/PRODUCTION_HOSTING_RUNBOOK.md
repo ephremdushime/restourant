@@ -74,48 +74,61 @@ Configure the reverse proxy to forward HTTPS requests to http://127.0.0.1:3000. 
 
 ## 5. Backups and restore drills
 
-The PostgreSQL backup script streams a custom-format dump through AES-256-CBC encryption (PBKDF2, 600,000 iterations) before writing it to disk. It writes a SHA-256 transfer checksum and a separate HMAC-SHA256 authentication tag, restricts local file permissions and applies a default 14-day local retention period. The encryption key must be stored separately from the backup files:
+RestoPass production uses **paired encrypted PostgreSQL + private-photo backups at 00:00 and 18:00 Africa/Kigali time**, uploaded to a dedicated Google Drive account. These are fixed daily windows selected around restaurant operating periods. The intervals alternate between 6 hours (18:00 to midnight) and 18 hours (midnight to 18:00); therefore the maximum nominal recovery-point exposure is 18 hours. This is not a 12-hour maximum. Missed or failed jobs increase the exposure until a successful backup completes.
 
-    bash deploy/backup-postgres.sh
+### Google Drive configuration
 
-Verify a backup by restoring it into a temporary database. This does not modify the live production database:
+Install `rclone` and `cron` on the VPS. Configure an OAuth-backed Google Drive remote while logged in as the dedicated Linux deployment user:
 
-    bash deploy/verify-postgres-backup.sh backups/postgres/restopass_YYYYMMDDTHHMMSSZ.dump.enc
+    rclone config
 
-The coordinated backup workflow creates both datasets using one UTC timestamp and publishes a completion manifest only after all six encrypted artifacts have uploaded successfully. It verifies local SHA-256/HMAC integrity before upload. Configure a **separate private S3-compatible backup bucket** (AWS S3, Cloudflare R2, DigitalOcean Spaces or MinIO) using dedicated least-privilege credentials, not the application photo-storage credentials. Required `.env` settings:
+Create a remote named `restopass-drive` using the Google Drive provider and authorize a dedicated Bestie/RestoPass Google account. Do not use a service-account JSON file as a substitute for Drive OAuth unless the Drive storage and sharing model has been explicitly validated. Protect the rclone configuration (it contains refresh credentials):
 
-- `RESTOPASS_BACKUP_S3_BUCKET`
-- `RESTOPASS_BACKUP_S3_REGION`
-- `RESTOPASS_BACKUP_S3_ENDPOINT` (leave empty for AWS S3; set the provider endpoint for R2/Spaces/MinIO)
-- `RESTOPASS_BACKUP_S3_ACCESS_KEY_ID`
-- `RESTOPASS_BACKUP_S3_SECRET_ACCESS_KEY`
-- `RESTOPASS_BACKUP_S3_PREFIX` (default `restopass`)
-- `RESTOPASS_BACKUP_ENCRYPTION_KEY` (64 hex characters)
+    chmod 700 ~/.config/rclone
+    chmod 600 ~/.config/rclone/rclone.conf
+    rclone lsd restopass-drive:
 
-Install AWS CLI v2 and cron on the VPS, then run once as the same Linux account that owns the deployment and can access Docker:
+Set these production `.env` values:
+
+- `RESTOPASS_GOOGLE_DRIVE_REMOTE=restopass-drive:restopass-backups`
+- `RCLONE_CONFIG=/home/<deployment-user>/.config/rclone/rclone.conf` (optional; defaults to the current user's rclone config)
+- `RESTOPASS_BACKUP_ENCRYPTION_KEY`: 64-character random hex key, stored separately in a password manager/secret manager.
+- `RESTOPASS_BACKUP_RETENTION_DAYS=30`
+
+The OAuth configuration and encryption key must never be committed to Git, stored inside the repository, or included in backup archives. Restrict the Google account with MFA and limit access to authorized operators. Google Drive is a separate off-site copy, not a substitute for storing the decryption key independently.
+
+### Schedule and execution
+
+Run as the same Linux user that owns the deployment, can access Docker Compose, and owns the rclone OAuth configuration:
 
     bash deploy/install-backup-schedule.sh
     bash deploy/backup-all.sh
 
-The installer adds an idempotent user crontab: paired PostgreSQL + photo backup and off-site upload daily at 02:15 host-local time; remote recovery verification every Sunday at 04:00. The scheduled backup uploads each encrypted archive and its `.sha256` and `.hmac` sidecars, then uploads the manifest last. The manifest is the completion marker; do not treat an object prefix without a manifest as a complete backup. The weekly verifier downloads the latest paired backup from the off-site bucket, checks the manifest, restores PostgreSQL into a temporary database, and decrypts/extracts the photo archive into isolated temporary storage. It never modifies the live database or live photo directory. Logs are written to `backups/logs/backup.log` and `backups/logs/verify.log`; monitor these logs and alert on non-zero cron exits.
+The installer creates an idempotent user crontab using `CRON_TZ=Africa/Kigali`:
 
-The scripts retain local backups according to `RESTOPASS_BACKUP_RETENTION_DAYS` (default 14 days). Configure a bucket lifecycle policy separately to retain remote encrypted backup objects for your chosen recovery window (recommended starting point: 30–90 days); the application deliberately does not delete remote objects. Enable bucket versioning where supported, block public access, and restrict the backup credential to listing/reading/writing only the dedicated backup prefix. The backup key must be stored separately in a password manager or secret manager; losing that key makes backups unrecoverable. A successful upload is not proof of recoverability: inspect the weekly recovery-verification log and periodically perform a full host rebuild/restore exercise.
+- Every day at **00:00**.
+- Every day at **18:00**.
+- Weekly off-site recovery verification Sunday at 04:00.
 
-Patron portraits are stored outside the web root under the persistent app data volume at `data/private/patron-photos/`, or in a private S3-compatible bucket.
+Confirm that the host cron implementation supports `CRON_TZ`; otherwise set the host timezone to Africa/Kigali or configure the equivalent UTC schedule. Verify the installed crontab and inspect `backups/logs/backup.log` and `backups/logs/verify.log`.
 
-For **local-volume photos**, PostgreSQL dumps alone are insufficient. Create a separate encrypted photo archive after the app is running:
+Each scheduled run creates PostgreSQL and private-photo archives with the same UTC timestamp. PostgreSQL custom-format dumps and photo archives are encrypted before upload. SHA-256 checksums and HMAC-SHA256 authentication tags are retained as sidecars. The coordinator validates the local artifacts, uploads each artifact to the date/timestamp folder in Google Drive, downloads each uploaded object again and compares it byte-for-byte, then uploads the paired manifest **last**. A manifest is the completion marker; a folder without its manifest is incomplete and must not be treated as a valid recovery point. A process lock prevents overlapping backup and verification jobs.
 
-    bash deploy/backup-patron-photos.sh
+The scripts retain local encrypted database, photo and manifest artifacts for 30 days by default and enforce the same 30-day age-based retention in the dedicated Google Drive backup root after a new paired backup has been uploaded and read-back verified. The backup and verification scripts reject a Drive-root path and parent-directory traversal, and force the rclone OAuth config file to mode `0600`. Remote deletion is limited to the configured RestoPass backup root; configure that path as a dedicated folder and do not point it at a general-purpose Drive location. The provider-managed monthly backup is an additional independent recovery layer.
 
-This reads the `/app/data/private/patron-photos` directory from the running app container (the persistent `app_data` volume), creates a compressed archive, encrypts it with AES-256-CBC/PBKDF2 (600,000 iterations), and writes a SHA-256 checksum plus a domain-separated HMAC-SHA256 authentication tag. The archive and sidecars are private (0600); the backup directory is private (0700). It uses the same independently generated `RESTOPASS_BACKUP_ENCRYPTION_KEY` as the PostgreSQL backup but a separate HMAC derivation context. The default retention is 14 days and can be overridden with `RESTOPASS_BACKUP_RETENTION_DAYS` or `RESTOPASS_PHOTO_BACKUP_DIR`.
+### Recovery verification and restore
 
-Restore only after confirming the database backup you intend to pair with it. The restore command verifies checksum and HMAC before decryption, validates that every archive entry is rooted under `patron-photos/`, stages the extraction, applies restrictive directory/file permissions, and swaps the directory only after validation:
+The weekly verifier downloads the latest completed paired backup from Google Drive, validates the manifest, and invokes the existing PostgreSQL and photo verification routines. PostgreSQL verification decrypts the dump and restores it into a temporary database in the production PostgreSQL service, then drops that temporary database; it does not overwrite the live application database. Photo verification decrypts and extracts into isolated temporary storage. A full disaster-recovery drill should additionally restore to a separate disposable staging host/database and run application smoke tests. Record restore duration, recovered timestamp, schema/table checks and application test results.
 
-    bash deploy/restore-patron-photos.sh backups/patron-photos/restopass_photos_YYYYMMDDTHHMMSSZ.tar.gz.enc
+Manual commands:
 
-**Restore replaces the current local patron-photo directory.** Stop or pause registration/photo uploads during the restore window and take a fresh copy of the current photo directory first if there is any chance it contains newer uploads. The restore command does not alter PostgreSQL metadata; restore a database backup from the same backup window so photo keys and records remain aligned. Back up and restore the PostgreSQL dump and all three photo archive files (encrypted archive, `.sha256`, `.hmac`) together. Copy all encrypted artifacts off-server and store the encryption key separately. The scripts require Docker Compose and an available running app container; they do not perform a live S3 bucket backup. For S3-backed portraits, configure provider-side versioning/replication and test recovery separately.
+    bash deploy/verify-latest-paired-backup.sh
+    bash deploy/verify-postgres-backup.sh backups/postgres/restopass_YYYYMMDDTHHMMSSZ.dump.enc
+    bash deploy/verify-patron-photo-backup.sh backups/patron-photos/restopass_photos_YYYYMMDDTHHMMSSZ.tar.gz.enc
 
- Never enable public bucket access, public-read ACLs, CDN URL prefixes, or static `/uploads` serving. Production startup rejects the legacy public-photo URL prefix and public-read ACL settings. If a bucket was previously public, revoke its bucket policy/ACLs and purge any CDN cache; application code cannot retroactively revoke provider-side public access. Portrait reads require an authenticated session and customer/tenant authorization; the object key is server-managed and excluded from client state. Legacy `/uploads` paths and old public photo URLs are no longer served; they are replaced with a generic avatar in API responses until a portrait is uploaded again through the private endpoint. Protect and back up the app data volume as well as PostgreSQL. Do not treat container images or the app's local JSON snapshot as a backup strategy.
+Never point a restore drill at the production database. Keep encryption keys outside the server and Google Drive; a backup without its key is unrecoverable. Alert on any non-zero backup/verification exit and retry failures promptly. A successful upload or checksum alone is not proof of recoverability; require the weekly isolated verification and monthly full recovery exercise.
+
+Private patron portraits are stored outside the web root under the persistent app data volume. PostgreSQL dumps alone are insufficient: restore the paired photo archive from the same timestamp to preserve the relationship between photo keys and records. The photo restore command replaces the live local photo directory, so pause uploads and preserve any newer files before a production recovery. Never enable public bucket access, public-read ACLs, CDN URL prefixes, or static `/uploads` serving.
 
 ## 6. Payment and feature gates
 

@@ -34,13 +34,30 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
     'INSERT INTO restaurants (code,name,status,data) VALUES ($1,$2,$3,$4)',
     [restaurantCode, 'Approval Integration Test', 'active', JSON.stringify({ code: restaurantCode, name: 'Approval Integration Test', status: 'active' })]
   );
+  const licenseId = 'license_' + restaurantCode;
+  const planId = 'plan_' + restaurantCode;
+  const validUntil = new Date(Date.now() + 365 * 86400000).toISOString();
+  await pool!.query(
+    'INSERT INTO licenses (id,restaurant_code,plan_id,valid_until,data) VALUES ($1,$2,$3,$4,$5)',
+    [licenseId, restaurantCode, planId, validUntil, JSON.stringify({ id: licenseId, restaurantCode, planId, status: 'active', validUntil })]
+  );
+  await pool!.query(
+    "UPDATE restaurants SET data=data || jsonb_build_object('currentLicenseId',$2::text,'planId',$3::text) WHERE code=$1",
+    [restaurantCode, licenseId, planId]
+  );
+  await pool!.query(
+    "INSERT INTO restaurant_subscriptions (id,restaurant_code,status,price_rwf,current_period_start,current_period_end) VALUES ($1,$2,'active',60000,NOW(),$3)",
+    ['sub_' + restaurantCode, restaurantCode, validUntil]
+  );
   serverModule.setServerDbState({
-    restaurants: [{ code: restaurantCode, name: 'Approval Integration Test', status: 'active' }],
+    restaurants: [{ code: restaurantCode, name: 'Approval Integration Test', status: 'active', currentLicenseId: licenseId, planId }],
     scanPoints: [
       { id: stationId, restaurantCode, status: 'active', isPaired: true, name: 'Integration Scanner' },
       { id: otherStationId, restaurantCode, status: 'active', isPaired: true, name: 'Other Integration Scanner' },
     ],
     packages: [{ id: 'pkg_test_60', restaurantCode, name: '60 plates', platesCount: 60, priceRwf: 60000 }],
+    licenses: [{ id: licenseId, restaurantCode, planId, validUntil, status: 'active' }],
+    plans: [{ id: planId, terms: { servingWindowMinutes: 120, plateLimitPerWindow: 3 } }],
     customers: [], pendingApprovals: [], ledgerEntries: [], payments: [], auditLogs: [], stationUsers: [],
   });
 
@@ -275,6 +292,23 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       assert.equal(updated.status, 'active');
       assert.equal(updated.currentLicenseId, 'trusted-license');
       assert.equal(updated.planId, 'trusted-plan');
+
+      // Restore the real fixture entitlement after proving the sync guard preserved
+      // the platform-controlled values. Later tenant-write tests must not inherit
+      // the deliberately invalid "trusted-license" sentinel.
+      const restored = serverModule.getServerDbState();
+      serverModule.setServerDbState({
+        ...restored,
+        restaurants: (restored.restaurants || []).map((restaurant: any) =>
+          restaurant.code === restaurantCode
+            ? { ...restaurant, status: 'active', currentLicenseId: licenseId, planId }
+            : restaurant
+        ),
+      });
+      await pool!.query(
+        "UPDATE restaurants SET data=data || jsonb_build_object('currentLicenseId',$2::text,'planId',$3::text),status='active' WHERE code=$1",
+        [restaurantCode, licenseId, planId]
+      );
     });
 
     await t.test('station accounts are hashed, persisted and bound to their assigned station', async () => {
@@ -299,7 +333,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       const stored = await pool!.query('SELECT data FROM station_users WHERE id=$1', [staff.id]);
       assert.equal(stored.rowCount, 1);
       assert.match(stored.rows[0].data.passwordHash, /^scrypt\$/);
-      assert.match(stored.rows[0].data.pin, /^scrypt\$/);
+      assert.match(stored.rows[0].data.pinHash, /^scrypt\$/);
       assert.notEqual(stored.rows[0].data.passwordHash, staff.passwordHash);
       const login = await post('/api/auth/login', '', {
         role: 'stand_staff', username: staff.username, password: staff.passwordHash,
@@ -522,12 +556,12 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
         ],
         stationUsers: [
           ...(currentState.stationUsers || []),
-          { id: staffId, restaurantCode, status: 'active', stationId: exceptionStationId, sessionVersion: 1 },
-          { id: otherStaffId, restaurantCode, status: 'active', stationId: exceptionOtherStationId, sessionVersion: 1 },
+          { id: 'exception_staff_' + restaurantCode, restaurantCode, username: 'exception.cashier', role: 'stand_staff', status: 'active', stationId: exceptionStationId, sessionVersion: 1 },
+          { id: 'exception_other_staff_' + restaurantCode, restaurantCode, username: 'exception.other.cashier', role: 'stand_staff', status: 'active', stationId: exceptionOtherStationId, sessionVersion: 1 },
         ],
       });
       const staffToken = serverModule.createSessionToken({
-        userId: staffId, username: 'Integration Scanner Operator',
+        userId: 'exception_staff_' + restaurantCode, username: 'exception.cashier',
         role: 'stand_staff', restaurantCode, stationId: exceptionStationId,
       });
       const secondCustomer = 'second_plate_customer_' + restaurantCode;
@@ -619,7 +653,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       assert.deepEqual(rejectedLedger.rows.map((row: any) => Number(row.plates_delta)), [1]);
 
       const crossStationToken = serverModule.createSessionToken({
-        userId: otherStaffId, username: 'Other Station Operator',
+        userId: 'exception_other_staff_' + restaurantCode, username: 'exception.other.cashier',
         role: 'stand_staff', restaurantCode, stationId: exceptionOtherStationId,
       });
       const forbiddenSecond = await post('/api/scans/' + secondScanId + '/second-plate', crossStationToken, {

@@ -68,7 +68,7 @@ echo "Restoring backup into $restore_db (production database is not modified)...
   < "$RESTORE_DUMP"
 
 table_count="$("${compose[@]}" exec -T postgres sh -ec \
-  'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$1" -tA -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '''public''' AND table_type = '''BASE TABLE''';"' sh "$restore_db" | tr -d '[:space:]')"
+  'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$1" -tA -c "SELECT COUNT(*) FROM pg_catalog.pg_tables WHERE schemaname = current_schema();"' sh "$restore_db" | tr -d '[:space:]')"
 
 if ! [[ "$table_count" =~ ^[0-9]+$ ]] || (( table_count < 10 )); then
   echo "Restore verification failed: expected at least 10 public tables, found $table_count." >&2

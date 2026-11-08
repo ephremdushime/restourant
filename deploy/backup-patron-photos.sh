@@ -5,8 +5,12 @@ umask 077
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$ROOT_DIR/.env"
 COMPOSE_FILE="$ROOT_DIR/deploy/docker-compose.prod.yml"
-BACKUP_DIR="${RESTOPASS_PHOTO_BACKUP_DIR:-$ROOT_DIR/backups/patron-photos}"
-RETENTION_DAYS="${RESTOPASS_BACKUP_RETENTION_DAYS:-14}"
+BACKUP_DIR="${RESTOPASS_PHOTO_BACKUP_DIR:-}"
+if [[ -z "$BACKUP_DIR" ]]; then
+  BACKUP_DIR="$(sed -n 's/^RESTOPASS_PHOTO_BACKUP_DIR=//p' "$ENV_FILE" | head -n 1 | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" | tr -d '\r')"
+fi
+BACKUP_DIR="${BACKUP_DIR:-$ROOT_DIR/backups/patron-photos}"
+RETENTION_DAYS="${RESTOPASS_BACKUP_RETENTION_DAYS:-30}"
 source "$ROOT_DIR/deploy/lib/photo-backup.sh"
 
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -42,7 +46,7 @@ mv "$temporary_file" "$backup_file"
 chmod 600 "$backup_file"
 write_photo_backup_metadata "$backup_file" "$BACKUP_ENCRYPTION_KEY"
 
-find "$BACKUP_DIR" -type f \\( -name 'restopass_photos_*.tar.gz.enc' -o -name 'restopass_photos_*.tar.gz.enc.sha256' -o -name 'restopass_photos_*.tar.gz.enc.hmac' \\) -mtime +"$RETENTION_DAYS" -delete
+find "$BACKUP_DIR" -type f \( -name 'restopass_photos_*.tar.gz.enc' -o -name 'restopass_photos_*.tar.gz.enc.sha256' -o -name 'restopass_photos_*.tar.gz.enc.hmac' \) -mtime +"$RETENTION_DAYS" -delete
 
 echo "Private photo backup completed: $backup_file"
 echo "Checksum: $backup_file.sha256"

@@ -87,7 +87,7 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
         currency: 'RWF',
         externalId: requestBody.externalId,
         payer: { partyIdType: 'MSISDN', partyId: payer },
-        financialTransactionId: 'MTN-IT-' + suffix,
+        financialTransactionId: 'MTN-IT-' + suffix + '-' + String(requestBody.externalId || 'unknown').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32),
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
     throw new Error('Unexpected external fetch in SaaS billing integration test: ' + url);
@@ -214,7 +214,7 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     );
     assert.equal(quarantined.rows[0].status, 'review_required');
     assert.equal(quarantined.rows[0].entitlement_applied_at, null);
-    assert.equal(quarantined.rows[0].provider_transaction_id, 'MTN-IT-' + suffix);
+    assert.ok(String(quarantined.rows[0].provider_transaction_id).startsWith('MTN-IT-' + suffix + '-'));
 
     // A provider-successful mismatch may represent money already collected.
     // Block a second charge until the first payment is reconciled by an operator.

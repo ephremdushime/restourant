@@ -62,17 +62,26 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
     );
   }
 
-  serverModule.setServerDbState({
-    restaurants: [
-      { code: rCode1, name: 'Transfer Test ' + rCode1, status: 'active' },
-      { code: rCode2, name: 'Transfer Test ' + rCode2, status: 'active' },
-    ],
-    scanPoints: [
-      { id: stationId, restaurantCode: rCode1, status: 'active', isPaired: true, name: 'Transfer Station 1' },
-    ],
-    studentSubscriptionSettings: { enabled: false },
-    customers: [], pendingApprovals: [], ledgerEntries: [], payments: [], auditLogs: [], stationUsers: [],
-  });
+  const licenseFixtures = [rCode1, rCode2].map((restaurantCode) => ({
+    id: 'license_' + restaurantCode,
+    restaurantCode,
+    planId: 'plan_' + restaurantCode,
+    validUntil: new Date(Date.now() + 365 * 86400000).toISOString(),
+  }));
+  for (const license of licenseFixtures) {
+    await pool!.query(
+      'INSERT INTO licenses (id,restaurant_code,plan_id,valid_until,data) VALUES ($1,$2,$3,$4,$5)',
+      [license.id, license.restaurantCode, license.planId, license.validUntil, JSON.stringify({ ...license, status: 'active' })]
+    );
+    await pool!.query(
+      "UPDATE restaurants SET data=data || jsonb_build_object('currentLicenseId',$2::text,'planId',$3::text) WHERE code=$1",
+      [license.restaurantCode, license.id, license.planId]
+    );
+    await pool!.query(
+      "INSERT INTO restaurant_subscriptions (id,restaurant_code,status,price_rwf,current_period_start,current_period_end) VALUES ($1,$2,'active',60000,NOW(),$3)",
+      ['sub_' + license.restaurantCode, license.restaurantCode, license.validUntil]
+    );
+  }
 
   const custA_id = 'cust_a_' + rCode1;
   const custA_member = '10001';
@@ -80,6 +89,24 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
   const custB_member = '10002';
   const custC_id = 'cust_c_' + rCode2;
   const custC_member = '20001';
+
+  serverModule.setServerDbState({
+    restaurants: [
+      { code: rCode1, name: 'Transfer Test ' + rCode1, status: 'active', currentLicenseId: licenseFixtures[0].id, planId: licenseFixtures[0].planId },
+      { code: rCode2, name: 'Transfer Test ' + rCode2, status: 'active', currentLicenseId: licenseFixtures[1].id, planId: licenseFixtures[1].planId },
+    ],
+    scanPoints: [
+      { id: stationId, restaurantCode: rCode1, status: 'active', isPaired: true, name: 'Transfer Station 1' },
+    ],
+    studentSubscriptionSettings: { enabled: false },
+    licenses: licenseFixtures.map((license) => ({ ...license, status: 'active' })),
+    plans: licenseFixtures.map((license) => ({ id: license.planId, terms: { servingWindowMinutes: 120, plateLimitPerWindow: 3 } })),
+    customers: [
+      { id: custA_id, restaurantCode: rCode1, memberNo: custA_member, name: 'Customer A', cardStatus: 'active', cardVersion: 1, keyVersion: 1 },
+      { id: custB_id, restaurantCode: rCode1, memberNo: custB_member, name: 'Customer B', cardStatus: 'active', cardVersion: 1, keyVersion: 1 },
+      { id: custC_id, restaurantCode: rCode2, memberNo: custC_member, name: 'Customer C', cardStatus: 'active', cardVersion: 1, keyVersion: 1 },
+    ], pendingApprovals: [], ledgerEntries: [], payments: [], auditLogs: [], stationUsers: [],
+  });
 
   await pool!.query(
     `INSERT INTO customers (id, restaurant_code, member_no, name, card_status, is_student, data)
@@ -132,6 +159,11 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
       body: JSON.stringify(body),
     });
     return { status: res.status, body: (await res.json()) as any };
+  };
+  const getCardPayload = async (memberNo: string) => {
+    const issued = await post('/api/qr/token/card', tokenStaff, { restaurantCode: rCode1, memberNo });
+    assert.equal(issued.status, 200, JSON.stringify(issued.body));
+    return issued.body.token as string;
   };
 
   try {
@@ -265,6 +297,15 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
     });
 
     // 7. Expired override rejection and repeated consumption guard
+    // Seed three recent successful meals on a different station so the next scan
+    // must present an override, without triggering the consecutive-same-station guard.
+    for (let i = 1; i <= 3; i += 1) {
+      const event = { id: 'prior_a_' + rCode1 + '_' + i, customerId: custA_id, platesDeducted: 1, status: 'approved' };
+      await pool!.query(
+        "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data,created_at) VALUES ($1,$2,$3,$4,'approved',$5,NOW()-($6::int * INTERVAL '1 minute'))",
+        [event.id, rCode1, custA_id, 'historical_station_' + rCode1, JSON.stringify(event), 10 + i]
+      );
+    }
     await t.test('supervisor overrides: expired override cannot be consumed', async () => {
       const key = 'idemp_sov_exp_' + Date.now();
       const reqRes = await post('/api/scans/supervisor-overrides', tokenStaff, {
@@ -280,18 +321,32 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
 
       await pool!.query('UPDATE scan_supervisor_overrides SET expires_at=NOW()-INTERVAL \'5 minutes\' WHERE id=$1', [overrideId]);
 
+      const payload = await getCardPayload(custA_member);
       const scanRes = await post('/api/scans/consume', tokenStaff, {
-        memberNo: custA_member,
-        restaurantCode: rCode1,
+        payload,
         stationId,
         supervisorOverrideId: overrideId,
         idempotencyKey: 'scan_idemp_exp_' + Date.now(),
       });
-      assert.equal(scanRes.status, 403);
+      assert.equal(scanRes.status, 403, JSON.stringify(scanRes.body));
       assert.equal(scanRes.body.code, 'SUPERVISOR_OVERRIDE_INVALID');
     });
 
     // 8. Concurrent attempts to consume the same supervisor override
+    // Give Customer B an available meal balance and three recent meals, so the
+    // one-time override is the only path to a successful next scan.
+    await pool!.query(
+      "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'purchase',10,$4,NOW(),$5)",
+      ['led_seed_' + custB_id, rCode1, custB_id, 'idemp_seed_' + custB_id,
+       JSON.stringify({ id: 'led_seed_' + custB_id, customerId: custB_id, platesDelta: 10, type: 'purchase' })]
+    );
+    for (let i = 1; i <= 3; i += 1) {
+      const event = { id: 'prior_b_' + rCode1 + '_' + i, customerId: custB_id, platesDeducted: 1, status: 'approved' };
+      await pool!.query(
+        "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data,created_at) VALUES ($1,$2,$3,$4,'approved',$5,NOW()-($6::int * INTERVAL '1 minute'))",
+        [event.id, rCode1, custB_id, 'historical_station_' + rCode1, JSON.stringify(event), 10 + i]
+      );
+    }
     await t.test('concurrent consumption of same override: exactly one succeeds and second is rejected', async () => {
       const key = 'idemp_sov_concur_' + Date.now();
       const reqRes = await post('/api/scans/supervisor-overrides', tokenStaff, {
@@ -305,16 +360,15 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
         approvalReason: 'Super admin approval for lab student double shift',
       });
 
+      const payload = await getCardPayload(custB_member);
       const pScan1 = post('/api/scans/consume', tokenStaff, {
-        memberNo: custB_member,
-        restaurantCode: rCode1,
+        payload,
         stationId,
         supervisorOverrideId: overrideId,
         idempotencyKey: 'scan_race_1_' + Date.now(),
       });
       const pScan2 = post('/api/scans/consume', tokenStaff, {
-        memberNo: custB_member,
-        restaurantCode: rCode1,
+        payload,
         stationId,
         supervisorOverrideId: overrideId,
         idempotencyKey: 'scan_race_2_' + Date.now(),
@@ -322,13 +376,28 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
 
       const [s1, s2] = await Promise.all([pScan1, pScan2]);
       const statuses = [s1.status, s2.status].sort();
-      assert.deepEqual(statuses, [200, 403]);
-      const failedScan = s1.status === 403 ? s1 : s2;
-      assert.equal(failedScan.body.code, 'SUPERVISOR_OVERRIDE_INVALID');
+      // The first transaction consumes the override. The concurrent request is
+      // serialized behind the customer row lock and may be rejected first by the
+      // same-station consecutive-scan guard (409), before the consumed-override
+      // check is reached.
+      assert.deepEqual(statuses, [200, 409]);
+      const failedScan = s1.status === 409 ? s1 : s2;
+      assert.match(failedScan.body.error, /consecutive scans/i);
 
+      // Model another customer using this station so the next attempt reaches the
+      // override lookup rather than the consecutive-scan guard.
+      const interveningEvent = {
+        id: 'intervening_' + rCode1,
+        customerId: custA_id,
+        platesDeducted: 1,
+        status: 'approved',
+      };
+      await pool!.query(
+        "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data,created_at) VALUES ($1,$2,$3,$4,'approved',$5,NOW())",
+        [interveningEvent.id, rCode1, custA_id, stationId, JSON.stringify(interveningEvent)]
+      );
       const repeatScan = await post('/api/scans/consume', tokenStaff, {
-        memberNo: custB_member,
-        restaurantCode: rCode1,
+        payload,
         stationId,
         supervisorOverrideId: overrideId,
         idempotencyKey: 'scan_race_3_' + Date.now(),
