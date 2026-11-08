@@ -231,4 +231,26 @@ describe('Phase 3: Disaster Recovery, Backup Verification & Restoration Drill', 
     // Live drill confirms data structures are persistent and reconcilable
     assert.ok(balanceBefore > 0);
   });
+
+  test('7. P0-06 & P0-11: docker-compose.prod.yml aligns backup PGUSER, mounts app_data, removes insecure fallback secrets, and backup.sh stages private patron-photos', () => {
+    const composePath = path.join(process.cwd(), 'deploy', 'docker-compose.prod.yml');
+    const compose = fs.readFileSync(composePath, 'utf-8');
+
+    // PGUSER in backup service must match POSTGRES_USER default (restopass_app)
+    assert.match(compose, /PGUSER:\s*\$\{POSTGRES_USER:-restopass_app\}/);
+    assert.doesNotMatch(compose, /PGUSER:\s*\$\{POSTGRES_USER:-restopass\}/);
+
+    // Backup service must mount app_data read-only so /app/data/private/patron-photos is backed up
+    const backupSection = compose.split(/\r?\n  backup:\r?\n/)[1]?.split(/\r?\n  caddy:\r?\n/)[0] || '';
+    assert.match(backupSection, /app_data:\/app\/data:ro/);
+
+    // No insecure fallback secrets in docker-compose.prod.yml
+    assert.doesNotMatch(compose, /ci_unique_admin_password/);
+    assert.doesNotMatch(compose, /ci-backup-encryption-secret/);
+    assert.doesNotMatch(compose, /ci-backup-hmac-secret/);
+
+    // backup.sh must stage /app/data/private/patron-photos
+    const backupSh = fs.readFileSync(path.join(process.cwd(), 'deploy', 'backup.sh'), 'utf-8');
+    assert.match(backupSh, /\/app\/data\/private\/patron-photos/);
+  });
 });

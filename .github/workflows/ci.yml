@@ -111,6 +111,9 @@ jobs:
           export RESTOPASS_MASTER_SECRET="$(openssl rand -hex 32)"
           export RESTOPASS_SUPERADMIN_PASSWORD="$(openssl rand -hex 24)"
           export RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS='{"RW01":{"username":"manager@rw01.test","password":"ci_unique_admin_password_rw01_2026"}}'
+          export RESTOPASS_BACKUP_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+          export RESTOPASS_BACKUP_HMAC_KEY="$(openssl rand -hex 32)"
+          export RESTOPASS_BACKUP_REQUIRE_OFFSITE=false
           docker compose -f deploy/docker-compose.prod.yml config --quiet
 
       - name: Runtime-test production Compose stack with PostgreSQL and Redis
@@ -123,6 +126,9 @@ jobs:
           export RESTOPASS_MASTER_SECRET="$(openssl rand -hex 32)"
           export RESTOPASS_SUPERADMIN_PASSWORD="$(openssl rand -hex 24)"
           export RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS='{"RW01":{"username":"manager@rw01.test","password":"ci_unique_admin_password_rw01_2026"}}'
+          export RESTOPASS_BACKUP_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+          export RESTOPASS_BACKUP_HMAC_KEY="$(openssl rand -hex 32)"
+          export RESTOPASS_BACKUP_REQUIRE_OFFSITE=false
           compose=(docker compose -p restopass-ci -f deploy/docker-compose.prod.yml)
           cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; }
           trap cleanup EXIT
@@ -222,6 +228,7 @@ jobs:
           POSTGRES_PASSWORD: ci-postgres-password
           REDIS_PASSWORD: ci-redis-password
           RESTOPASS_SUPERADMIN_PASSWORD: ci-super-admin-password-0123456789
+          RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS: '{"RW01":{"username":"manager@rw01.test","password":"ci_unique_admin_password_rw01_2026"}}'
           SESSION_SECRET: ci-session-secret-0123456789abcdef0123456789
           RESTOPASS_MASTER_SECRET: ci-master-secret-0123456789abcdef0123456789
           S3_BUCKET: restopass-ci-private-photos
@@ -242,6 +249,7 @@ jobs:
           POSTGRES_PASSWORD: ci-postgres-password
           REDIS_PASSWORD: ci-redis-password
           RESTOPASS_SUPERADMIN_PASSWORD: ci-super-admin-password-0123456789
+          RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS: '{"RW01":{"username":"manager@rw01.test","password":"ci_unique_admin_password_rw01_2026"}}'
           SESSION_SECRET: ci-session-secret-0123456789abcdef0123456789
           RESTOPASS_MASTER_SECRET: ci-master-secret-0123456789abcdef0123456789
           S3_BUCKET: restopass-ci-private-photos

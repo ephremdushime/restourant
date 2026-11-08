@@ -1009,10 +1009,11 @@ app.get('/api/health/ready', async (_req, res) => {
 
 // Readiness alias for external monitors
 app.get('/api/ready', async (_req, res) => {
+  const isCloudProd = process.env.NODE_ENV === 'production' && process.env.RESTOPASS_DEPLOYMENT_MODE !== 'standalone';
   const checks: Record<string, boolean> = {
     applicationState: Boolean(serverDbState),
-    database: !isPostgresConfigured(),
-    cache: !isRedisConfigured(),
+    database: isCloudProd ? false : !isPostgresConfigured(),
+    cache: isCloudProd ? false : !isRedisConfigured(),
   };
   if (isPostgresConfigured()) checks.database = await checkPostgresReady();
   if (isRedisConfigured()) checks.cache = await checkRedisReady();
