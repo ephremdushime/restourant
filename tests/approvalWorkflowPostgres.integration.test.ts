@@ -653,7 +653,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       assert.deepEqual(rejectedLedger.rows.map((row: any) => Number(row.plates_delta)), [1]);
 
       const crossStationToken = serverModule.createSessionToken({
-        userId: otherStaffId, username: 'Other Station Operator',
+        userId: 'exception_other_staff_' + restaurantCode, username: 'exception.other.cashier',
         role: 'stand_staff', restaurantCode, stationId: exceptionOtherStationId,
       });
       const forbiddenSecond = await post('/api/scans/' + secondScanId + '/second-plate', crossStationToken, {
