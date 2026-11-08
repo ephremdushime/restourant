@@ -5671,7 +5671,11 @@ app.get('/api/customer/subscription/payments/:internalReference/status', apiRate
     if (!verified) {
       payment.status = 'review_required';
       payment.providerStatus = providerStatus;
-      payment.providerTransactionId = typeof provider?.financialTransactionId === 'string' ? provider.financialTransactionId : undefined;
+      // Preserve the candidate only in the JSON audit record. The normalized
+      // provider_transaction_id column is globally unique and is reserved for a
+      // fully verified payment, so mismatched details cannot claim that ID.
+      payment.providerTransactionIdCandidate = typeof provider?.financialTransactionId === 'string'
+        ? provider.financialTransactionId : undefined;
       payment.failureReason = 'MTN_SUCCESS_DETAILS_MISMATCH';
       payment.updatedAt = new Date().toISOString();
       await queueDbSave(serverDbState);
@@ -5681,10 +5685,28 @@ app.get('/api/customer/subscription/payments/:internalReference/status', apiRate
       });
     }
 
-    const duplicate = (serverDbState.studentSubscriptionPayments || []).find((item: any) =>
-      item.id !== payment.id && item.providerTransactionId === provider.financialTransactionId && item.status === 'verified'
+    const duplicateInState = (serverDbState.studentSubscriptionPayments || []).find((item: any) =>
+      item.id !== payment.id && item.providerTransactionId === provider.financialTransactionId
     );
-    if (duplicate) return res.status(409).json({ success: false, error: 'MTN transaction ID was already applied to another payment.' });
+    const paymentPool = getPostgresPool();
+    const duplicateInDatabase = paymentPool
+      ? await paymentPool.query(
+          'SELECT id FROM customer_subscription_payments WHERE provider=$1 AND provider_environment=$2 AND provider_transaction_id=$3 AND id<>$4 LIMIT 1',
+          [payment.provider || 'mtn_momo', payment.providerEnvironment || config.environment, provider.financialTransactionId, payment.id]
+        )
+      : { rowCount: 0, rows: [] };
+    if (duplicateInState || (duplicateInDatabase.rowCount || 0) > 0) {
+      payment.status = 'review_required';
+      payment.providerStatus = providerStatus;
+      payment.providerTransactionIdCandidate = provider.financialTransactionId;
+      payment.failureReason = 'MTN_PROVIDER_TRANSACTION_ID_ALREADY_ASSOCIATED';
+      payment.updatedAt = new Date().toISOString();
+      await queueDbSave(serverDbState);
+      return res.json({
+        success: true, status: 'REVIEW_REQUIRED', payment,
+        message: 'This MTN transaction ID is already associated with another payment. No customer access was activated.',
+      });
+    }
 
     const verifiedAt = new Date().toISOString();
     const settings = serverDbState.studentSubscriptionSettings || {};
