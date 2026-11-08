@@ -336,9 +336,16 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
         approvalReason: 'Super admin approval for lab student double shift',
       });
 
+      const seedTime = Date.now();
       await pool!.query(
         "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data,created_at) VALUES ($1,$2,$3,$4,'approved',$5,NOW())",
-        ['scan_seed_race_' + Date.now(), rCode1, custB_id, 'other_station_' + rCode1, JSON.stringify({ customerId: custB_id, platesDeducted: 1, status: 'approved' })]
+        ['scan_seed_race_limit_' + seedTime, rCode1, custB_id, 'other_station_' + rCode1, JSON.stringify({ customerId: custB_id, platesDeducted: 1, status: 'approved' })]
+      );
+      // The same-station consecutive-scan guard must see a different customer,
+      // while the seeded customer scan above independently triggers the meal limit.
+      await pool!.query(
+        "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data,created_at) VALUES ($1,$2,$3,$4,'approved',$5,NOW())",
+        ['scan_seed_race_station_' + seedTime, rCode1, custA_id, stationId, JSON.stringify({ customerId: custA_id, platesDeducted: 1, status: 'approved' })]
       );
       const cardToken = await post('/api/qr/token/card', tokenCustB, { restaurantCode: rCode1, memberNo: custB_member });
       assert.equal(cardToken.status, 200, JSON.stringify(cardToken.body));
