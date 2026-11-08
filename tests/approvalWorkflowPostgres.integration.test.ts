@@ -311,7 +311,8 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       const stored = await pool!.query('SELECT data FROM station_users WHERE id=$1', [staff.id]);
       assert.equal(stored.rowCount, 1);
       assert.match(stored.rows[0].data.passwordHash, /^scrypt\$/);
-      assert.match(stored.rows[0].data.pin, /^scrypt\$/);
+      assert.match(stored.rows[0].data.pinHash, /^scrypt\\$/);
+      assert.equal(stored.rows[0].data.pin, undefined, 'legacy PIN field must not be persisted');
       assert.notEqual(stored.rows[0].data.passwordHash, staff.passwordHash);
       const login = await post('/api/auth/login', '', {
         role: 'stand_staff', username: staff.username, password: staff.passwordHash,
