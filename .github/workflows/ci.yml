@@ -163,6 +163,40 @@ jobs:
           fi
           grep -q '"status":"ready"' /tmp/restopass-compose-restart.json
 
+          # Exercise the complete paired backup coordinator against the live CI
+          # PostgreSQL/app containers and an isolated rclone local remote. This
+          # validates encryption, sidecars, manifest-last publication, remote
+          # read-back, off-site download, PostgreSQL pg_restore, and photo extract.
+          sudo apt-get update
+          sudo apt-get install --yes rclone
+          export COMPOSE_PROJECT_NAME=restopass-ci
+          backup_key="$(openssl rand -hex 32)"
+          rclone_config="$RUNNER_TEMP/restopass-rclone.conf"
+          rclone config create ci-drive local --config "$rclone_config"
+          chmod 600 "$rclone_config"
+          mkdir -p "$RUNNER_TEMP/restopass-drive" "$RUNNER_TEMP/restopass-backups/postgres" "$RUNNER_TEMP/restopass-backups/patron-photos"
+          cat > .env <<EOF
+          COMPOSE_PROJECT_NAME=restopass-ci
+          POSTGRES_DB=$POSTGRES_DB
+          POSTGRES_USER=$POSTGRES_USER
+          POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+          REDIS_PASSWORD=$REDIS_PASSWORD
+          SESSION_SECRET=$SESSION_SECRET
+          RESTOPASS_MASTER_SECRET=$RESTOPASS_MASTER_SECRET
+          RESTOPASS_SUPERADMIN_PASSWORD=$RESTOPASS_SUPERADMIN_PASSWORD
+          RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS=$RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS
+          RESTOPASS_BACKUP_ENCRYPTION_KEY=$backup_key
+          RESTOPASS_GOOGLE_DRIVE_REMOTE=ci-drive:$RUNNER_TEMP/restopass-drive
+          RCLONE_CONFIG=$rclone_config
+          RESTOPASS_BACKUP_DIR=$RUNNER_TEMP/restopass-backups/postgres
+          RESTOPASS_PHOTO_BACKUP_DIR=$RUNNER_TEMP/restopass-backups/patron-photos
+          RESTOPASS_BACKUP_RETENTION_DAYS=30
+          EOF
+          chmod 600 .env
+          "${compose[@]}" exec -T app sh -ec 'mkdir -p /app/data/private/patron-photos/ci && printf "restopass paired recovery proof\\n" > /app/data/private/patron-photos/ci/restore-proof.txt'
+          RESTOPASS_BACKUP_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)" bash deploy/backup-all.sh
+          bash deploy/verify-latest-paired-backup.sh
+
       - name: Build production Docker image
         run: docker build --pull --tag restopass-ci:${{ github.sha }} .
 
