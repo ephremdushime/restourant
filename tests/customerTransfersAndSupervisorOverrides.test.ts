@@ -318,7 +318,7 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
         supervisorOverrideId: overrideId,
         idempotencyKey: 'scan_idemp_exp_' + Date.now(),
       });
-      assert.equal(scanRes.status, 403);
+      assert.equal(scanRes.status, 403, JSON.stringify(scanRes.body));
       assert.equal(scanRes.body.code, 'SUPERVISOR_OVERRIDE_INVALID');
     });
 
