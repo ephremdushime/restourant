@@ -3220,14 +3220,23 @@ app.post(
           return res.status(409).json({ success: false, code: 'MEAL_LIMIT_REACHED', error: `Meal limit reached: maximum ${plateLimit} meals in ${windowMinutes} minutes. A supervisor approval is required.` });
         }
         const approved = await client.query(
-          "SELECT * FROM scan_supervisor_overrides WHERE id=$1 AND restaurant_code=$2 AND customer_id=$3 AND station_id=$4 AND status='approved' AND expires_at>NOW() FOR UPDATE",
+          "SELECT * FROM scan_supervisor_overrides WHERE id=$1 AND restaurant_code=$2 AND customer_id=$3 AND station_id=$4 FOR UPDATE",
           [overrideId, restaurantCode, customerRow.id, requestedStationId]
         );
-        if (!approved.rows[0]) {
+        const overrideRow = approved.rows[0];
+        if (!overrideRow) {
           await client.query('ROLLBACK');
-          return res.status(403).json({ success: false, code: 'SUPERVISOR_OVERRIDE_INVALID', error: 'Supervisor override is invalid, expired, already used or not bound to this customer and station.' });
+          return res.status(403).json({ success: false, code: 'SUPERVISOR_OVERRIDE_INVALID', error: 'Supervisor override is invalid or not bound to this customer and station.' });
         }
-        supervisorOverride = approved.rows[0];
+        if (overrideRow.status === 'consumed') {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ success: false, code: 'SUPERVISOR_OVERRIDE_ALREADY_USED', error: 'Supervisor override has already been consumed.' });
+        }
+        if (overrideRow.status !== 'approved' || new Date(overrideRow.expires_at).getTime() <= Date.now()) {
+          await client.query('ROLLBACK');
+          return res.status(403).json({ success: false, code: 'SUPERVISOR_OVERRIDE_INVALID', error: 'Supervisor override is invalid, expired or not approved.' });
+        }
+        supervisorOverride = overrideRow;
         await client.query(
           "UPDATE scan_supervisor_overrides SET status='consumed',consumed_at=NOW(),consumed_scan_id=$2 WHERE id=$1 AND status='approved'",
           [overrideId, 'pending']
