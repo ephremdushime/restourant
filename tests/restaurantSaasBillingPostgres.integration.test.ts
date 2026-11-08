@@ -87,7 +87,7 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
         currency: 'RWF',
         externalId: requestBody.externalId,
         payer: { partyIdType: 'MSISDN', partyId: payer },
-        financialTransactionId: 'MTN-IT-' + suffix,
+        financialTransactionId: 'MTN-IT-' + suffix + '-' + String(requestBody.externalId || 'unknown').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32),
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
     throw new Error('Unexpected external fetch in SaaS billing integration test: ' + url);
