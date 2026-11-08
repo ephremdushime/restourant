@@ -5,7 +5,16 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 grep -q 'RESTOPASS_BACKUP_TIMESTAMP' "$ROOT_DIR/deploy/backup-postgres.sh"
 grep -q 'RESTOPASS_BACKUP_TIMESTAMP' "$ROOT_DIR/deploy/backup-patron-photos.sh"
-bash -n "$ROOT_DIR/deploy/backup-all.sh" "$ROOT_DIR/deploy/backup-postgres.sh" "$ROOT_DIR/deploy/backup-patron-photos.sh" "$ROOT_DIR/deploy/verify-postgres-backup.sh" "$ROOT_DIR/deploy/verify-patron-photo-backup.sh" "$ROOT_DIR/deploy/verify-latest-paired-backup.sh" "$ROOT_DIR/deploy/install-backup-schedule.sh"
+for script in \
+  "$ROOT_DIR/deploy/backup-all.sh" \
+  "$ROOT_DIR/deploy/backup-postgres.sh" \
+  "$ROOT_DIR/deploy/backup-patron-photos.sh" \
+  "$ROOT_DIR/deploy/verify-postgres-backup.sh" \
+  "$ROOT_DIR/deploy/verify-patron-photo-backup.sh" \
+  "$ROOT_DIR/deploy/verify-latest-paired-backup.sh" \
+  "$ROOT_DIR/deploy/install-backup-schedule.sh"; do
+  bash -n "$script"
+done
 grep -q 'manifest' "$ROOT_DIR/deploy/backup-all.sh"
 grep -q 'rclone copyto' "$ROOT_DIR/deploy/backup-all.sh"
 grep -Fq 'cmp -s "$source" "$downloaded"' "$ROOT_DIR/deploy/backup-all.sh"
