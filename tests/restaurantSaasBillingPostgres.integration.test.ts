@@ -53,6 +53,36 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     saasRenewalGraceDays: 5,
   };
 
+  const revokeCustomerId = 'revoke_customer_' + suffix;
+  const revokeSubscriptionId = 'revoke_subscription_' + suffix;
+  const revokeCustomer = {
+    id: revokeCustomerId,
+    restaurantCode,
+    memberNo: 'REV' + suffix,
+    name: 'Complimentary Revocation Test',
+    phone: '250788123456',
+    studentNumber: 'REV' + suffix,
+    isStudent: true,
+    registrationStatus: 'approved',
+    customerAccessStatus: 'complimentary',
+  };
+  const revokeSubscription = {
+    id: revokeSubscriptionId,
+    customerId: revokeCustomerId,
+    memberNo: revokeCustomer.memberNo,
+    restaurantCode,
+    status: 'complimentary',
+    planName: 'Complimentary Student Pass',
+    priceRwf: 0,
+    currency: 'RWF',
+    currentPeriodStart: new Date().toISOString(),
+    currentPeriodEnd: new Date(Date.now() + 30 * 86400000).toISOString(),
+    gracePeriodEnd: new Date(Date.now() + 33 * 86400000).toISOString(),
+    paymentMethod: 'complimentary',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
   await pool!.query(
     'INSERT INTO restaurants (code,name,status,data) VALUES ($1,$2,$3,$4),($5,$6,$7,$8),($9,$10,$11,$12)',
     [restaurantCode, restaurant.name, 'pending_payment', JSON.stringify(restaurant),
@@ -63,7 +93,9 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     restaurants: [restaurant, otherRestaurant, freeRestaurant],
     plans: [{ id: 'plan_integration', terms: { maxScanPointsIncluded: 3 } }],
     licenses: [],
-    customers: [], scanPoints: [], packages: [], pendingApprovals: [],
+    customers: [revokeCustomer],
+    customerSubscriptions: [revokeSubscription],
+    scanPoints: [], packages: [], pendingApprovals: [],
     ledgerEntries: [], payments: [], auditLogs: [], stationUsers: [],
   });
 
@@ -193,6 +225,35 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     assert.equal(forgedSubscription.rowCount, 0, 'browser sync must not create a customer entitlement');
     const forgedPayment = await pool!.query('SELECT id FROM customer_subscription_payments WHERE id=$1', [forgedPaymentId]);
     assert.equal(forgedPayment.rowCount, 0, 'browser sync must not create a verified customer payment');
+
+    // The production revoke endpoint requires a reason, verifies the entitlement ID,
+    // persists the state transition, and records an immutable audit event.
+    const revokePath = '/api/admin/customers/' + encodeURIComponent(revokeCustomerId) +
+      '/entitlements/' + encodeURIComponent(revokeSubscriptionId);
+    const missingRevokeReason = await request('DELETE', revokePath, superAdminToken, { reason: '' });
+    assert.equal(missingRevokeReason.status, 400);
+    assert.equal(
+      serverModule.getServerDbState().customerSubscriptions.find((item: any) => item.id === revokeSubscriptionId)?.status,
+      'complimentary'
+    );
+
+    const revokeResult = await request('DELETE', revokePath, superAdminToken, {
+      reason: 'Integration test: complimentary period granted in error',
+    });
+    assert.equal(revokeResult.status, 200);
+    assert.equal(revokeResult.body.subscription.status, 'expired');
+    const persistedRevocation = await pool!.query('SELECT data FROM customer_subscriptions WHERE id=$1', [revokeSubscriptionId]);
+    assert.equal(persistedRevocation.rows[0]?.data?.status, 'expired');
+    const persistedRevokedCustomer = await pool!.query('SELECT data FROM customers WHERE id=$1', [revokeCustomerId]);
+    assert.equal(persistedRevokedCustomer.rows[0]?.data?.customerAccessStatus, 'payment_required');
+    const revokeAudit = serverModule.getServerDbState().auditLogs.find((item: any) =>
+      item.action === 'COMPLIMENTARY_STUDENT_SUBSCRIPTION_REVOKED' &&
+      item.details.includes(revokeCustomer.memberNo)
+    );
+    assert.ok(revokeAudit, 'revocation must be recorded in the audit log');
+    assert.match(revokeAudit.details, /Integration test: complimentary period granted in error/);
+    const persistedRevokeAudit = await pool!.query('SELECT id FROM audit_logs WHERE id=$1', [revokeAudit.id]);
+    assert.equal(persistedRevokeAudit.rowCount, 1);
 
     const initial = await request('GET', '/api/restaurant-saas/subscription', adminToken);
     assert.equal(initial.status, 200);
@@ -371,7 +432,18 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
   } finally {
     (globalThis as any).fetch = originalFetch;
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    const revokeAudit = serverModule.getServerDbState().auditLogs.find((item: any) =>
+      item.action === 'COMPLIMENTARY_STUDENT_SUBSCRIPTION_REVOKED' &&
+      item.details.includes(revokeCustomer.memberNo)
+    );
+    if (revokeAudit?.id) await pool!.query('DELETE FROM audit_logs WHERE id=$1', [revokeAudit.id]);
+    const revokeNotification = serverModule.getServerDbState().notifications.find((item: any) =>
+      item.target === revokeCustomerId && item.title === 'Complimentary Dashboard Access Revoked'
+    );
+    if (revokeNotification?.id) await pool!.query('DELETE FROM notifications WHERE id=$1', [revokeNotification.id]);
     await pool!.query('DELETE FROM customer_subscription_payments WHERE id=$1', ['sync_payment_' + suffix]);
+    await pool!.query('DELETE FROM customer_subscriptions WHERE customer_id=$1', [revokeCustomerId]);
+    await pool!.query('DELETE FROM customers WHERE id=$1', [revokeCustomerId]);
     await pool!.query('DELETE FROM customer_subscriptions WHERE id=$1', ['sync_sub_' + suffix]);
     await pool!.query('DELETE FROM restaurant_subscription_audit_logs WHERE restaurant_code = ANY($1::varchar[])', [[restaurantCode, otherRestaurantCode, freeRestaurantCode]]);
     await pool!.query('DELETE FROM restaurant_subscription_payments WHERE restaurant_code = ANY($1::varchar[])', [[restaurantCode, otherRestaurantCode]]);
