@@ -183,47 +183,6 @@ CREATE INDEX IF NOT EXISTS idx_customer_subscription_payment_history
 CREATE INDEX IF NOT EXISTS idx_customer_subscription_payment_reconciliation
     ON customer_subscription_payments (provider, status, created_at);
 
--- One-time, repeat-safe migration of legacy customer subscription payment history
--- out of system_settings into the normalized ledger.
-INSERT INTO customer_subscription_payments
-  (id,customer_id,restaurant_code,provider,provider_environment,internal_reference,provider_transaction_id,
-   payer_msisdn,amount_rwf,months_purchased,currency,status,idempotency_key,request_fingerprint,data,verified_at,created_at,updated_at)
-SELECT
-  payment->>'id',
-  payment->>'customerId',
-  payment->>'restaurantCode',
-  CASE WHEN payment->>'provider' IN ('mtn_momo','airtel_money','cash','bank_transfer') THEN payment->>'provider' ELSE 'cash' END,
-  CASE WHEN payment->>'providerEnvironment' IN ('sandbox','production') THEN payment->>'providerEnvironment' ELSE NULL END,
-  COALESCE(NULLIF(payment->>'internalReference',''), 'LEGACY-' || (payment->>'id')),
-  NULLIF(payment->>'providerTransactionId',''),
-  COALESCE(NULLIF(payment->>'payerMsisdn',''), NULLIF(payment->>'phoneNumber',''), NULLIF(payment->>'phone','')),
-  (payment->>'amountRwf')::integer,
-  GREATEST(1, LEAST(24, COALESCE(NULLIF(payment->>'monthsPurchased','')::integer, 1))),
-  'RWF',
-  CASE WHEN payment->>'status' IN ('created','provider_pending','pending','verified','successful','failed','cancelled','expired','review_required')
-       THEN payment->>'status' ELSE 'pending' END,
-  COALESCE(NULLIF(payment->>'idempotencyKey',''), payment->>'id'),
-  COALESCE(NULLIF(payment->>'requestFingerprint',''), md5(payment::text)),
-  payment,
-  CASE WHEN NULLIF(payment->>'verifiedAt','') IS NOT NULL THEN (payment->>'verifiedAt')::timestamptz ELSE NULL END,
-  COALESCE(
-    CASE WHEN NULLIF(payment->>'initiatedAt','') IS NOT NULL THEN (payment->>'initiatedAt')::timestamptz ELSE NULL END,
-    CASE WHEN NULLIF(payment->>'createdAt','') IS NOT NULL THEN (payment->>'createdAt')::timestamptz ELSE NULL END,
-    NOW()
-  ),
-  NOW()
-FROM system_settings s
-CROSS JOIN LATERAL jsonb_array_elements(
-  CASE WHEN jsonb_typeof(s.value)='array' THEN s.value ELSE '[]'::jsonb END
-) AS payment_rows(payment)
-WHERE s.key='studentSubscriptionPayments'
-  AND payment->>'id' IS NOT NULL
-  AND payment->>'customerId' IS NOT NULL
-  AND payment->>'restaurantCode' IS NOT NULL
-  AND COALESCE(NULLIF(payment->>'amountRwf','')::integer, 0) > 0
-ON CONFLICT (id) DO NOTHING;
-
-
 -- 6. Balance Checkpoints for Fast O(1) Balance Calculation
 CREATE TABLE IF NOT EXISTS balance_checkpoints (
     id VARCHAR(64) PRIMARY KEY,
@@ -361,6 +320,47 @@ CREATE TABLE IF NOT EXISTS system_settings (
     value JSONB NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- One-time, repeat-safe migration of legacy customer subscription payment history
+-- out of system_settings into the normalized ledger.
+INSERT INTO customer_subscription_payments
+  (id,customer_id,restaurant_code,provider,provider_environment,internal_reference,provider_transaction_id,
+   payer_msisdn,amount_rwf,months_purchased,currency,status,idempotency_key,request_fingerprint,data,verified_at,created_at,updated_at)
+SELECT
+  payment->>'id',
+  payment->>'customerId',
+  payment->>'restaurantCode',
+  CASE WHEN payment->>'provider' IN ('mtn_momo','airtel_money','cash','bank_transfer') THEN payment->>'provider' ELSE 'cash' END,
+  CASE WHEN payment->>'providerEnvironment' IN ('sandbox','production') THEN payment->>'providerEnvironment' ELSE NULL END,
+  COALESCE(NULLIF(payment->>'internalReference',''), 'LEGACY-' || (payment->>'id')),
+  NULLIF(payment->>'providerTransactionId',''),
+  COALESCE(NULLIF(payment->>'payerMsisdn',''), NULLIF(payment->>'phoneNumber',''), NULLIF(payment->>'phone','')),
+  (payment->>'amountRwf')::integer,
+  GREATEST(1, LEAST(24, COALESCE(NULLIF(payment->>'monthsPurchased','')::integer, 1))),
+  'RWF',
+  CASE WHEN payment->>'status' IN ('created','provider_pending','pending','verified','successful','failed','cancelled','expired','review_required')
+       THEN payment->>'status' ELSE 'pending' END,
+  COALESCE(NULLIF(payment->>'idempotencyKey',''), payment->>'id'),
+  COALESCE(NULLIF(payment->>'requestFingerprint',''), md5(payment::text)),
+  payment,
+  CASE WHEN NULLIF(payment->>'verifiedAt','') IS NOT NULL THEN (payment->>'verifiedAt')::timestamptz ELSE NULL END,
+  COALESCE(
+    CASE WHEN NULLIF(payment->>'initiatedAt','') IS NOT NULL THEN (payment->>'initiatedAt')::timestamptz ELSE NULL END,
+    CASE WHEN NULLIF(payment->>'createdAt','') IS NOT NULL THEN (payment->>'createdAt')::timestamptz ELSE NULL END,
+    NOW()
+  ),
+  NOW()
+FROM system_settings s
+CROSS JOIN LATERAL jsonb_array_elements(
+  CASE WHEN jsonb_typeof(s.value)='array' THEN s.value ELSE '[]'::jsonb END
+) AS payment_rows(payment)
+WHERE s.key='studentSubscriptionPayments'
+  AND payment->>'id' IS NOT NULL
+  AND payment->>'customerId' IS NOT NULL
+  AND payment->>'restaurantCode' IS NOT NULL
+  AND COALESCE(NULLIF(payment->>'amountRwf','')::integer, 0) > 0
+ON CONFLICT (id) DO NOTHING;
+
 
 -- 17. Multi-Instance Token Replay Guard Table (Fallback if Redis is unreachable)
 CREATE TABLE IF NOT EXISTS used_tokens (
