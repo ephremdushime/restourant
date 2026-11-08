@@ -5,7 +5,7 @@ const databaseUrl = process.env.TEST_DATABASE_URL;
 
 test('customer subscription payments persist in the dedicated PostgreSQL ledger', { skip: !databaseUrl }, async () => {
   process.env.DATABASE_URL = databaseUrl!;
-  const adapter = await import('../src/services/db/postgresAdapter');
+  const adapter = await import('../src/services/db/postgresAdapter.ts');
   assert.equal(await adapter.initPostgres(), true);
   const pool = adapter.getPostgresPool();
   assert.ok(pool);
