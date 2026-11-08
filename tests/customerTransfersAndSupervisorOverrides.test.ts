@@ -83,6 +83,13 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
     );
   }
 
+  const custA_id = 'cust_a_' + rCode1;
+  const custA_member = '10001';
+  const custB_id = 'cust_b_' + rCode1;
+  const custB_member = '10002';
+  const custC_id = 'cust_c_' + rCode2;
+  const custC_member = '20001';
+
   serverModule.setServerDbState({
     restaurants: [
       { code: rCode1, name: 'Transfer Test ' + rCode1, status: 'active', currentLicenseId: licenseFixtures[0].id, planId: licenseFixtures[0].planId },
@@ -100,13 +107,6 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
       { id: custC_id, restaurantCode: rCode2, memberNo: custC_member, name: 'Customer C', cardStatus: 'active', cardVersion: 1, keyVersion: 1 },
     ], pendingApprovals: [], ledgerEntries: [], payments: [], auditLogs: [], stationUsers: [],
   });
-
-  const custA_id = 'cust_a_' + rCode1;
-  const custA_member = '10001';
-  const custB_id = 'cust_b_' + rCode1;
-  const custB_member = '10002';
-  const custC_id = 'cust_c_' + rCode2;
-  const custC_member = '20001';
 
   await pool!.query(
     `INSERT INTO customers (id, restaurant_code, member_no, name, card_status, is_student, data)
