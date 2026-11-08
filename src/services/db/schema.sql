@@ -441,6 +441,7 @@ CREATE TABLE IF NOT EXISTS restaurant_subscriptions (
     currency CHAR(3) NOT NULL DEFAULT 'RWF' CHECK (currency = 'RWF'),
     current_period_start TIMESTAMPTZ,
     current_period_end TIMESTAMPTZ,
+    billing_anchor_day SMALLINT CHECK (billing_anchor_day BETWEEN 1 AND 31),
     grace_period_end TIMESTAMPTZ,
     complimentary_started_at TIMESTAMPTZ,
     complimentary_ends_at TIMESTAMPTZ,
