@@ -42,6 +42,22 @@ test('early multi-month renewal preserves paid time and appends calendar months'
   assert.equal(result.gracePeriodEnd, '2027-03-18T00:00:00.000Z');
 });
 
+test('calendar-month renewal preserves the original billing-day anchor across short months', () => {
+  const first = calculateRenewalPeriod(null, '2027-01-30T09:00:00.000Z', 1);
+  assert.equal(first.periodEnd, '2027-02-28T09:00:00.000Z');
+  assert.equal(first.billingAnchorDay, 30);
+  const second = calculateRenewalPeriod(first.periodEnd, '2027-02-15T09:00:00.000Z', 1, 3, first.billingAnchorDay);
+  assert.equal(second.periodEnd, '2027-03-30T09:00:00.000Z');
+  const prepaid = calculateRenewalPeriod(null, '2027-01-30T09:00:00.000Z', 2);
+  assert.equal(prepaid.periodEnd, second.periodEnd);
+});
+
+test('31st-day subscriptions return to the 31st after February', () => {
+  const first = calculateRenewalPeriod(null, '2027-01-31T09:00:00.000Z', 1);
+  const second = calculateRenewalPeriod(first.periodEnd, '2027-02-15T09:00:00.000Z', 1, 3, first.billingAnchorDay);
+  assert.equal(second.periodEnd, '2027-03-31T09:00:00.000Z');
+});
+
 test('late renewal begins at verified payment time and does not backdate', () => {
   const result = calculateRenewalPeriod('2026-12-01T00:00:00.000Z', '2026-12-06T12:00:00.000Z', 2);
   assert.equal(result.periodStart, '2026-12-06T12:00:00.000Z');
