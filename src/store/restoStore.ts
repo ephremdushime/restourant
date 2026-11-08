@@ -3579,6 +3579,24 @@ export class RestoStore {
         return { success: false, error: result?.error || 'The server did not confirm this top-up.' };
       }
       this.appendLedgerEntry(result.ledgerEntry as LedgerEntry);
+      if (result.graceLedgerEntry) {
+        this.appendLedgerEntry(result.graceLedgerEntry as LedgerEntry);
+        const customer = this.state.customers.find((c) => c.id === data.customerId);
+        if (customer) {
+          const pendingApprovals = (this.state.pendingApprovals || []).filter(
+            (a) => a.customerId === data.customerId && a.status === 'pending'
+          );
+          for (const appr of pendingApprovals) {
+            appr.gracePlatesConsumed = 0;
+          }
+          customer.gracePlatesConsumed = 0;
+          customer.gracePlatesRemaining = pendingApprovals.length > 0 ? 3 : 0;
+        }
+      }
+      if (result.customer) {
+        const idx = this.state.customers.findIndex((c) => c.id === result.customer.id);
+        if (idx >= 0) this.state.customers[idx] = { ...this.state.customers[idx], ...result.customer };
+      }
       const payment = result.payment as PaymentRecord;
       if (!this.state.payments.some((item) => item.id === payment.id)) this.state.payments.unshift(payment);
       this.scheduleSaveState();
@@ -3732,6 +3750,19 @@ export class RestoStore {
 
     const now = new Date(this.getGuardedTime(data.restaurantCode)).toISOString();
 
+    const pendingApprovals = (this.state.pendingApprovals || []).filter(
+      (a) => a.customerId === customer.id && a.status === 'pending'
+    );
+    const pendingGrace = pendingApprovals.reduce(
+      (sum, a) => sum + Math.max(0, a.gracePlatesConsumed || 0),
+      0
+    );
+    const effectiveGrace = Math.max(
+      0,
+      Math.min(3, Math.max(pendingGrace, customer.gracePlatesConsumed || 0))
+    );
+    if (data.plates < effectiveGrace) return;
+
     const ledgerEntry: LedgerEntry = {
       id: `led_topup_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
       customerId: customer.id,
@@ -3740,12 +3771,34 @@ export class RestoStore {
       platesDelta: data.plates,
       timestamp: now,
       staffId: data.adminStaffId,
-      reason: `Top-up: +${data.plates} plates (${data.paymentMethod.toUpperCase()})`,
+      reason: `Top-up: +${data.plates} plates (${data.paymentMethod.toUpperCase()})${effectiveGrace > 0 ? ` [${effectiveGrace} grace plates reconciled]` : ''}`,
       reference: data.reference,
       idempotencyKey: data.reference ? `idemp_ref_${data.reference}` : `idemp_topup_${customer.id}_${Date.now()}`,
     };
 
     this.appendLedgerEntry(ledgerEntry);
+
+    if (effectiveGrace > 0) {
+      const graceEntry: LedgerEntry = {
+        id: `led_topup_grace_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+        customerId: customer.id,
+        restaurantCode: data.restaurantCode,
+        type: 'scan',
+        platesDelta: -effectiveGrace,
+        timestamp: now,
+        staffId: data.adminStaffId,
+        reason: `Reconcile ${effectiveGrace} grace plate(s) consumed before direct top-up`,
+        reference: `GRACE-TOPUP-${data.reference || customer.memberNo}`,
+        idempotencyKey: data.reference ? `idemp_ref_grace_${data.reference}` : `idemp_topup_grace_${customer.id}_${Date.now()}`,
+      };
+      this.appendLedgerEntry(graceEntry);
+      this.queueOutboxItem('ledger_entry', graceEntry.id, graceEntry);
+      for (const appr of pendingApprovals) {
+        appr.gracePlatesConsumed = 0;
+      }
+      customer.gracePlatesConsumed = 0;
+      customer.gracePlatesRemaining = pendingApprovals.length > 0 ? 3 : 0;
+    }
 
     const payment: PaymentRecord = {
       id: `pay_${Date.now()}`,
@@ -4944,13 +4997,13 @@ export class RestoStore {
    */
   public getCustomerGraceInfo(customerId: string): { allowed: number; consumed: number; remaining: number } {
     const customer = this.state.customers.find((c) => c.id === customerId);
-    if (!customer) return { allowed: 4, consumed: 0, remaining: 4 };
+    if (!customer) return { allowed: 3, consumed: 0, remaining: 3 };
 
     const customerPendingApprovals = (this.state.pendingApprovals || []).filter(
       (a) => a.customerId === customerId && a.status === 'pending'
     );
     const registrationApproval = customerPendingApprovals.find((a) => a.type === 'new_customer');
-    const allowed = registrationApproval?.gracePlatesAllowed ?? customer.gracePlatesAllowed ?? 4;
+    const allowed = registrationApproval?.gracePlatesAllowed ?? customer.gracePlatesAllowed ?? 3;
 
     const totalConsumedAcrossPending = customerPendingApprovals.reduce(
       (sum, a) => sum + Math.max(0, a.gracePlatesConsumed || 0),
@@ -6128,11 +6181,11 @@ export class RestoStore {
       receptionPaymentConfirmedAt: now,
       receptionPaymentConfirmedBy: data.registeredByStaffName,
       receptionPaymentReference: data.paymentReference,
-      gracePlatesAllowed: 4,
+      gracePlatesAllowed: 3,
       cardReadyForPrint: false,
       failedLoginAttempts: 0,
       gracePlatesConsumed: 0,
-      gracePlatesRemaining: 4,
+      gracePlatesRemaining: 3,
       pendingApprovalId: approvalId,
       createdAt: now,
       onboardingToken: `OB-${memberNo}-PROV`,
@@ -6164,7 +6217,7 @@ export class RestoStore {
       registeredByStaffName: data.registeredByStaffName || 'Station Staff',
       stationId: data.stationId || 'sp_kgl_01',
       stationName: data.stationName || 'Reception POS Desk',
-      gracePlatesAllowed: 4,
+      gracePlatesAllowed: 3,
       gracePlatesConsumed: 0,
       createdAt: now,
       status: 'pending',
@@ -6185,7 +6238,7 @@ export class RestoStore {
       actorRole: 'reception',
       actorName: staffName,
       action: 'PROVISIONAL_CUSTOMER_REGISTERED',
-      details: `Provisionally registered #${memberNo} (${newCustomer.name}). MoMo/Payment Ref: "${approval.paymentReference}" (${(approval.amountRwf || 0).toLocaleString()} RWF for ${data.platesRequested} plates). Reception payment confirmed. Awaiting boss registration approval. Grace plates allowed: 4.`,
+      details: `Provisionally registered #${memberNo} (${newCustomer.name}). MoMo/Payment Ref: "${approval.paymentReference}" (${(approval.amountRwf || 0).toLocaleString()} RWF for ${data.platesRequested} plates). Reception payment confirmed. Awaiting boss registration approval. Grace plates allowed: 3.`,
     });
 
     // Notify Restaurant Boss
@@ -6210,7 +6263,7 @@ export class RestoStore {
       senderName: approval.stationName,
       type: 'topup_success',
       title: `Registration Recorded (#${memberNo}) — Awaiting Boss Approval`,
-      message: `Your registration for ${platesCount} plates (${(approval.amountRwf || 0).toLocaleString()} RWF, Ref: ${approval.paymentReference}) is in the Boss approval queue. You may consume up to 4 grace meals while waiting.`,
+      message: `Your registration for ${platesCount} plates (${(approval.amountRwf || 0).toLocaleString()} RWF, Ref: ${approval.paymentReference}) is in the Boss approval queue. You may consume up to 3 grace meals while waiting.`,
       priority: 'important',
       actionTab: 'my_card',
     });
@@ -6452,7 +6505,7 @@ export class RestoStore {
       ? ((customer as any).graceMealsConsumed ?? customer.gracePlatesConsumed ?? 0)
       : 0;
     const graceConsumed = Number(typeof recordedGrace === 'number' ? recordedGrace : legacyGrace) || 0;
-    const graceAllowance = approval.gracePlatesAllowed ?? (approval.type === 'new_customer' ? 4 : 3);
+    const graceAllowance = approval.gracePlatesAllowed ?? 3;
     if (!Number.isInteger(graceConsumed) || graceConsumed < 0 ||
         graceConsumed > graceAllowance || graceConsumed > requested) {
       return { success: false, error: 'Recorded grace-plate usage exceeds this approval allowance or purchased package. Review the scan history before approving.' };
@@ -6545,7 +6598,7 @@ export class RestoStore {
     customer.provisionalStatus = 'approved';
     customer.cardStatus = 'active';
     customer.gracePlatesConsumed = remainingGraceUsed;
-    customer.gracePlatesRemaining = Math.max(0, (customer.gracePlatesAllowed || 4) - remainingGraceUsed);
+    customer.gracePlatesRemaining = Math.max(0, (customer.gracePlatesAllowed || 3) - remainingGraceUsed);
     customer.pendingApprovalId = remainingPending[0]?.id;
     customer.activationStatus = customer.hasCustomPin ? 'active' : 'ready_for_activation';
     if (approval.type === 'new_customer') {

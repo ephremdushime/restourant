@@ -1071,7 +1071,7 @@ app.post('/api/customer/registration/status', apiRateLimiter, (req, res) => {
 });
 
 // Reception-only payment confirmation for an existing self-registration.
-// The server creates the boss approval record and grants exactly four provisional grace plates.
+// The server creates the boss approval record and grants up to three provisional grace plates.
 app.post('/api/reception/customer/payment-confirm', apiRateLimiter, requireAuth(['stand_staff', 'restaurant_admin', 'super_admin']), async (req, res) => {
   if (!serverDbState) return res.status(503).json({ success: false, error: 'Registration service is unavailable.' });
   const user = req.user!;
@@ -1138,7 +1138,7 @@ app.post('/api/reception/customer/payment-confirm', apiRateLimiter, requireAuth(
     registeredByStaffName: staffName,
     stationId,
     stationName,
-    gracePlatesAllowed: 4,
+    gracePlatesAllowed: 3,
     gracePlatesConsumed: 0,
     createdAt: now,
     status: 'pending',
@@ -1157,9 +1157,9 @@ app.post('/api/reception/customer/payment-confirm', apiRateLimiter, requireAuth(
   customer.provisionalStatus = 'pending_approval';
   customer.activationStatus = 'partial_active';
   customer.cardStatus = 'active';
-  customer.gracePlatesAllowed = 4;
+  customer.gracePlatesAllowed = 3;
   customer.gracePlatesConsumed = 0;
-  customer.gracePlatesRemaining = 4;
+  customer.gracePlatesRemaining = 3;
   customer.pendingApprovalId = approvalId;
 
   if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
@@ -1172,7 +1172,7 @@ app.post('/api/reception/customer/payment-confirm', apiRateLimiter, requireAuth(
     actorRole: user.role,
     actorName: staffName,
     action: 'REGISTRATION_PAYMENT_CONFIRMED',
-    details: `Reception confirmed ${pkg.priceRwf} RWF for customer #${customer.memberNo} via ${paymentMethod.toUpperCase()} (Ref: ${paymentReference}). Account partially activated with up to 4 grace plates; awaiting boss approval.`,
+    details: `Reception confirmed ${pkg.priceRwf} RWF for customer #${customer.memberNo} via ${paymentMethod.toUpperCase()} (Ref: ${paymentReference}). Account partially activated with up to 3 grace plates; awaiting boss approval.`,
   });
   if (!Array.isArray(serverDbState.notifications)) serverDbState.notifications = [];
   const bossNotificationId = `notif_${crypto.randomUUID()}`;
@@ -4477,8 +4477,15 @@ app.post(
         }
         const paymentId = priorData.paymentId;
         const paymentResult = await client.query('SELECT data FROM payments WHERE id = $1', [paymentId]);
+        const graceResult = await client.query('SELECT data FROM ledger_entries WHERE idempotency_key = $1', [`${idempotencyKey}:grace`]);
         await client.query('COMMIT');
-        return res.json({ success: true, ledgerEntry: priorData, payment: paymentResult.rows[0]?.data, idempotent: true });
+        return res.json({
+          success: true,
+          ledgerEntry: priorData,
+          graceLedgerEntry: graceResult.rows[0]?.data || null,
+          payment: paymentResult.rows[0]?.data,
+          idempotent: true,
+        });
       }
 
       const customerResult = await client.query(
@@ -4497,14 +4504,33 @@ app.post(
           return res.status(409).json({ success: false, error: 'Selected package no longer matches the server price. Refresh and retry.' });
         }
       }
+      const pendingApprovalsResult = await client.query(
+        `SELECT id, data FROM pending_approvals WHERE customer_id = $1 AND restaurant_code = $2 AND status = 'pending' ORDER BY created_at ASC FOR UPDATE`,
+        [customerId, restaurantCode]
+      );
       const customer = customerRow.data || {};
+      const pendingGrace = pendingApprovalsResult.rows.reduce(
+        (sum: number, row: any) => sum + Math.max(0, Number(row.data?.gracePlatesConsumed || 0)),
+        0
+      );
+      const effectiveGrace = Math.max(
+        0,
+        Math.min(3, Math.max(pendingGrace, Number(customer.gracePlatesConsumed || 0)))
+      );
+      if (plates < effectiveGrace) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          error: `Top-up quantity (${plates}) cannot be less than the customer's consumed grace plates (${effectiveGrace}).`,
+        });
+      }
       const now = new Date();
       const ledgerId = `led_${crypto.randomUUID()}`;
       const paymentId = `pay_${crypto.randomUUID()}`;
       const ledgerEntry = {
         id: ledgerId, customerId, restaurantCode, type: 'purchase', platesDelta: plates,
         timestamp: now.toISOString(), staffId: user.userId,
-        reason: `Manager-confirmed top-up: +${plates} plates (${paymentMethod})`,
+        reason: `Manager-confirmed top-up: +${plates} plates (${paymentMethod})${effectiveGrace > 0 ? ` [${effectiveGrace} grace plates reconciled]` : ''}`,
         reference, idempotencyKey, amountRwf, requestFingerprint, paymentId,
       };
       const payment = {
@@ -4518,15 +4544,74 @@ app.post(
          VALUES ($1, $2, $3, 'purchase', $4, $5, $6, $7, $8)`,
         [ledgerId, restaurantCode, customerId, plates, amountRwf, idempotencyKey, now, JSON.stringify(ledgerEntry)]
       );
+      let graceLedgerEntry: any = null;
+      const updatedApprovals: any[] = [];
+      if (effectiveGrace > 0) {
+        const graceKey = `${idempotencyKey}:grace`.slice(0, 128);
+        graceLedgerEntry = {
+          id: `led_${crypto.randomUUID()}`,
+          customerId,
+          restaurantCode,
+          type: 'scan',
+          platesDelta: -effectiveGrace,
+          timestamp: now.toISOString(),
+          staffId: user.userId,
+          reason: `Reconcile ${effectiveGrace} grace plate(s) consumed before direct manager top-up`,
+          reference: `GRACE-TOPUP-${reference}`,
+          idempotencyKey: graceKey,
+          paymentId,
+        };
+        await client.query(
+          `INSERT INTO ledger_entries (id, restaurant_code, customer_id, type, plates_delta, idempotency_key, timestamp, data)
+           VALUES ($1, $2, $3, 'scan', $4, $5, $6, $7)`,
+          [graceLedgerEntry.id, restaurantCode, customerId, -effectiveGrace, graceKey, now, JSON.stringify(graceLedgerEntry)]
+        );
+        for (const row of pendingApprovalsResult.rows) {
+          const apprData = { ...(row.data || {}), gracePlatesConsumed: 0 };
+          updatedApprovals.push(apprData);
+          await client.query(
+            'UPDATE pending_approvals SET data = $2, updated_at = NOW() WHERE id = $1',
+            [row.id, JSON.stringify(apprData)]
+          );
+        }
+        customer.gracePlatesConsumed = 0;
+        customer.gracePlatesRemaining = pendingApprovalsResult.rows.length > 0 ? 3 : 0;
+        await client.query(
+          'UPDATE customers SET data = $2, updated_at = NOW() WHERE id = $1',
+          [customerId, JSON.stringify(customer)]
+        );
+      }
       await client.query(
         'INSERT INTO payments (id, restaurant_code, customer_id, amount_rwf, data) VALUES ($1, $2, $3, $4, $5)',
         [paymentId, restaurantCode, customerId, amountRwf, JSON.stringify(payment)]
       );
       await client.query('COMMIT');
 
-      if (Array.isArray(serverDbState?.ledgerEntries)) serverDbState.ledgerEntries.push(ledgerEntry);
+      if (Array.isArray(serverDbState?.ledgerEntries)) {
+        serverDbState.ledgerEntries.push(ledgerEntry);
+        if (graceLedgerEntry) serverDbState.ledgerEntries.push(graceLedgerEntry);
+      }
       if (Array.isArray(serverDbState?.payments)) serverDbState.payments.unshift(payment);
-      return res.json({ success: true, ledgerEntry, payment, idempotent: false });
+      if (effectiveGrace > 0) {
+        if (Array.isArray(serverDbState?.customers)) {
+          const ci = serverDbState.customers.findIndex((c: any) => c.id === customerId);
+          if (ci >= 0) serverDbState.customers[ci] = customer;
+        }
+        if (Array.isArray(serverDbState?.pendingApprovals)) {
+          for (const updatedAppr of updatedApprovals) {
+            const ai = serverDbState.pendingApprovals.findIndex((a: any) => a.id === updatedAppr.id);
+            if (ai >= 0) serverDbState.pendingApprovals[ai] = updatedAppr;
+          }
+        }
+      }
+      return res.json({
+        success: true,
+        ledgerEntry,
+        graceLedgerEntry,
+        payment,
+        customer: sanitizeCustomerForResponse(customer),
+        idempotent: false,
+      });
     } catch (error) {
       try { await client.query('ROLLBACK'); } catch { }
       console.error('[Atomic Top-up] Transaction failed:', error);
