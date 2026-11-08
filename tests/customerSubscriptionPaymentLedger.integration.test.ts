@@ -69,6 +69,34 @@ test('customer subscription payments persist in the dedicated PostgreSQL ledger'
     assert.equal(Number(persisted.rows[0].months_purchased), 2);
     assert.equal(persisted.rows[0].status, 'provider_pending');
 
+    const duplicateProviderAttempt = {
+      ...payment,
+      id: paymentId + '_duplicate',
+      internalReference: internalReference + '-DUP',
+      idempotencyKey: payment.idempotencyKey + '-DUP',
+      status: 'verified',
+      providerTransactionId: 'MTN-LEDGER-DUPLICATE',
+    };
+    const duplicateRejected = await adapter.saveStateToPostgres({
+      restaurants: [{ code: restaurantCode, name: 'Customer Payment Ledger Test', status: 'active', currency: 'RWF' }],
+      customers: [{ id: customerId, restaurantCode, memberNo: suffix, name: 'Ledger Test Customer', phone: '250788123456', cardStatus: 'active', cardVersion: 1, keyVersion: 1 }],
+      customerSubscriptions: [],
+      studentSubscriptionPayments: [
+        { ...payment, status: 'verified', providerTransactionId: 'MTN-LEDGER-DUPLICATE' },
+        duplicateProviderAttempt,
+      ],
+      licenses: [], ledgerEntries: [], payments: [], scanEvents: [],
+      pendingApprovals: [], branches: [], stationUsers: [], notifications: [],
+      expenses: [], transfers: [], auditLogs: [],
+    });
+    assert.equal(duplicateRejected, false, 'duplicate MTN transaction ID must roll back the entire ledger transaction');
+    const afterDuplicate = await pool!.query(
+      'SELECT status,provider_transaction_id FROM customer_subscription_payments WHERE id=$1',
+      [paymentId]
+    );
+    assert.equal(afterDuplicate.rows[0].status, 'provider_pending');
+    assert.equal(afterDuplicate.rows[0].provider_transaction_id, null);
+
     const legacySnapshot = await pool!.query(
       "SELECT value FROM system_settings WHERE key='studentSubscriptionPayments'"
     );
