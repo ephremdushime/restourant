@@ -32,21 +32,27 @@ function assertDuration(value: number, label: string, max = 120): number {
   return value;
 }
 
-/** Adds calendar months in UTC, clamping the day to the target month's last day. */
-export function addCalendarMonths(value: string | Date, months: number): Date {
+/** Adds calendar months using a stable original billing-day anchor. */
+export function addCalendarMonthsWithAnchor(value: string | Date, months: number, anchorDay?: number): Date {
   assertDuration(months, 'Months', 120);
   const source = value instanceof Date ? new Date(value.getTime()) : assertValidDate(value, 'source');
-  const originalDay = source.getUTCDate();
-  const sourceLastDay = new Date(Date.UTC(source.getUTCFullYear(), source.getUTCMonth() + 1, 0)).getUTCDate();
-  const sourceIsMonthEnd = originalDay === sourceLastDay;
+  const day = anchorDay ?? source.getUTCDate();
+  if (!Number.isSafeInteger(day) || day < 1 || day > 31) throw new Error('Billing anchor day must be between 1 and 31');
   const targetMonthIndex = source.getUTCMonth() + months;
   const targetYear = source.getUTCFullYear() + Math.floor(targetMonthIndex / 12);
   const targetMonth = targetMonthIndex % 12;
   const lastDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
   const result = new Date(source.getTime());
   result.setUTCDate(1);
-  result.setUTCFullYear(targetYear, targetMonth, sourceIsMonthEnd ? lastDay : Math.min(originalDay, lastDay));
+  result.setUTCFullYear(targetYear, targetMonth, Math.min(day, lastDay));
   return result;
+}
+
+/** Adds calendar months, preserving the source day (or month-end when source is month-end). */
+export function addCalendarMonths(value: string | Date, months: number): Date {
+  const source = value instanceof Date ? new Date(value.getTime()) : assertValidDate(value, 'source');
+  const sourceLastDay = new Date(Date.UTC(source.getUTCFullYear(), source.getUTCMonth() + 1, 0)).getUTCDate();
+  return addCalendarMonthsWithAnchor(source, months, source.getUTCDate() === sourceLastDay ? 31 : source.getUTCDate());
 }
 
 export function addCalendarDays(value: string | Date, days: number): Date {
@@ -119,8 +125,9 @@ export function calculateRenewalPeriod(
   currentPeriodEnd: string | null | undefined,
   verifiedAt: string,
   months = 1,
-  graceDays = RESTAURANT_SAAS_GRACE_DAYS
-): { periodStart: string; periodEnd: string; gracePeriodEnd: string } {
+  graceDays = RESTAURANT_SAAS_GRACE_DAYS,
+  billingAnchorDay?: number | null
+): { periodStart: string; periodEnd: string; gracePeriodEnd: string; billingAnchorDay: number } {
   if (!Number.isSafeInteger(months) || months < 1 || months > 24) {
     throw new Error('Subscription duration must be between 1 and 24 calendar months');
   }
@@ -132,12 +139,14 @@ export function calculateRenewalPeriod(
   const start = Number.isFinite(paidThrough) && paidThrough > verified.getTime()
     ? new Date(paidThrough)
     : verified;
-  const end = addCalendarMonths(start, months);
+  const anchorDay = billingAnchorDay ?? start.getUTCDate();
+  const end = addCalendarMonthsWithAnchor(start, months, anchorDay);
   const graceEnd = addCalendarDays(end, graceDays);
   return {
     periodStart: start.toISOString(),
     periodEnd: end.toISOString(),
     gracePeriodEnd: graceEnd.toISOString(),
+    billingAnchorDay: anchorDay,
   };
 }
 
