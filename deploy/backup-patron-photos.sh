@@ -46,7 +46,7 @@ mv "$temporary_file" "$backup_file"
 chmod 600 "$backup_file"
 write_photo_backup_metadata "$backup_file" "$BACKUP_ENCRYPTION_KEY"
 
-find "$BACKUP_DIR" -type f \\( -name 'restopass_photos_*.tar.gz.enc' -o -name 'restopass_photos_*.tar.gz.enc.sha256' -o -name 'restopass_photos_*.tar.gz.enc.hmac' \\) -mtime +"$RETENTION_DAYS" -delete
+find "$BACKUP_DIR" -type f \( -name 'restopass_photos_*.tar.gz.enc' -o -name 'restopass_photos_*.tar.gz.enc.sha256' -o -name 'restopass_photos_*.tar.gz.enc.hmac' \) -mtime +"$RETENTION_DAYS" -delete
 
 echo "Private photo backup completed: $backup_file"
 echo "Checksum: $backup_file.sha256"
