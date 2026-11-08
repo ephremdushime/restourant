@@ -361,6 +361,8 @@ WHERE s.key='studentSubscriptionPayments'
   AND COALESCE(NULLIF(payment->>'amountRwf','')::integer, 0) > 0
 ON CONFLICT (id) DO NOTHING;
 
+-- Remove the legacy snapshot after migration so stale data cannot resurrect deleted ledger rows.
+DELETE FROM system_settings WHERE key='studentSubscriptionPayments';
 
 -- 17. Multi-Instance Token Replay Guard Table (Fallback if Redis is unreachable)
 CREATE TABLE IF NOT EXISTS used_tokens (
