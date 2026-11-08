@@ -5727,6 +5727,15 @@ app.get('/api/customer/subscription/payments/:internalReference/status', apiRate
         return res.status(409).json({ success: false, error: 'Durable customer payment record is missing. No access was activated.' });
       }
       const durablePayment = lockedPaymentResult.rows[0].data || payment;
+      if (durablePayment.internalReference !== internalReference ||
+          Number(durablePayment.amountRwf) !== expectedAmount ||
+          String(durablePayment.restaurantCode) !== String(payment.restaurantCode) ||
+          String(durablePayment.customerId) !== String(payment.customerId)) {
+        await tx.query('ROLLBACK');
+        transactionOpen = false;
+        return res.status(409).json({ success: false, error: 'Durable payment details changed during verification. No entitlement was applied.' });
+      }
+      Object.assign(payment, durablePayment);
       if (lockedPaymentResult.rows[0].status === 'verified' || durablePayment.status === 'verified') {
         const priorSub = await tx.query(
           'SELECT data FROM customer_subscriptions WHERE customer_id=$1 AND restaurant_code=$2 ORDER BY updated_at DESC LIMIT 1',
@@ -5879,11 +5888,10 @@ app.get('/api/customer/subscription/payments/:internalReference/status', apiRate
       );
       if (customerInState) Object.assign(customerInState, updatedCustomer);
       if (!Array.isArray(serverDbState.customerSubscriptions)) serverDbState.customerSubscriptions = [];
-      const subIndex = serverDbState.customerSubscriptions.findIndex((item: any) =>
-        item.customerId === payment.customerId && item.restaurantCode === payment.restaurantCode
+      serverDbState.customerSubscriptions = serverDbState.customerSubscriptions.filter((item: any) =>
+        !(item.customerId === payment.customerId && item.restaurantCode === payment.restaurantCode)
       );
-      if (subIndex >= 0) serverDbState.customerSubscriptions[subIndex] = subscription;
-      else serverDbState.customerSubscriptions.push(subscription);
+      serverDbState.customerSubscriptions.push(subscription);
       if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
       serverDbState.auditLogs.unshift(audit);
       return res.json({ success: true, status: 'SUCCESSFUL', payment, subscription });
