@@ -62,6 +62,27 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
     );
   }
 
+  const licenseFixtures = [rCode1, rCode2].map((restaurantCode) => ({
+    id: 'license_' + restaurantCode,
+    restaurantCode,
+    planId: 'plan_' + restaurantCode,
+    validUntil: new Date(Date.now() + 365 * 86400000).toISOString(),
+  }));
+  for (const license of licenseFixtures) {
+    await pool!.query(
+      'INSERT INTO licenses (id,restaurant_code,plan_id,valid_until,data) VALUES ($1,$2,$3,$4,$5)',
+      [license.id, license.restaurantCode, license.planId, license.validUntil, JSON.stringify({ ...license, status: 'active' })]
+    );
+    await pool!.query(
+      "UPDATE restaurants SET data=data || jsonb_build_object('currentLicenseId',$2::text,'planId',$3::text) WHERE code=$1",
+      [license.restaurantCode, license.id, license.planId]
+    );
+    await pool!.query(
+      "INSERT INTO restaurant_subscriptions (id,restaurant_code,status,price_rwf,current_period_start,current_period_end) VALUES ($1,$2,'active',60000,NOW(),$3)",
+      ['sub_' + license.restaurantCode, license.restaurantCode, license.validUntil]
+    );
+  }
+
   serverModule.setServerDbState({
     restaurants: [
       { code: rCode1, name: 'Transfer Test ' + rCode1, status: 'active' },
@@ -71,6 +92,8 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
       { id: stationId, restaurantCode: rCode1, status: 'active', isPaired: true, name: 'Transfer Station 1' },
     ],
     studentSubscriptionSettings: { enabled: false },
+    licenses: licenseFixtures.map((license) => ({ ...license, status: 'active' })),
+    plans: licenseFixtures.map((license) => ({ id: license.planId, terms: { servingWindowMinutes: 120, plateLimitPerWindow: 3 } })),
     customers: [], pendingApprovals: [], ledgerEntries: [], payments: [], auditLogs: [], stationUsers: [],
   });
 
