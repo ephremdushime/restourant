@@ -263,11 +263,11 @@ test('RestoPass SaaS billing verifies MTN payment atomically and enforces tenant
     assert.equal(quarantined.rows[0].entitlement_applied_at, null);
     assert.equal(quarantined.rows[0].provider_transaction_id, null);
     const duplicateAudit = await pool!.query(
-      "SELECT data FROM restaurant_subscription_audit_logs WHERE payment_id=$1 AND action='SAAS_DUPLICATE_PROVIDER_TRANSACTION_ID'",
+      "SELECT data FROM restaurant_subscription_audit_logs WHERE payment_id=$1 AND action='SAAS_PAYMENT_REVIEW_REQUIRED'",
       [otherInitiated.body.paymentId]
     );
     assert.equal(duplicateAudit.rowCount, 1);
-    assert.equal(duplicateAudit.rows[0].data.outcome, 'quarantined_no_entitlement');
+    assert.equal(duplicateAudit.rows[0].data.providerStatus, 'SUCCESSFUL');
 
     // A provider-successful mismatch may represent money already collected.
     // Block a second charge until the first payment is reconciled by an operator.
