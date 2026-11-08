@@ -238,7 +238,7 @@ describe('RestoPass Student Monetization — Specification & Business Rules', ()
       assert.equal(entitlement.allowed, true);
     });
 
-    test('granting complimentary access requires mandatory reason and sets valid dates without fabricated payments', () => {
+    test('granting and revoking complimentary access require mandatory reasons and update entitlement state', async () => {
       restoStore.updateStudentSubscriptionSettings({ enabled: true });
 
       // Missing reason must be rejected
@@ -266,10 +266,21 @@ describe('RestoPass Student Monetization — Specification & Business Rules', ()
       assert.equal(ent.allowed, true);
       assert.equal(ent.status, 'complimentary');
 
-      // Revocation works
-      const revokeRes = restoStore.revokeComplimentarySubscription('cust_28492', 'Term ended');
+      // Revocation without a reason is rejected and leaves the entitlement active.
+      const emptyRevokeRes = await restoStore.revokeComplimentarySubscription('cust_28492', '');
+      assert.equal(emptyRevokeRes.success, false);
+      assert.match(emptyRevokeRes.error || '', /mandatory revocation reason/i);
+      assert.equal(restoStore.getCustomerSubscription('cust_28492')?.status, 'complimentary');
+
+      // A reasoned revocation expires access and is auditable.
+      const revokeRes = await restoStore.revokeComplimentarySubscription('cust_28492', 'Academic term ended');
       assert.equal(revokeRes.success, true);
+      assert.equal(restoStore.getCustomerSubscription('cust_28492')?.status, 'expired');
       assert.equal(restoStore.checkStudentEntitlement('cust_28492', 'digital_plate_transfer').allowed, false);
+      assert.ok(restoStore.getState().auditLogs.some((entry) =>
+        entry.action === 'COMPLIMENTARY_STUDENT_SUBSCRIPTION_REVOKED' &&
+        entry.details.includes('Academic term ended')
+      ));
     });
   });
 
