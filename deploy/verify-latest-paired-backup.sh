@@ -37,6 +37,7 @@ export RCLONE_CONFIG="$RCLONE_CONFIG_FILE"
 
 echo "Downloading paired Google Drive backup $timestamp for isolated recovery verification..."
 rclone copyto "$remote/restopass_$timestamp.manifest" "$temporary/restopass_$timestamp.manifest" --config "$RCLONE_CONFIG_FILE"
+cmp -s "$ROOT_DIR/backups/$manifest" "$temporary/restopass_$timestamp.manifest" || { echo "Off-site completion manifest does not match the verified local marker." >&2; exit 1; }
 for name in "restopass_$timestamp.dump.enc" "restopass_$timestamp.dump.enc.sha256" "restopass_$timestamp.dump.enc.hmac"; do
   rclone copyto "$remote/postgres/$name" "$temporary/postgres/$name" --config "$RCLONE_CONFIG_FILE"
 done
