@@ -593,6 +593,8 @@ export interface CustomerSubscription {
   currency: string;
   currentPeriodStart?: string;
   currentPeriodEnd?: string;
+  /** Original day-of-month used to keep calendar renewals stable after February. */
+  billingAnchorDay?: number;
   gracePeriodEnd?: string;
   cancelAtPeriodEnd?: boolean;
   paymentMethod?: 'mtn_momo' | 'airtel_money' | 'cash' | 'bank_transfer' | 'complimentary';
