@@ -449,11 +449,11 @@ function normalizeStationUserCredentials(state: any): boolean {
   for (const stationUser of state.stationUsers) {
     if (!stationUser || typeof stationUser !== 'object') continue;
 
-    // Authentication reads pinHash only. Migrate the legacy pin field once,
-    // preserve an existing hash, and never leave plaintext credentials behind.
+    // Authentication reads pinHash only. Treat a present legacy pin field as
+    // the newest credential (including a PIN reset), hash plaintext exactly once,
+    // preserve already-hashed values, and never persist the legacy field.
     if (Object.prototype.hasOwnProperty.call(stationUser, 'pin')) {
-      if (typeof stationUser.pin === 'string' && stationUser.pin.trim() &&
-          !(typeof stationUser.pinHash === 'string' && stationUser.pinHash.length > 0)) {
+      if (typeof stationUser.pin === 'string' && stationUser.pin.trim()) {
         stationUser.pinHash = stationUser.pin.startsWith('scrypt$')
           ? stationUser.pin
           : hashServerStaffSecret(stationUser.pin.trim());
