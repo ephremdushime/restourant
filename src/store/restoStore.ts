@@ -7832,25 +7832,65 @@ export class RestoStore {
     return { success: true, subscription: sub };
   }
 
-  public revokeComplimentarySubscription(
+  public async revokeComplimentarySubscription(
     customerId: string,
     reason: string,
     revokedBy = 'Platform Administrator'
-  ): { success: boolean; error?: string } {
+  ): Promise<{ success: boolean; error?: string }> {
+    const reasonText = typeof reason === 'string' ? reason.trim() : '';
+    if (reasonText.length < 3 || reasonText.length > 500) {
+      return { success: false, error: 'A mandatory revocation reason of 3–500 characters is required.' };
+    }
+
     const sub = this.getCustomerSubscription(customerId);
     if (!sub) return { success: false, error: 'Subscription not found' };
+    if (sub.status !== 'complimentary') {
+      return { success: false, error: 'Only an active complimentary entitlement can be revoked.' };
+    }
+
+    if (this.authToken && !this.isDemoModeActive()) {
+      if (typeof window === 'undefined' || !navigator.onLine) {
+        return { success: false, error: 'Complimentary access revocation requires an authenticated online Super Admin session.' };
+      }
+      try {
+        const response = await fetch(
+          '/api/admin/customers/' + encodeURIComponent(customerId) + '/entitlements/' + encodeURIComponent(sub.id),
+          {
+            method: 'DELETE',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: 'Bearer ' + this.authToken,
+            },
+            body: JSON.stringify({ reason: reasonText }),
+          }
+        );
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+          return { success: false, error: result.error || 'Complimentary access could not be revoked.' };
+        }
+        await this.pullStateFromServer();
+        return { success: true };
+      } catch {
+        return { success: false, error: 'Unable to reach RestoPass. Complimentary access was not revoked.' };
+      }
+    }
 
     sub.status = 'expired';
     sub.currentPeriodEnd = new Date().toISOString();
     sub.gracePeriodEnd = new Date().toISOString();
     sub.updatedAt = new Date().toISOString();
 
+    const customer = this.state.customers.find((item) => item.id === customerId);
+    if (customer?.customerAccessStatus === 'complimentary') {
+      customer.customerAccessStatus = 'payment_required';
+    }
+
     this.logAudit({
       restaurantCode: sub.restaurantCode,
       actorRole: 'super_admin',
       actorName: revokedBy,
       action: 'COMPLIMENTARY_STUDENT_SUBSCRIPTION_REVOKED',
-      details: `Revoked complimentary pass for #${sub.memberNo}. Reason: "${reason}"`,
+      details: 'Revoked complimentary pass for #' + sub.memberNo + '. Reason: "' + reasonText + '"',
     });
 
     this.sendNotification({
@@ -7860,7 +7900,7 @@ export class RestoStore {
       senderName: revokedBy,
       type: 'system_broadcast',
       title: 'Complimentary Dashboard Pass Ended',
-      message: `Your complimentary digital dashboard pass has ended (${reason}). Your physical card remains active for meals.`,
+      message: 'Your complimentary digital dashboard pass has ended (' + reasonText + '). Your physical card remains active for meals.',
       priority: 'normal',
       actionTab: 'my_card',
     });
