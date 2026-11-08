@@ -71,7 +71,7 @@ jobs:
 
       - name: Validate encrypted PostgreSQL backup tooling
         run: |
-          bash -n deploy/backup-postgres.sh deploy/verify-postgres-backup.sh
+          for script in deploy/backup-postgres.sh deploy/verify-postgres-backup.sh; do bash -n "$script"; done
           temp_dir="$(mktemp -d)"
           trap 'rm -rf "$temp_dir"' EXIT
           key="$(openssl rand -hex 32)"
@@ -100,7 +100,7 @@ jobs:
 
       - name: Validate paired off-site backup orchestration
         run: |
-          bash -n deploy/backup-all.sh deploy/verify-patron-photo-backup.sh deploy/verify-latest-paired-backup.sh deploy/install-backup-schedule.sh deploy/test-paired-backup-scripts.sh
+          for script in deploy/backup-all.sh deploy/verify-patron-photo-backup.sh deploy/verify-latest-paired-backup.sh deploy/install-backup-schedule.sh deploy/test-paired-backup-scripts.sh; do bash -n "$script"; done
           bash deploy/test-paired-backup-scripts.sh
 
       - name: Validate production Docker Compose configuration
