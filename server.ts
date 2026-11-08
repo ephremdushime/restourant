@@ -5708,73 +5708,215 @@ app.get('/api/customer/subscription/payments/:internalReference/status', apiRate
       });
     }
 
-    const verifiedAt = new Date().toISOString();
-    const settings = serverDbState.studentSubscriptionSettings || {};
-    const monthsPurchased = Number(payment.monthsPurchased || 1);
-    const existingSub = (serverDbState.customerSubscriptions || []).find(
-      (item: any) => item.customerId === payment.customerId && item.restaurantCode === payment.restaurantCode
-    );
-    const period = calculateRenewalPeriod(
-      existingSub?.currentPeriodEnd || null,
-      verifiedAt,
-      monthsPurchased,
-      Number(settings.graceDays ?? 3),
-      existingSub?.billingAnchorDay ?? null
-    );
-    const sub = existingSub || {
-      id: 'sub_' + payment.customerId + '_' + crypto.randomUUID(),
-      customerId: payment.customerId,
-      memberNo: payment.memberNo,
-      restaurantCode: payment.restaurantCode,
-      createdAt: verifiedAt,
-    };
-    Object.assign(sub, {
-      status: 'active',
-      planName: 'RestoPass Customer Access',
-      priceRwf: Number(payment.monthlyPriceRwf || settings.priceRwf),
-      currency: 'RWF',
-      currentPeriodStart: period.periodStart,
-      currentPeriodEnd: period.periodEnd,
-      billingAnchorDay: period.billingAnchorDay,
-      gracePeriodEnd: period.gracePeriodEnd,
-      cancelAtPeriodEnd: false,
-      paymentMethod: 'mtn_momo',
-      lastPaymentId: payment.id,
-      lastPaymentRef: payment.internalReference,
-      updatedAt: verifiedAt,
-    });
-    if (!existingSub) {
+    const dbPool = getPostgresPool();
+    if (!dbPool) return res.status(503).json({ success: false, error: 'Customer subscription verification requires PostgreSQL. No access was activated.' });
+    const tx = await dbPool.connect();
+    let transactionOpen = false;
+    try {
+      await tx.query('BEGIN');
+      transactionOpen = true;
+
+      // Serialize concurrent verifications for this payment and customer.
+      const lockedPaymentResult = await tx.query(
+        'SELECT id,status,data FROM customer_subscription_payments WHERE id=$1 AND customer_id=$2 AND restaurant_code=$3 FOR UPDATE',
+        [payment.id, payment.customerId, payment.restaurantCode]
+      );
+      if (!lockedPaymentResult.rows[0]) {
+        await tx.query('ROLLBACK');
+        transactionOpen = false;
+        return res.status(409).json({ success: false, error: 'Durable customer payment record is missing. No access was activated.' });
+      }
+      const durablePayment = lockedPaymentResult.rows[0].data || payment;
+      if (lockedPaymentResult.rows[0].status === 'verified' || durablePayment.status === 'verified') {
+        const priorSub = await tx.query(
+          'SELECT data FROM customer_subscriptions WHERE customer_id=$1 AND restaurant_code=$2 ORDER BY updated_at DESC LIMIT 1',
+          [payment.customerId, payment.restaurantCode]
+        );
+        await tx.query('COMMIT');
+        transactionOpen = false;
+        Object.assign(payment, durablePayment);
+        return res.json({ success: true, status: 'SUCCESSFUL', payment, subscription: priorSub.rows[0]?.data || null, alreadyApplied: true });
+      }
+
+      // Lock the tenant-scoped customer row. This serializes two successful
+      // payments for the same customer so renewal periods cannot overwrite each other.
+      const customerResult = await tx.query(
+        'SELECT data FROM customers WHERE id=$1 AND restaurant_code=$2 FOR UPDATE',
+        [payment.customerId, payment.restaurantCode]
+      );
+      if (!customerResult.rows[0]) {
+        await tx.query('ROLLBACK');
+        transactionOpen = false;
+        return res.status(409).json({ success: false, error: 'Customer account no longer exists in this restaurant. No access was activated.' });
+      }
+      const customer = customerResult.rows[0].data || {};
+      const duplicateResult = await tx.query(
+        'SELECT id FROM customer_subscription_payments WHERE provider=$1 AND provider_environment=$2 AND provider_transaction_id=$3 AND id<>$4 LIMIT 1',
+        [payment.provider || 'mtn_momo', payment.providerEnvironment || config.environment, provider.financialTransactionId, payment.id]
+      );
+      if (duplicateResult.rowCount) {
+        const quarantinedPayment = {
+          ...payment,
+          status: 'review_required',
+          providerStatus,
+          providerTransactionIdCandidate: provider.financialTransactionId,
+          failureReason: 'MTN_PROVIDER_TRANSACTION_ID_ALREADY_ASSOCIATED',
+          updatedAt: new Date().toISOString(),
+        };
+        await tx.query(
+          "UPDATE customer_subscription_payments SET status='review_required',data=$2,updated_at=NOW() WHERE id=$1",
+          [payment.id, JSON.stringify(quarantinedPayment)]
+        );
+        await tx.query(
+          'INSERT INTO audit_logs (id,restaurant_code,user_id,action,data) VALUES ($1,$2,$3,$4,$5)',
+          ['audit_' + crypto.randomUUID(), payment.restaurantCode, payment.customerId, 'PATRON_SUBSCRIPTION_DUPLICATE_PROVIDER_TRANSACTION', JSON.stringify({
+            paymentId: payment.id, providerTransactionId: provider.financialTransactionId,
+            outcome: 'quarantined_no_entitlement',
+          })]
+        );
+        await tx.query('COMMIT');
+        transactionOpen = false;
+        Object.assign(payment, quarantinedPayment);
+        return res.json({
+          success: true, status: 'REVIEW_REQUIRED', payment,
+          message: 'This MTN transaction ID is already associated with another payment. No customer access was activated.',
+        });
+      }
+
+      const subscriptionResult = await tx.query(
+        'SELECT id,data FROM customer_subscriptions WHERE customer_id=$1 AND restaurant_code=$2 ORDER BY updated_at DESC LIMIT 1 FOR UPDATE',
+        [payment.customerId, payment.restaurantCode]
+      );
+      const existingSub = subscriptionResult.rows[0]?.data || null;
+      const verifiedAt = new Date().toISOString();
+      const settings = serverDbState.studentSubscriptionSettings || {};
+      const monthsPurchased = Number(payment.monthsPurchased || 1);
+      const period = calculateRenewalPeriod(
+        existingSub?.currentPeriodEnd || null,
+        verifiedAt,
+        monthsPurchased,
+        Number(settings.graceDays ?? 3),
+        existingSub?.billingAnchorDay ?? null
+      );
+      const subscription = existingSub || {
+        id: 'sub_' + payment.customerId + '_' + crypto.randomUUID(),
+        customerId: payment.customerId,
+        memberNo: payment.memberNo,
+        restaurantCode: payment.restaurantCode,
+        createdAt: verifiedAt,
+      };
+      Object.assign(subscription, {
+        status: 'active',
+        planName: 'RestoPass Customer Access',
+        priceRwf: Number(payment.monthlyPriceRwf || settings.priceRwf),
+        currency: 'RWF',
+        currentPeriodStart: period.periodStart,
+        currentPeriodEnd: period.periodEnd,
+        billingAnchorDay: period.billingAnchorDay,
+        gracePeriodEnd: period.gracePeriodEnd,
+        cancelAtPeriodEnd: false,
+        paymentMethod: 'mtn_momo',
+        lastPaymentId: payment.id,
+        lastPaymentRef: payment.internalReference,
+        updatedAt: verifiedAt,
+      });
+      const updatedCustomer = {
+        ...customer,
+        customerAccessStatus: 'active',
+        freeAccessStartedAt: undefined,
+        freeAccessExpiresAt: undefined,
+      };
+      const verifiedPayment = {
+        ...payment,
+        status: 'verified',
+        providerStatus,
+        providerTransactionId: provider.financialTransactionId,
+        verifiedAt,
+        updatedAt: verifiedAt,
+      };
+
+      if (subscriptionResult.rows[0]) {
+        await tx.query(
+          'UPDATE customer_subscriptions SET plan=$2,status=$3,data=$4,updated_at=$5 WHERE id=$1',
+          [subscriptionResult.rows[0].id, 'monthly', 'active', JSON.stringify(subscription), verifiedAt]
+        );
+      } else {
+        await tx.query(
+          'INSERT INTO customer_subscriptions (id,customer_id,restaurant_code,plan,status,data,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$7)',
+          [subscription.id, payment.customerId, payment.restaurantCode, 'monthly', 'active', JSON.stringify(subscription), verifiedAt]
+        );
+      }
+      await tx.query(
+        'UPDATE customers SET data=$3,updated_at=$4 WHERE id=$1 AND restaurant_code=$2',
+        [payment.customerId, payment.restaurantCode, JSON.stringify(updatedCustomer), verifiedAt]
+      );
+      await tx.query(
+        "UPDATE customer_subscription_payments SET status='verified',provider_transaction_id=$2,data=$3,verified_at=$4,updated_at=$4 WHERE id=$1",
+        [payment.id, provider.financialTransactionId, JSON.stringify(verifiedPayment), verifiedAt]
+      );
+      const audit = {
+        id: 'audit_' + crypto.randomUUID(),
+        timestamp: verifiedAt,
+        restaurantCode: payment.restaurantCode,
+        userId: payment.customerId,
+        action: 'PATRON_SUBSCRIPTION_PAYMENT_VERIFIED',
+        details: {
+          paymentId: payment.id, internalReference, providerTransactionId: provider.financialTransactionId,
+          amountRwf: expectedAmount, monthsPurchased, periodStart: period.periodStart, periodEnd: period.periodEnd,
+        },
+      };
+      await tx.query(
+        'INSERT INTO audit_logs (id,restaurant_code,user_id,action,data) VALUES ($1,$2,$3,$4,$5)',
+        [audit.id, payment.restaurantCode, payment.customerId, audit.action, JSON.stringify(audit)]
+      );
+      await tx.query('COMMIT');
+      transactionOpen = false;
+
+      // Reflect the committed database state in memory only after COMMIT succeeds.
+      Object.assign(payment, verifiedPayment);
+      const customerInState = (serverDbState.customers || []).find((item: any) =>
+        item.id === payment.customerId && item.restaurantCode === payment.restaurantCode
+      );
+      if (customerInState) Object.assign(customerInState, updatedCustomer);
       if (!Array.isArray(serverDbState.customerSubscriptions)) serverDbState.customerSubscriptions = [];
-      serverDbState.customerSubscriptions.push(sub);
+      const subIndex = serverDbState.customerSubscriptions.findIndex((item: any) =>
+        item.customerId === payment.customerId && item.restaurantCode === payment.restaurantCode
+      );
+      if (subIndex >= 0) serverDbState.customerSubscriptions[subIndex] = subscription;
+      else serverDbState.customerSubscriptions.push(subscription);
+      if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
+      serverDbState.auditLogs.unshift(audit);
+      return res.json({ success: true, status: 'SUCCESSFUL', payment, subscription });
+    } catch (transactionError: any) {
+      if (transactionOpen) {
+        try { await tx.query('ROLLBACK'); } catch { /* preserve original transaction error */ }
+      }
+      // The unique provider transaction index is the final concurrency guard.
+      // If two requests race with the same MTN ID, quarantine the later attempt.
+      if (transactionError?.code === '23505' &&
+          transactionError?.constraint === 'uq_customer_subscription_provider_transaction') {
+        const quarantinedPayment = {
+          ...payment,
+          status: 'review_required',
+          providerStatus,
+          providerTransactionIdCandidate: provider.financialTransactionId,
+          failureReason: 'MTN_PROVIDER_TRANSACTION_ID_ALREADY_ASSOCIATED',
+          updatedAt: new Date().toISOString(),
+        };
+        await dbPool.query(
+          "UPDATE customer_subscription_payments SET status='review_required',data=$2,updated_at=NOW() WHERE id=$1 AND status<>'verified'",
+          [payment.id, JSON.stringify(quarantinedPayment)]
+        );
+        Object.assign(payment, quarantinedPayment);
+        return res.json({
+          success: true, status: 'REVIEW_REQUIRED', payment,
+          message: 'This MTN transaction ID was already committed to another payment. No customer access was activated.',
+        });
+      }
+      throw transactionError;
+    } finally {
+      tx.release();
     }
-    const customer = (serverDbState.customers || []).find((item: any) =>
-      item.id === payment.customerId && item.restaurantCode === payment.restaurantCode
-    );
-    if (customer) {
-      customer.customerAccessStatus = 'active';
-      customer.freeAccessStartedAt = undefined;
-      customer.freeAccessExpiresAt = undefined;
-    }
-    payment.status = 'verified';
-    payment.providerStatus = providerStatus;
-    payment.providerTransactionId = provider.financialTransactionId;
-    payment.verifiedAt = verifiedAt;
-    payment.updatedAt = verifiedAt;
-    if (!Array.isArray(serverDbState.auditLogs)) serverDbState.auditLogs = [];
-    serverDbState.auditLogs.unshift({
-      id: 'audit_' + crypto.randomUUID(),
-      timestamp: verifiedAt,
-      restaurantCode: payment.restaurantCode,
-      userId: payment.customerId,
-      action: 'PATRON_SUBSCRIPTION_PAYMENT_VERIFIED',
-      details: {
-        paymentId: payment.id, internalReference, providerTransactionId: provider.financialTransactionId,
-        amountRwf: expectedAmount, monthsPurchased, periodStart: period.periodStart, periodEnd: period.periodEnd,
-      },
-    });
-    const saved = await queueDbSave(serverDbState);
-    if (!saved) return res.status(503).json({ success: false, error: 'Payment was verified but subscription state could not be durably saved. Contact support for reconciliation.' });
-    return res.json({ success: true, status: 'SUCCESSFUL', payment, subscription: sub });
   } catch (error: any) {
     console.error('[Patron MTN status verification]', error);
     return res.status(502).json({ success: false, error: 'Unable to verify payment with MTN. No access was granted.', details: error.message });
