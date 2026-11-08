@@ -152,6 +152,38 @@ CREATE TABLE IF NOT EXISTS customer_subscriptions (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+// Dedicated ledger for RestoPass customer-dashboard subscription payments.
+// Meal top-ups and restaurant SaaS subscriptions are deliberately separate.
+CREATE TABLE IF NOT EXISTS customer_subscription_payments (
+    id VARCHAR(64) PRIMARY KEY,
+    customer_id VARCHAR(64) NOT NULL,
+    restaurant_code VARCHAR(32) NOT NULL,
+    provider VARCHAR(24) NOT NULL CHECK (provider IN ('mtn_momo','airtel_money','cash','bank_transfer')),
+    provider_environment VARCHAR(16) CHECK (provider_environment IS NULL OR provider_environment IN ('sandbox','production')),
+    internal_reference VARCHAR(64) NOT NULL UNIQUE,
+    provider_transaction_id VARCHAR(128),
+    payer_msisdn VARCHAR(24),
+    amount_rwf INT NOT NULL CHECK (amount_rwf > 0),
+    months_purchased INT NOT NULL DEFAULT 1 CHECK (months_purchased BETWEEN 1 AND 24),
+    currency CHAR(3) NOT NULL DEFAULT 'RWF' CHECK (currency = 'RWF'),
+    status VARCHAR(24) NOT NULL DEFAULT 'created'
+      CHECK (status IN ('created','provider_pending','pending','verified','successful','failed','cancelled','expired','review_required')),
+    idempotency_key VARCHAR(128) NOT NULL UNIQUE,
+    request_fingerprint VARCHAR(64) NOT NULL,
+    data JSONB NOT NULL,
+    verified_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_subscription_provider_transaction
+    ON customer_subscription_payments (provider, provider_environment, provider_transaction_id)
+    WHERE provider_transaction_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_customer_subscription_payment_history
+    ON customer_subscription_payments (restaurant_code, customer_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_customer_subscription_payment_reconciliation
+    ON customer_subscription_payments (provider, status, created_at);
+
+
 -- 6. Balance Checkpoints for Fast O(1) Balance Calculation
 CREATE TABLE IF NOT EXISTS balance_checkpoints (
     id VARCHAR(64) PRIMARY KEY,
