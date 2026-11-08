@@ -11,6 +11,7 @@
 import { Pool, PoolConfig } from 'pg';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'node:url';
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -136,6 +137,7 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         customerRes,
         ledgerRes,
         subRes,
+        customerSubPaymentRes,
         checkpointRes,
         paymentRes,
         scanRes,
@@ -153,6 +155,7 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         client.query('SELECT data FROM customers ORDER BY created_at ASC'),
         client.query('SELECT data FROM ledger_entries ORDER BY timestamp ASC'),
         client.query('SELECT data FROM customer_subscriptions ORDER BY created_at ASC'),
+        client.query('SELECT data FROM customer_subscription_payments ORDER BY created_at ASC'),
         client.query('SELECT data FROM balance_checkpoints ORDER BY created_at ASC'),
         client.query('SELECT data FROM payments ORDER BY created_at ASC'),
         client.query('SELECT data FROM scan_events ORDER BY created_at DESC LIMIT 5000'),
@@ -205,7 +208,7 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         shifts: settingsMap.get('shifts') || [],
         activationRequests: settingsMap.get('activationRequests') || [],
         pinRecoveryRequests: settingsMap.get('pinRecoveryRequests') || [],
-        studentSubscriptionPayments: settingsMap.get('studentSubscriptionPayments') || [],
+        studentSubscriptionPayments: customerSubPaymentRes.rows.map((r: { data: any }) => r.data),
         restaurantSubscriptions: settingsMap.get('restaurantSubscriptions') || [],
         restaurantSubscriptionPayments: settingsMap.get('restaurantSubscriptionPayments') || [],
         subscriptionPayments: settingsMap.get('subscriptionPayments') || [],
@@ -475,6 +478,49 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
       }
     }
 
+    // 5a. Dedicated RestoPass customer-dashboard subscription payment ledger.
+    // The payment history is no longer authoritative in generic system_settings.
+    if (Array.isArray(state.studentSubscriptionPayments)) {
+      for (const item of state.studentSubscriptionPayments) {
+        if (!item?.id || !item?.customerId || !item?.restaurantCode) continue;
+        const amountRwf = Number(item.amountRwf);
+        const monthsPurchased = Number(item.monthsPurchased || 1);
+        if (!Number.isSafeInteger(amountRwf) || amountRwf <= 0 ||
+            !Number.isSafeInteger(monthsPurchased) || monthsPurchased < 1 || monthsPurchased > 24) {
+          throw new Error('Invalid customer subscription payment amount or purchased month count.');
+        }
+        const provider = ['mtn_momo', 'airtel_money', 'cash', 'bank_transfer'].includes(item.provider)
+          ? item.provider : 'cash';
+        const internalReference = String(item.internalReference || ('LEGACY-' + item.id)).slice(0, 64);
+        const idempotencyKey = String(item.idempotencyKey || item.id).slice(0, 128);
+        const requestFingerprint = String(item.requestFingerprint ||
+          crypto.createHash('sha256').update(JSON.stringify({
+            id: item.id, customerId: item.customerId, restaurantCode: item.restaurantCode,
+            amountRwf, monthsPurchased, internalReference,
+          })).digest('hex')).slice(0, 64);
+        const status = ['created','provider_pending','pending','verified','successful','failed','cancelled','expired','review_required'].includes(item.status)
+          ? item.status : 'pending';
+        await client.query(
+          `INSERT INTO customer_subscription_payments
+           (id,customer_id,restaurant_code,provider,provider_environment,internal_reference,provider_transaction_id,
+            payer_msisdn,amount_rwf,months_purchased,currency,status,idempotency_key,request_fingerprint,data,verified_at,created_at,updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'RWF',$11,$12,$13,$14,$15,NOW())
+           ON CONFLICT (id) DO UPDATE SET
+             provider_transaction_id=EXCLUDED.provider_transaction_id,
+             payer_msisdn=EXCLUDED.payer_msisdn,
+             status=EXCLUDED.status,data=EXCLUDED.data,verified_at=EXCLUDED.verified_at,updated_at=NOW()`,
+          [
+            item.id, item.customerId, item.restaurantCode, provider,
+            item.providerEnvironment || null, internalReference,
+            item.providerTransactionId || null,
+            item.payerMsisdn || item.phoneNumber || item.phone || null,
+            amountRwf, monthsPurchased, status, idempotencyKey, requestFingerprint,
+            JSON.stringify(item), item.verifiedAt || null,
+          ]
+        );
+      }
+    }
+
     // 6. Balance Checkpoints
     if (Array.isArray(state.balanceCheckpoints)) {
       for (const cp of state.balanceCheckpoints) {
@@ -501,9 +547,6 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
       ['shifts', state.shifts],
       ['activationRequests', state.activationRequests],
       ['pinRecoveryRequests', state.pinRecoveryRequests],
-      // Subscription payment records are kept in durable JSONB settings until
-      // their dedicated normalized billing tables are introduced.
-      ['studentSubscriptionPayments', state.studentSubscriptionPayments],
       ['restaurantSubscriptions', state.restaurantSubscriptions],
       ['restaurantSubscriptionPayments', state.restaurantSubscriptionPayments],
       ['subscriptionPayments', state.subscriptionPayments],
