@@ -168,13 +168,15 @@ CREATE TABLE IF NOT EXISTS customer_subscription_payments (
     currency CHAR(3) NOT NULL DEFAULT 'RWF' CHECK (currency = 'RWF'),
     status VARCHAR(24) NOT NULL DEFAULT 'created'
       CHECK (status IN ('created','provider_pending','pending','verified','successful','failed','cancelled','expired','review_required')),
-    idempotency_key VARCHAR(128) NOT NULL UNIQUE,
+    idempotency_key VARCHAR(128) NOT NULL,
     request_fingerprint VARCHAR(64) NOT NULL,
     data JSONB NOT NULL,
     verified_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_subscription_idempotency
+    ON customer_subscription_payments (restaurant_code, customer_id, idempotency_key);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_subscription_provider_transaction
     ON customer_subscription_payments (provider, provider_environment, provider_transaction_id)
     WHERE provider_transaction_id IS NOT NULL;
