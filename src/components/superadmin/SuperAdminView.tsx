@@ -1026,14 +1026,24 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                           <td className="py-3 px-3 text-right">
                             {sub.status === 'complimentary' && (
                               <button
-                                onClick={() => {
-                                  if (confirm(`Revoke complimentary access for #${sub.memberNo}?`)) {
-                                    restoStore.revokeComplimentarySubscription(
-                                      sub.customerId,
-                                      'Revoked by Ephrem (Super Admin)',
-                                      'Ephrem (Super Admin)'
-                                    );
+                                onClick={async () => {
+                                  const reason = window.prompt(
+                                    `Enter the mandatory reason for revoking complimentary access for #${sub.memberNo}:`
+                                  );
+                                  if (!reason || !reason.trim()) {
+                                    showToast('A revocation reason is required.', 'error');
+                                    return;
                                   }
+                                  const result = await restoStore.revokeComplimentarySubscription(
+                                    sub.customerId,
+                                    reason,
+                                    'Platform Super Admin'
+                                  );
+                                  if (!result.success) {
+                                    showToast(result.error || 'Complimentary access could not be revoked.', 'error');
+                                    return;
+                                  }
+                                  showToast('Complimentary access revoked and audit logged.');
                                 }}
                                 className="text-rose-400 hover:text-rose-300 font-semibold cursor-pointer"
                               >
