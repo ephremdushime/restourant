@@ -169,17 +169,24 @@ jobs:
       - name: Smoke-test production Docker container
         run: |
           network=restopass-smoke-network
+          tls_dir="$(mktemp -d)"
           docker network create "$network"
+          openssl req -x509 -nodes -newkey rsa:2048 -keyout "$tls_dir/server.key" -out "$tls_dir/server.crt" \
+            -days 1 -subj "/CN=postgres" -addext "subjectAltName=DNS:postgres"
+          chmod 600 "$tls_dir/server.key"
+          chmod 644 "$tls_dir/server.crt"
           cleanup() {
             docker logs restopass-app-smoke || true
             docker rm --force restopass-app-smoke restopass-postgres-smoke restopass-redis-smoke >/dev/null 2>&1 || true
             docker network rm "$network" >/dev/null 2>&1 || true
+            rm -rf "$tls_dir"
           }
           trap cleanup EXIT
 
           docker run --detach --name restopass-postgres-smoke --network "$network" --network-alias postgres \
+            --volume "$tls_dir:/tls:ro" \
             --env POSTGRES_DB=restopass --env POSTGRES_USER=restopass --env POSTGRES_PASSWORD=ci-smoke-postgres-password \
-            postgres:16-alpine
+            postgres:16-alpine -c ssl=on -c ssl_cert_file=/tls/server.crt -c ssl_key_file=/tls/server.key
           docker run --detach --name restopass-redis-smoke --network "$network" --network-alias redis redis:7-alpine
 
           database_ready=0
@@ -191,7 +198,7 @@ jobs:
             sleep 2
           done
           if [ "$database_ready" -ne 1 ]; then
-            echo "Isolated PostgreSQL service did not become ready."
+            echo "Isolated TLS-enabled PostgreSQL service did not become ready."
             docker logs restopass-postgres-smoke
             exit 1
           fi
@@ -201,6 +208,7 @@ jobs:
             --env NODE_ENV=production \
             --env PORT=3000 \
             --env DATABASE_URL=postgres://restopass:ci-smoke-postgres-password@postgres:5432/restopass \
+            --env PGSSLMODE=require \
             --env REDIS_URL=redis://redis:6379 \
             --env SESSION_SECRET="$(openssl rand -hex 32)" \
             --env RESTOPASS_MASTER_SECRET="$(openssl rand -hex 32)" \
@@ -217,7 +225,7 @@ jobs:
             sleep 2
           done
           if [ "$ready" -ne 1 ]; then
-            echo "Production container did not become ready with isolated PostgreSQL and Redis."
+            echo "Production container did not become ready with isolated TLS-enabled PostgreSQL and Redis."
             cat /tmp/restopass-ready.json || true
             docker logs restopass-postgres-smoke
             docker logs restopass-redis-smoke
