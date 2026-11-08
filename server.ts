@@ -4892,9 +4892,10 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
       const providerSaysSuccessful = provider?.status === 'SUCCESSFUL';
       const status = providerSaysSuccessful ? 'review_required'
         : ['FAILED', 'REJECTED', 'TIMEOUT', 'EXPIRED'].includes(provider?.status) ? 'failed' : 'provider_pending';
-      await pool.query("UPDATE restaurant_subscription_payments SET status=$2::varchar,provider_status=$3,provider_transaction_id=CASE WHEN $2::text='review_required' THEN $4::varchar ELSE provider_transaction_id END,updated_at=NOW() WHERE id=$1 AND entitlement_applied_at IS NULL",
-        [payment.id, status, String(provider?.status || 'UNKNOWN').slice(0, 64),
-        status === 'review_required' && typeof provider?.financialTransactionId === 'string' ? provider.financialTransactionId : null]);
+      // A provider transaction ID is globally unique. Do not attach it to an
+      // unverified/review-required attempt: it may already belong to another payment.
+      await pool.query("UPDATE restaurant_subscription_payments SET status=$2::varchar,provider_status=$3,updated_at=NOW() WHERE id=$1 AND entitlement_applied_at IS NULL",
+        [payment.id, status, String(provider?.status || 'UNKNOWN').slice(0, 64)]);
       if (status === 'review_required') {
         await pool.query("INSERT INTO restaurant_subscription_audit_logs (id,restaurant_code,actor_type,action,payment_id,data) VALUES ($1,$2,'system','SAAS_PAYMENT_REVIEW_REQUIRED',$3,$4)",
           ['rsa_' + crypto.randomUUID(), payment.restaurant_code, payment.id, JSON.stringify({
@@ -4965,8 +4966,36 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
       serverDbState.licenses = [...(serverDbState.licenses || []), license];
     }
     return res.json({ success: true, status: 'successful', subscription: { status: 'active', currentPeriodStart: period.periodStart, currentPeriodEnd: end, gracePeriodEnd: graceEnd } });
-  } catch (error) { try { await client.query('ROLLBACK') } catch { }; console.error('[SaaS payment verification]', error); return res.status(503).json({ success: false, error: 'Verification or entitlement application failed. No success is assumed; retry or reconcile.' }); }
-  finally { client.release(); }
+  } catch (error: any) {
+    try { await client.query('ROLLBACK'); } catch { /* transaction may already be closed */ }
+    // A duplicated MTN financial transaction ID is a reconciliation exception,
+    // never a reason to activate a second restaurant subscription or return an opaque 503.
+    if (error?.code === '23505' && error?.constraint === 'uq_restaurant_saas_provider_transaction') {
+      try {
+        await pool.query(
+          "UPDATE restaurant_subscription_payments SET status='review_required',provider_status='SUCCESSFUL_DUPLICATE_TRANSACTION_ID',updated_at=NOW() WHERE id=$1 AND entitlement_applied_at IS NULL",
+          [payment.id]
+        );
+        await pool.query(
+          "INSERT INTO restaurant_subscription_audit_logs (id,restaurant_code,actor_type,action,payment_id,data) VALUES ($1,$2,'system','SAAS_DUPLICATE_PROVIDER_TRANSACTION_ID',$3,$4)",
+          ['rsa_' + crypto.randomUUID(), payment.restaurant_code, payment.id, JSON.stringify({
+            providerTransactionId: provider?.financialTransactionId || null,
+            providerStatus: provider?.status || 'SUCCESSFUL',
+            outcome: 'quarantined_no_entitlement',
+          })]
+        );
+        return res.json({
+          success: true,
+          status: 'review_required',
+          message: 'MTN returned a transaction ID already associated with another payment. This payment has been quarantined for manual reconciliation; no subscription access was activated.',
+        });
+      } catch (reconciliationError) {
+        console.error('[SaaS duplicate transaction reconciliation]', reconciliationError);
+      }
+    }
+    console.error('[SaaS payment verification]', error);
+    return res.status(503).json({ success: false, error: 'Verification or entitlement application failed. No success is assumed; retry or reconcile.' });
+  } finally { client.release(); }
 });
 
 // ----------------------------------------------------
