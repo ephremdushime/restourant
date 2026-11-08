@@ -114,7 +114,7 @@ Confirm that the host cron implementation supports `CRON_TZ`; otherwise set the 
 
 Each scheduled run creates PostgreSQL and private-photo archives with the same UTC timestamp. PostgreSQL custom-format dumps and photo archives are encrypted before upload. SHA-256 checksums and HMAC-SHA256 authentication tags are retained as sidecars. The coordinator validates the local artifacts, uploads each artifact to the date/timestamp folder in Google Drive, downloads each uploaded object again and compares it byte-for-byte, then uploads the paired manifest **last**. A manifest is the completion marker; a folder without its manifest is incomplete and must not be treated as a valid recovery point. A process lock prevents overlapping backup and verification jobs.
 
-The scripts retain local encrypted database, photo and manifest artifacts for 30 days by default. Remote Google Drive retention must be managed through the dedicated backup account's storage policy and reviewed periodically; do not configure automatic remote deletion until the retention policy and recovery requirements have been confirmed. The provider-managed monthly backup is an additional independent recovery layer.
+The scripts retain local encrypted database, photo and manifest artifacts for 30 days by default and enforce the same 30-day age-based retention in the dedicated Google Drive backup root after a new paired backup has been uploaded and read-back verified. Remote deletion is limited to the configured RestoPass backup root; configure that path as a dedicated folder and do not point it at a general-purpose Drive location. The provider-managed monthly backup is an additional independent recovery layer.
 
 ### Recovery verification and restore
 
