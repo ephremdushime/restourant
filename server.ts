@@ -449,10 +449,22 @@ function normalizeStationUserCredentials(state: any): boolean {
   for (const stationUser of state.stationUsers) {
     if (!stationUser || typeof stationUser !== 'object') continue;
 
-    // Station authentication verifies station passwordHash and pin using the
-    // same scrypt format as verifyServerStaffSecret. Preserve valid hashes.
+    // Station login verifies passwordHash and pin with the same scrypt format.
+    // Preserve valid hashes and hash only plaintext credentials.
     if (typeof stationUser.pin === 'string' && stationUser.pin.trim() &&
-        !stationUser.pin.startsWith('scrypt
+        !stationUser.pin.startsWith('scrypt$')) {
+      stationUser.pin = hashServerStaffSecret(stationUser.pin.trim());
+      changed = true;
+    }
+    if (typeof stationUser.passwordHash === 'string' &&
+        stationUser.passwordHash.length > 0 &&
+        !stationUser.passwordHash.startsWith('scrypt$')) {
+      stationUser.passwordHash = hashServerStaffSecret(stationUser.passwordHash);
+      changed = true;
+    }
+  }
+  return changed;
+}
 
 function getCurrentServerTimeStep(clockOffsetMs = 0): number {
   const effectiveTime = Date.now() + clockOffsetMs;
