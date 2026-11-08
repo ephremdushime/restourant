@@ -67,9 +67,34 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   const [customerGraceDaysInput, setCustomerGraceDaysInput] = useState<number>(studentSubSettings.graceDays ?? 3);
   const [feedbackToast, setFeedbackToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
+  const [savingCustomerPolicy, setSavingCustomerPolicy] = useState(false);
+
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setFeedbackToast({ message, type });
     setTimeout(() => setFeedbackToast(null), 3500);
+  };
+
+  const persistCustomerPolicy = async (updates: Partial<typeof studentSubSettings>) => {
+    if (savingCustomerPolicy) return false;
+    setSavingCustomerPolicy(true);
+    try {
+      const token = restoStore.getAuthToken();
+      const response = await fetch('/api/admin/settings/student-subscriptions', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+        body: JSON.stringify(updates),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || 'Could not save customer subscription policy.');
+      restoStore.updateStudentSubscriptionSettings(result.settings || updates, 'Super Admin');
+      showToast('Customer subscription policy saved successfully.');
+      return true;
+    } catch (error: any) {
+      showToast(error?.message || 'Customer subscription policy could not be saved.', 'error');
+      return false;
+    } finally {
+      setSavingCustomerPolicy(false);
+    }
   };
 
   // Create Restaurant State (With Custom Stations & Pricing Overrides)
@@ -749,11 +774,8 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
               <div className="flex items-center gap-3">
                 <button
-                  onClick={() => {
-                    restoStore.updateStudentSubscriptionSettings({
-                      enabled: !studentSubSettings.enabled,
-                    });
-                  }}
+                  disabled={savingCustomerPolicy}
+                  onClick={() => { void persistCustomerPolicy({ enabled: !studentSubSettings.enabled }); }}
                   className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all shadow-md cursor-pointer ${
                     studentSubSettings.enabled
                       ? 'bg-rose-600 hover:bg-rose-500 text-white'
@@ -820,7 +842,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                       showToast('Promotional end date must be after its start date.', 'error');
                       return;
                     }
-                    restoStore.updateStudentSubscriptionSettings({
+                    void persistCustomerPolicy({
                       priceRwf: Number(globalStudentFeeInput),
                       graceDays: Number(customerGraceDaysInput),
                       promoAccessEnabled: promoAccessEnabledInput,
@@ -828,7 +850,6 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                       promoEndsAt,
                       promoMessage: promoMessageInput,
                     });
-                    showToast('Customer subscription pricing and promotional policy saved.');
                   }}
                   className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md transition-colors cursor-pointer"
                 >
@@ -879,7 +900,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
               <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
                 <div className="text-[10px] text-slate-400 uppercase font-mono">Grace Period</div>
-                <div className="text-sm font-bold text-amber-400 font-mono mt-0.5">3 Days (72 Hours)</div>
+                <div className="text-sm font-bold text-amber-400 font-mono mt-0.5">{studentSubSettings.graceDays ?? 3} Calendar Day(s)</div>
                 <div className="text-[10px] text-slate-500 mt-0.5">Digital features preserved</div>
               </div>
 
