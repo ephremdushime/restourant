@@ -292,6 +292,23 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       assert.equal(updated.status, 'active');
       assert.equal(updated.currentLicenseId, 'trusted-license');
       assert.equal(updated.planId, 'trusted-plan');
+
+      // Restore the real fixture entitlement after proving the sync guard preserved
+      // the platform-controlled values. Later tenant-write tests must not inherit
+      // the deliberately invalid "trusted-license" sentinel.
+      const restored = serverModule.getServerDbState();
+      serverModule.setServerDbState({
+        ...restored,
+        restaurants: (restored.restaurants || []).map((restaurant: any) =>
+          restaurant.code === restaurantCode
+            ? { ...restaurant, status: 'active', currentLicenseId: licenseId, planId }
+            : restaurant
+        ),
+      });
+      await pool!.query(
+        "UPDATE restaurants SET data=data || jsonb_build_object('currentLicenseId',$2::text,'planId',$3::text),status='active' WHERE code=$1",
+        [restaurantCode, licenseId, planId]
+      );
     });
 
     await t.test('station accounts are hashed, persisted and bound to their assigned station', async () => {
