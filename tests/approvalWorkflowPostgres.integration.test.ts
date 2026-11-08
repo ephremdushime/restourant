@@ -556,12 +556,12 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
         ],
         stationUsers: [
           ...(currentState.stationUsers || []),
-          { id: staffId, restaurantCode, status: 'active', stationId: exceptionStationId, sessionVersion: 1 },
-          { id: otherStaffId, restaurantCode, status: 'active', stationId: exceptionOtherStationId, sessionVersion: 1 },
+          { id: 'exception_staff_' + restaurantCode, restaurantCode, username: 'exception.cashier', role: 'stand_staff', status: 'active', stationId: exceptionStationId, sessionVersion: 1 },
+          { id: 'exception_other_staff_' + restaurantCode, restaurantCode, username: 'exception.other.cashier', role: 'stand_staff', status: 'active', stationId: exceptionOtherStationId, sessionVersion: 1 },
         ],
       });
       const staffToken = serverModule.createSessionToken({
-        userId: staffId, username: 'Integration Scanner Operator',
+        userId: 'exception_staff_' + restaurantCode, username: 'exception.cashier',
         role: 'stand_staff', restaurantCode, stationId: exceptionStationId,
       });
       const secondCustomer = 'second_plate_customer_' + restaurantCode;
