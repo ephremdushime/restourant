@@ -113,6 +113,16 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       assert.equal(blockedLogin.status, 401);
     });
 
+    // This suite exercises approval logic, not tenant billing. Tenant-admin
+    // provisioning may initialize a pending SaaS record, so restore the explicitly
+    // active test tenant before exercising approval endpoints.
+    const approvalTestState = serverModule.getServerDbState();
+    approvalTestState.restaurants = (approvalTestState.restaurants || []).map((item: any) =>
+      item.code === restaurantCode ? { ...item, status: 'active' } : item
+    );
+    serverModule.setServerDbState(approvalTestState);
+    await pool!.query("UPDATE restaurants SET status='active',data=jsonb_set(data,'{status}','\"active\"'::jsonb) WHERE code=$1", [restaurantCode]);
+
     await t.test('registration creates customer and approval atomically; grace usage reconciles once', async () => {
       const created = await post('/api/approvals/registration', bossToken, registration('A', 60, '+250780000001'));
       assert.equal(created.status, 201, JSON.stringify(created.body));
@@ -523,9 +533,9 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
           { id: exceptionOtherStationId, restaurantCode, status: 'active', isPaired: true, name: 'Other Exception Scanner' },
         ],
         stationUsers: [
-          ...(currentState.stationUsers || []),
-          { id: staffId, restaurantCode, status: 'active', stationId: exceptionStationId, sessionVersion: 1 },
-          { id: otherStaffId, restaurantCode, status: 'active', stationId: exceptionOtherStationId, sessionVersion: 1 },
+          ...(currentState.stationUsers || []).filter((item: any) => item.id !== staffId && item.id !== otherStaffId),
+          { id: staffId, username: 'exception.operator', restaurantCode, status: 'active', stationId: exceptionStationId, sessionVersion: 1 },
+          { id: otherStaffId, username: 'exception.operator.other', restaurantCode, status: 'active', stationId: exceptionOtherStationId, sessionVersion: 1 },
         ],
       });
       const staffToken = serverModule.createSessionToken({
