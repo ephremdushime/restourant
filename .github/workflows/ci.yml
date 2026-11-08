@@ -168,20 +168,48 @@ jobs:
 
       - name: Smoke-test production Docker container
         run: |
-          docker run --detach --name restopass-app-smoke \
+          network=restopass-smoke-network
+          docker network create "$network"
+          cleanup() {
+            docker logs restopass-app-smoke || true
+            docker rm --force restopass-app-smoke restopass-postgres-smoke restopass-redis-smoke >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker run --detach --name restopass-postgres-smoke --network "$network" --network-alias postgres \
+            --env POSTGRES_DB=restopass --env POSTGRES_USER=restopass --env POSTGRES_PASSWORD=ci-smoke-postgres-password \
+            postgres:16-alpine
+          docker run --detach --name restopass-redis-smoke --network "$network" --network-alias redis redis:7-alpine
+
+          database_ready=0
+          for attempt in $(seq 1 30); do
+            if docker exec restopass-postgres-smoke pg_isready -U restopass -d restopass >/dev/null 2>&1; then
+              database_ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$database_ready" -ne 1 ]; then
+            echo "Isolated PostgreSQL service did not become ready."
+            docker logs restopass-postgres-smoke
+            exit 1
+          fi
+
+          docker run --detach --name restopass-app-smoke --network "$network" \
             --publish 127.0.0.1:3300:3000 \
             --env NODE_ENV=production \
-            --env RESTOPASS_DEPLOYMENT_MODE=standalone \
             --env PORT=3000 \
+            --env DATABASE_URL=postgres://restopass:ci-smoke-postgres-password@postgres:5432/restopass \
+            --env REDIS_URL=redis://redis:6379 \
             --env SESSION_SECRET="$(openssl rand -hex 32)" \
             --env RESTOPASS_MASTER_SECRET="$(openssl rand -hex 32)" \
             --env RESTOPASS_SUPERADMIN_PASSWORD="$(openssl rand -hex 24)" \
             --env 'RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS={"RW01":{"username":"manager@rw01.test","password":"ci_unique_admin_password_rw01_2026"}}' \
             restopass-ci:${{ github.sha }}
-          cleanup() { docker logs restopass-app-smoke || true; docker rm --force restopass-app-smoke >/dev/null 2>&1 || true; }
-          trap cleanup EXIT
+
           ready=0
-          for attempt in $(seq 1 30); do
+          for attempt in $(seq 1 45); do
             if curl --fail --silent http://127.0.0.1:3300/api/ready >/tmp/restopass-ready.json; then
               ready=1
               break
@@ -189,11 +217,15 @@ jobs:
             sleep 2
           done
           if [ "$ready" -ne 1 ]; then
-            echo "Production container did not become ready."
+            echo "Production container did not become ready with isolated PostgreSQL and Redis."
             cat /tmp/restopass-ready.json || true
+            docker logs restopass-postgres-smoke
+            docker logs restopass-redis-smoke
             exit 1
           fi
           grep -q '"status":"ready"' /tmp/restopass-ready.json
+          grep -q '"database":true' /tmp/restopass-ready.json
+          grep -q '"cache":true' /tmp/restopass-ready.json
           curl --fail --silent http://127.0.0.1:3300/api/health >/dev/null
 
       - name: Build Production Bundle
