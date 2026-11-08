@@ -6947,9 +6947,9 @@ app.post('/api/sync', syncRateLimiter, requireAuth(), async (req, res) => {
       }
 
       if (user.role === 'super_admin') {
-        mergeScopedCollection('customerSubscriptions', true);
-        mergeScopedCollection('studentSubscriptionPayments', true);
-        mergeScopedCollection('subscriptionPayments', true);
+        // Customer subscription entitlements and payment ledgers are deliberately
+        // excluded from generic browser sync for every role. They may only change
+        // through verified MTN settlement or the audited complimentary-access API.
         mergeScopedCollection('plans', true);
         // Restaurant licences are derived from verified SaaS payment transactions.
         // Never accept client-supplied licence creation or mutation through state sync.
