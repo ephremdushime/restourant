@@ -147,8 +147,6 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         transferRes,
         auditRes,
         settingsRes,
-        restoSubRes,
-        restoSubPayRes,
       ] = await Promise.all([
         client.query('SELECT data FROM restaurants ORDER BY code ASC'),
         client.query('SELECT data FROM licenses ORDER BY id ASC'),
@@ -166,8 +164,6 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         client.query('SELECT data FROM transfers ORDER BY created_at DESC'),
         client.query('SELECT data FROM audit_logs ORDER BY created_at DESC LIMIT 5000'),
         client.query('SELECT key, value FROM system_settings'),
-        client.query('SELECT data FROM restaurant_subscriptions ORDER BY updated_at DESC'),
-        client.query('SELECT data FROM restaurant_subscription_payments ORDER BY created_at DESC'),
       ]);
 
       const settingsMap = new Map<string, any>(
@@ -223,16 +219,11 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         activationRequests: settingsMap.get('activationRequests') || [],
         pinRecoveryRequests: settingsMap.get('pinRecoveryRequests') || [],
         studentSubscriptionPayments: settingsMap.get('studentSubscriptionPayments') || [],
-        restaurantSubscriptions: mergeByKey(
-          restoSubRes.rows.map((r: { data: any }) => r.data),
-          settingsMap.get('restaurantSubscriptions') || [],
-          'restaurantCode'
-        ),
-        restaurantSubscriptionPayments: mergeByKey(
-          restoSubPayRes.rows.map((r: { data: any }) => r.data),
-          settingsMap.get('restaurantSubscriptionPayments') || [],
-          'id'
-        ),
+        // These billing tables are normalized relational tables and do not
+        // contain a JSONB "data" column. Until their row mappers and write path
+        // are migrated together, hydrate the durable JSONB settings snapshots.
+        restaurantSubscriptions: settingsMap.get('restaurantSubscriptions') || [],
+        restaurantSubscriptionPayments: settingsMap.get('restaurantSubscriptionPayments') || [],
         subscriptionPayments: settingsMap.get('subscriptionPayments') || [],
         activationCodes: settingsMap.get('activationCodes') || [],
         deletionTombstones: settingsMap.get('deletionTombstones') || [],
