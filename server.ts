@@ -2690,11 +2690,11 @@ app.post('/api/qr/token/phone', apiRateLimiter, requireAuth(), (req, res) => {
   });
 });
 
-// POST /api/qr/token/card: Authoritative generation of physical card QR (Managers & Admins only)
+// POST /api/qr/token/card: Authoritative generation of physical card QR (Managers, Staff & Super Admins only)
 app.post(
   '/api/qr/token/card',
   apiRateLimiter,
-  requireAuth(['super_admin', 'restaurant_admin', 'stand_staff', 'customer']),
+  requireAuth(['super_admin', 'restaurant_admin', 'stand_staff']),
   (req, res) => {
     const { restaurantCode, memberNo } = req.body;
     const user = req.user!;
@@ -2710,14 +2710,7 @@ app.post(
       return res.status(404).json({ success: false, error: 'Customer not found in this restaurant.' });
     }
 
-    if (user.role === 'customer') {
-      if (customerRecord.id !== user.userId || user.restaurantCode !== restaurantCode) {
-        return res.status(403).json({ success: false, error: 'Forbidden: Customers may only generate their own card pass' });
-      }
-      if (customerRecord.cardStatus === 'locked') {
-        return res.status(403).json({ success: false, error: 'This card is locked and cannot be presented for scanning.' });
-      }
-    } else if ((user.role === 'restaurant_admin' || user.role === 'stand_staff') && user.restaurantCode !== restaurantCode) {
+    if ((user.role === 'restaurant_admin' || user.role === 'stand_staff') && user.restaurantCode !== restaurantCode) {
       return res.status(403).json({ success: false, error: 'Forbidden: Cannot generate cards for other restaurants' });
     }
 
@@ -5212,6 +5205,21 @@ function checkServerStudentEntitlement(
       reason: lifecycleCustomer.customerAccessStatus === 'pending_super_admin_activation'
         ? 'Super Admin must activate the complimentary month before digital dashboard access begins.'
         : 'Your dashboard access period has expired. Pay the monthly access fee to continue.',
+    };
+  }
+
+  if (
+    feature === 'digital_qr' &&
+    lifecycleCustomer?.registrationStatus === 'pending_boss_approval' &&
+    lifecycleCustomer.receptionPaymentStatus === 'confirmed'
+  ) {
+    return {
+      allowed: true,
+      feature,
+      status: 'grace_period',
+      inGracePeriod: true,
+      enforcementEnabled: Boolean(settings?.enabled),
+      reason: 'Reception payment confirmed: provisional rotating QR pass allowed during grace period.',
     };
   }
 
