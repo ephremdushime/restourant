@@ -405,3 +405,113 @@ main th {
     overscroll-behavior: contain;
   }
 }
+
+
+/* Role-specific mobile ergonomics for the three operational workspaces. */
+@media (max-width: 767px) {
+  .restaurant-admin-workspace,
+  .platform-admin-workspace,
+  .scanner-workspace {
+    width: 100%;
+    max-width: 100%;
+    padding-inline: 0.75rem;
+  }
+
+  .restaurant-admin-nav {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .restaurant-admin-nav > button {
+    flex: 1 1 9.5rem;
+    min-width: 0;
+    min-height: 2.75rem;
+    justify-content: flex-start;
+    white-space: normal;
+    text-align: left;
+    line-height: 1.25;
+  }
+
+  .platform-admin-tabs > button {
+    flex: 1 1 9rem;
+    min-width: 0;
+    min-height: 2.75rem;
+    white-space: normal;
+    text-align: left;
+    line-height: 1.25;
+  }
+
+  .scanner-workspace > div:first-child {
+    align-items: stretch;
+  }
+
+  .scanner-toolbar {
+    width: 100%;
+    min-width: 0;
+    align-items: stretch;
+  }
+
+  .scanner-toolbar > button {
+    flex: 1 1 9rem;
+    min-width: 0;
+    min-height: 2.75rem;
+    justify-content: center;
+  }
+
+  .scanner-toolbar > div {
+    flex: 1 1 100%;
+    min-width: 0;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  .scanner-toolbar input[type="range"] {
+    min-width: 4rem;
+    flex: 1 1 4rem;
+  }
+
+  .scanner-workspace form input {
+    min-height: 3.5rem;
+    padding-left: 2.75rem;
+    padding-right: 5.5rem;
+    font-size: 1rem;
+  }
+
+  .scanner-workspace form button[type="submit"] {
+    min-width: 4.25rem;
+    min-height: 2.5rem;
+    padding-inline: 0.75rem;
+  }
+
+  .scanner-workspace [role="alert"],
+  .scanner-workspace [role="status"] {
+    overflow-wrap: anywhere;
+  }
+
+  .platform-admin-workspace > div:first-child > div:first-child {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .platform-admin-workspace > div:first-child > div:last-child {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .platform-admin-workspace > div:first-child > div:last-child > button {
+    flex: 1 1 10rem;
+    min-height: 2.75rem;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 380px) {
+  .scanner-toolbar > button {
+    flex-basis: 100%;
+  }
+
+  .restaurant-admin-nav > button,
+  .platform-admin-tabs > button {
+    flex-basis: 100%;
+  }
+}
