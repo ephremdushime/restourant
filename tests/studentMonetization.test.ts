@@ -58,6 +58,21 @@ describe('RestoPass Student Monetization — Specification & Business Rules', ()
   });
 
   describe('2. Subscription Pricing & Integer-Safe Currency Representation', () => {
+    test('customer monthly fee is global and ignores legacy restaurant-specific overrides', () => {
+      const state = restoStore.getState();
+      const existing = state.restaurants.find((r) => r.code === 'PRICE_POLICY_TEST');
+      if (!existing) {
+        state.restaurants.push({
+          code: 'PRICE_POLICY_TEST', name: 'Price Policy Test', legalEntity: 'Test Entity',
+          phone: '+250788000000', email: 'test@example.invalid', address: 'Kigali',
+          currency: 'RWF', planId: 'plan_test', status: 'active',
+          studentSubscriptionPriceRwf: 9000,
+        } as any);
+      }
+      restoStore.updateStudentSubscriptionSettings({ priceRwf: 1250 });
+      assert.equal(restoStore.getStudentSubscriptionPrice('PRICE_POLICY_TEST'), 1250);
+    });
+
     test('monthly subscription price is exactly 500 RWF integer safe (no fractional minor unit errors)', () => {
       const settings = restoStore.getStudentSubscriptionSettings();
       assert.equal(typeof settings.priceRwf, 'number');
@@ -89,7 +104,7 @@ describe('RestoPass Student Monetization — Specification & Business Rules', ()
       assert.equal(sub.status, 'pending_payment');
     });
 
-    test('verified mobile money callback activates subscription and sets 30-day period + 72h grace', () => {
+    test('verified demo payment activates subscription for one calendar month + configured grace', () => {
       const checkout = restoStore.initiateStudentCheckout({
         customerId: 'cust_28491',
         phoneNumber: '+250 788 123 456',
@@ -108,11 +123,12 @@ describe('RestoPass Student Monetization — Specification & Business Rules', ()
       const endMs = new Date(verifyRes.subscription.currentPeriodEnd!).getTime();
       const graceMs = new Date(verifyRes.subscription.gracePeriodEnd!).getTime();
 
-      const expectedDurationMs = 30 * 24 * 3600 * 1000;
-      const expectedGraceMs = 3 * 24 * 3600 * 1000; // 72 hours
+      const expectedEnd = new Date(startMs);
+      expectedEnd.setUTCMonth(expectedEnd.getUTCMonth() + 1);
+      const expectedGraceMs = 3 * 24 * 3600 * 1000;
 
-      assert.ok(Math.abs(endMs - startMs - expectedDurationMs) < 5000, 'Current period must be ~30 days');
-      assert.ok(Math.abs(graceMs - endMs - expectedGraceMs) < 5000, 'Grace period must be exactly 72h (3 days)');
+      assert.equal(endMs, expectedEnd.getTime(), 'Current period must end one calendar month after payment');
+      assert.ok(Math.abs(graceMs - endMs - expectedGraceMs) < 5000, 'Grace period must be exactly 3 calendar days');
     });
 
     test('duplicate payment callbacks are handled idempotently without extending subscription period', () => {
@@ -222,7 +238,7 @@ describe('RestoPass Student Monetization — Specification & Business Rules', ()
       assert.equal(entitlement.allowed, true);
     });
 
-    test('granting complimentary access requires mandatory reason and sets valid dates without fabricated payments', () => {
+    test('granting and revoking complimentary access require mandatory reasons and update entitlement state', async () => {
       restoStore.updateStudentSubscriptionSettings({ enabled: true });
 
       // Missing reason must be rejected
@@ -250,10 +266,77 @@ describe('RestoPass Student Monetization — Specification & Business Rules', ()
       assert.equal(ent.allowed, true);
       assert.equal(ent.status, 'complimentary');
 
-      // Revocation works
-      const revokeRes = restoStore.revokeComplimentarySubscription('cust_28492', 'Term ended');
+      // Revocation without a reason is rejected and leaves the entitlement active.
+      const emptyRevokeRes = await restoStore.revokeComplimentarySubscription('cust_28492', '');
+      assert.equal(emptyRevokeRes.success, false);
+      assert.match(emptyRevokeRes.error || '', /mandatory revocation reason/i);
+      assert.equal(restoStore.getCustomerSubscription('cust_28492')?.status, 'complimentary');
+
+      // A reasoned revocation expires access and is auditable.
+      const revokeRes = await restoStore.revokeComplimentarySubscription('cust_28492', 'Academic term ended');
       assert.equal(revokeRes.success, true);
+      assert.equal(restoStore.getCustomerSubscription('cust_28492')?.status, 'expired');
       assert.equal(restoStore.checkStudentEntitlement('cust_28492', 'digital_plate_transfer').allowed, false);
+      assert.ok(restoStore.getState().auditLogs.some((entry) =>
+        entry.action === 'COMPLIMENTARY_STUDENT_SUBSCRIPTION_REVOKED' &&
+        entry.details.includes('Academic term ended')
+      ));
+    });
+  });
+
+  describe('5A. Global Promotional Access Policy', () => {
+    test('approved customers receive promotional access before payment enforcement', () => {
+      const now = Date.now();
+      const endsAt = new Date(now + 30 * 86400000).toISOString();
+      const state: any = {
+        studentSubscriptionSettings: {
+          enabled: true, priceRwf: 1250, currency: 'RWF', period: 'monthly', graceDays: 3,
+          promoAccessEnabled: true,
+          promoStartsAt: new Date(now - 86400000).toISOString(),
+          promoEndsAt: endsAt,
+          promoMessage: 'Launch promotion',
+          requireForTransfers: true, requireForDashboard: true,
+        },
+        customers: [{ id: 'promo_customer', restaurantCode: 'RW01', registrationStatus: 'approved', customerAccessStatus: 'payment_required' }],
+        customerSubscriptions: [],
+      };
+      const entitlement = checkServerStudentEntitlement('promo_customer', 'customer_dashboard', state);
+      assert.equal(entitlement.allowed, true);
+      assert.equal(entitlement.status, 'complimentary');
+      assert.equal(entitlement.expiresAt, endsAt);
+      assert.match(entitlement.reason || '', /launch promotion/i);
+    });
+
+    test('expired promotion requires payment when global enforcement is enabled', () => {
+      const state: any = {
+        studentSubscriptionSettings: {
+          enabled: true, priceRwf: 1250, currency: 'RWF', period: 'monthly', graceDays: 3,
+          promoAccessEnabled: true,
+          promoStartsAt: new Date(Date.now() - 60 * 86400000).toISOString(),
+          promoEndsAt: new Date(Date.now() - 1000).toISOString(),
+          requireForTransfers: true, requireForDashboard: true,
+        },
+        customers: [{ id: 'promo_expired', restaurantCode: 'RW01', registrationStatus: 'approved', customerAccessStatus: 'payment_required' }],
+        customerSubscriptions: [],
+      };
+      const entitlement = checkServerStudentEntitlement('promo_expired', 'customer_dashboard', state);
+      assert.equal(entitlement.allowed, false);
+      assert.equal(entitlement.enforcementEnabled, true);
+    });
+
+    test('disabling customer payment enforcement restores free access despite legacy expired status', () => {
+      const state: any = {
+        studentSubscriptionSettings: {
+          enabled: false, priceRwf: 1250, currency: 'RWF', period: 'monthly', graceDays: 3,
+          promoAccessEnabled: false, requireForTransfers: true, requireForDashboard: true,
+        },
+        customers: [{ id: 'promo_disabled', restaurantCode: 'RW01', registrationStatus: 'approved', customerAccessStatus: 'expired' }],
+        customerSubscriptions: [{ id: 'sub-expired', customerId: 'promo_disabled', restaurantCode: 'RW01', status: 'expired' }],
+      };
+      const entitlement = checkServerStudentEntitlement('promo_disabled', 'customer_dashboard', state);
+      assert.equal(entitlement.allowed, true);
+      assert.equal(entitlement.status, 'complimentary');
+      assert.equal(entitlement.enforcementEnabled, false);
     });
   });
 

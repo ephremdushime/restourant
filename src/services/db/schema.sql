@@ -158,6 +158,39 @@ CREATE TABLE IF NOT EXISTS customer_subscriptions (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Dedicated ledger for RestoPass customer-dashboard subscription payments.
+-- Meal top-ups and restaurant SaaS subscriptions are deliberately separate.
+CREATE TABLE IF NOT EXISTS customer_subscription_payments (
+    id VARCHAR(64) PRIMARY KEY,
+    customer_id VARCHAR(64) NOT NULL,
+    restaurant_code VARCHAR(32) NOT NULL,
+    provider VARCHAR(24) NOT NULL CHECK (provider IN ('mtn_momo','airtel_money','cash','bank_transfer')),
+    provider_environment VARCHAR(16) CHECK (provider_environment IS NULL OR provider_environment IN ('sandbox','production')),
+    internal_reference VARCHAR(64) NOT NULL UNIQUE,
+    provider_transaction_id VARCHAR(128),
+    payer_msisdn VARCHAR(24),
+    amount_rwf INT NOT NULL CHECK (amount_rwf > 0),
+    months_purchased INT NOT NULL DEFAULT 1 CHECK (months_purchased BETWEEN 1 AND 24),
+    currency CHAR(3) NOT NULL DEFAULT 'RWF' CHECK (currency = 'RWF'),
+    status VARCHAR(24) NOT NULL DEFAULT 'created'
+      CHECK (status IN ('created','provider_pending','pending','verified','successful','failed','cancelled','expired','review_required')),
+    idempotency_key VARCHAR(128) NOT NULL,
+    request_fingerprint VARCHAR(64) NOT NULL,
+    data JSONB NOT NULL,
+    verified_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_subscription_idempotency
+    ON customer_subscription_payments (restaurant_code, customer_id, idempotency_key);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_subscription_provider_transaction
+    ON customer_subscription_payments (provider, provider_environment, provider_transaction_id)
+    WHERE provider_transaction_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_customer_subscription_payment_history
+    ON customer_subscription_payments (restaurant_code, customer_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_customer_subscription_payment_reconciliation
+    ON customer_subscription_payments (provider, status, created_at);
+
 -- 6. Balance Checkpoints for Fast O(1) Balance Calculation
 CREATE TABLE IF NOT EXISTS balance_checkpoints (
     id VARCHAR(64) PRIMARY KEY,
@@ -295,6 +328,49 @@ CREATE TABLE IF NOT EXISTS system_settings (
     value JSONB NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- One-time, repeat-safe migration of legacy customer subscription payment history
+-- out of system_settings into the normalized ledger.
+INSERT INTO customer_subscription_payments
+  (id,customer_id,restaurant_code,provider,provider_environment,internal_reference,provider_transaction_id,
+   payer_msisdn,amount_rwf,months_purchased,currency,status,idempotency_key,request_fingerprint,data,verified_at,created_at,updated_at)
+SELECT
+  payment->>'id',
+  payment->>'customerId',
+  payment->>'restaurantCode',
+  CASE WHEN payment->>'provider' IN ('mtn_momo','airtel_money','cash','bank_transfer') THEN payment->>'provider' ELSE 'cash' END,
+  CASE WHEN payment->>'providerEnvironment' IN ('sandbox','production') THEN payment->>'providerEnvironment' ELSE NULL END,
+  COALESCE(NULLIF(payment->>'internalReference',''), 'LEGACY-' || (payment->>'id')),
+  NULLIF(payment->>'providerTransactionId',''),
+  COALESCE(NULLIF(payment->>'payerMsisdn',''), NULLIF(payment->>'phoneNumber',''), NULLIF(payment->>'phone','')),
+  (payment->>'amountRwf')::integer,
+  GREATEST(1, LEAST(24, COALESCE(NULLIF(payment->>'monthsPurchased','')::integer, 1))),
+  'RWF',
+  CASE WHEN payment->>'status' IN ('created','provider_pending','pending','verified','successful','failed','cancelled','expired','review_required')
+       THEN payment->>'status' ELSE 'pending' END,
+  COALESCE(NULLIF(payment->>'idempotencyKey',''), payment->>'id'),
+  COALESCE(NULLIF(payment->>'requestFingerprint',''), md5(payment::text)),
+  payment,
+  CASE WHEN NULLIF(payment->>'verifiedAt','') IS NOT NULL THEN (payment->>'verifiedAt')::timestamptz ELSE NULL END,
+  COALESCE(
+    CASE WHEN NULLIF(payment->>'initiatedAt','') IS NOT NULL THEN (payment->>'initiatedAt')::timestamptz ELSE NULL END,
+    CASE WHEN NULLIF(payment->>'createdAt','') IS NOT NULL THEN (payment->>'createdAt')::timestamptz ELSE NULL END,
+    NOW()
+  ),
+  NOW()
+FROM system_settings s
+CROSS JOIN LATERAL jsonb_array_elements(
+  CASE WHEN jsonb_typeof(s.value)='array' THEN s.value ELSE '[]'::jsonb END
+) AS payment_rows(payment)
+WHERE s.key='studentSubscriptionPayments'
+  AND payment->>'id' IS NOT NULL
+  AND payment->>'customerId' IS NOT NULL
+  AND payment->>'restaurantCode' IS NOT NULL
+  AND COALESCE(NULLIF(payment->>'amountRwf','')::integer, 0) > 0
+ON CONFLICT (id) DO NOTHING;
+
+-- Remove the legacy snapshot after migration so stale data cannot resurrect deleted ledger rows.
+DELETE FROM system_settings WHERE key='studentSubscriptionPayments';
 
 -- 17. Multi-Instance Token Replay Guard Table (Fallback if Redis is unreachable)
 CREATE TABLE IF NOT EXISTS used_tokens (
@@ -442,12 +518,18 @@ CREATE TABLE IF NOT EXISTS restaurant_subscriptions (
     id VARCHAR(64) PRIMARY KEY,
     restaurant_code VARCHAR(32) NOT NULL UNIQUE REFERENCES restaurants(code) ON DELETE CASCADE,
     status VARCHAR(24) NOT NULL DEFAULT 'pending_payment'
-      CHECK (status IN ('pending_payment','active','grace_period','restricted','cancelled')),
-    price_rwf INT NOT NULL CHECK (price_rwf > 0),
+      CHECK (status IN ('pending_payment','complimentary','active','grace_period','restricted','cancelled')),
+    price_rwf INT NOT NULL CHECK (price_rwf >= 0),
     currency CHAR(3) NOT NULL DEFAULT 'RWF' CHECK (currency = 'RWF'),
     current_period_start TIMESTAMPTZ,
     current_period_end TIMESTAMPTZ,
+    billing_anchor_day SMALLINT CHECK (billing_anchor_day BETWEEN 1 AND 31),
     grace_period_end TIMESTAMPTZ,
+    complimentary_started_at TIMESTAMPTZ,
+    complimentary_ends_at TIMESTAMPTZ,
+    complimentary_duration_value INT NOT NULL DEFAULT 0 CHECK (complimentary_duration_value >= 0),
+    complimentary_duration_unit VARCHAR(12) NOT NULL DEFAULT 'days' CHECK (complimentary_duration_unit IN ('days','months','years')),
+    renewal_grace_days INT NOT NULL DEFAULT 3 CHECK (renewal_grace_days BETWEEN 0 AND 365),
     last_payment_id VARCHAR(64),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -455,7 +537,24 @@ CREATE TABLE IF NOT EXISTS restaurant_subscriptions (
       (status = 'pending_payment' AND current_period_start IS NULL AND current_period_end IS NULL)
       OR status <> 'pending_payment'
     )
-);
+ );
+ALTER TABLE restaurant_subscriptions DROP CONSTRAINT IF EXISTS restaurant_subscriptions_price_rwf_check;
+ALTER TABLE restaurant_subscriptions ADD CONSTRAINT restaurant_subscriptions_price_rwf_check CHECK (price_rwf >= 0);
+ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS billing_anchor_day SMALLINT CHECK (billing_anchor_day BETWEEN 1 AND 31);
+ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS complimentary_started_at TIMESTAMPTZ;
+ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS complimentary_ends_at TIMESTAMPTZ;
+ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS complimentary_duration_value INT NOT NULL DEFAULT 0;
+ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS complimentary_duration_unit VARCHAR(12) NOT NULL DEFAULT 'days';
+ALTER TABLE restaurant_subscriptions ADD COLUMN IF NOT EXISTS renewal_grace_days INT NOT NULL DEFAULT 3;
+ALTER TABLE restaurant_subscriptions DROP CONSTRAINT IF EXISTS restaurant_subscriptions_status_check;
+ALTER TABLE restaurant_subscriptions ADD CONSTRAINT restaurant_subscriptions_status_check
+  CHECK (status IN ('pending_payment','complimentary','active','grace_period','restricted','cancelled'));
+ALTER TABLE restaurant_subscriptions DROP CONSTRAINT IF EXISTS restaurant_subscriptions_complimentary_duration_unit_check;
+ALTER TABLE restaurant_subscriptions ADD CONSTRAINT restaurant_subscriptions_complimentary_duration_unit_check
+  CHECK (complimentary_duration_unit IN ('days','months','years'));
+ALTER TABLE restaurant_subscriptions DROP CONSTRAINT IF EXISTS restaurant_subscriptions_renewal_grace_days_check;
+ALTER TABLE restaurant_subscriptions ADD CONSTRAINT restaurant_subscriptions_renewal_grace_days_check
+  CHECK (renewal_grace_days BETWEEN 0 AND 365);
 CREATE INDEX IF NOT EXISTS idx_restaurant_subscriptions_status
   ON restaurant_subscriptions (status, current_period_end);
 
@@ -470,6 +569,7 @@ CREATE TABLE IF NOT EXISTS restaurant_subscription_payments (
     provider_transaction_id VARCHAR(128),
     payer_msisdn VARCHAR(24) NOT NULL,
     amount_rwf INT NOT NULL CHECK (amount_rwf > 0),
+    months_purchased INT NOT NULL DEFAULT 1 CHECK (months_purchased BETWEEN 1 AND 24),
     currency CHAR(3) NOT NULL DEFAULT 'RWF' CHECK (currency = 'RWF'),
     status VARCHAR(24) NOT NULL DEFAULT 'created'
       CHECK (status IN ('created','provider_pending','successful','failed','cancelled','expired','review_required')),
@@ -480,7 +580,11 @@ CREATE TABLE IF NOT EXISTS restaurant_subscription_payments (
     entitlement_applied_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+ );
+ALTER TABLE restaurant_subscription_payments ADD COLUMN IF NOT EXISTS months_purchased INT NOT NULL DEFAULT 1;
+ALTER TABLE restaurant_subscription_payments DROP CONSTRAINT IF EXISTS restaurant_subscription_payments_months_purchased_check;
+ALTER TABLE restaurant_subscription_payments ADD CONSTRAINT restaurant_subscription_payments_months_purchased_check
+  CHECK (months_purchased BETWEEN 1 AND 24);
 -- Existing deployments must accept a final provider-success that fails a strict match.
 ALTER TABLE restaurant_subscription_payments
   DROP CONSTRAINT IF EXISTS restaurant_subscription_payments_status_check;

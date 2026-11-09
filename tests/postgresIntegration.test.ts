@@ -39,6 +39,11 @@ test('P0-02, P0-03, P0-10: monotonic snapshot SQL guards, checkpoint-aware balan
   assert.match(adapterSource, /WHERE COALESCE\(scan_events\.status, ''\) <> 'undone'/);
   assert.match(adapterSource, /WHERE COALESCE\(transfers\.data->>'status', ''\) <> 'reversed'/);
   assert.match(adapterSource, /WHERE pending_approvals\.status = 'pending'/);
+  // Protocol Section 3.2: normalized relational read/write mappers for SaaS billing tables
+  assert.match(adapterSource, /FROM restaurant_subscriptions/);
+  assert.match(adapterSource, /FROM restaurant_subscription_payments/);
+  assert.match(adapterSource, /INSERT INTO restaurant_subscriptions/);
+  assert.match(adapterSource, /INSERT INTO restaurant_subscription_payments/);
   assert.equal(typeof upsertCustomerRecordPostgres, 'function');
   assert.equal(typeof computeCustomerBalanceSql, 'function');
 
@@ -350,6 +355,12 @@ test('PostgreSQL persistence round-trip and concurrent transfer invariants', {
     assert.ok(loaded.studentSubscriptionPayments.some((item: any) => item.id === `student_payment_${suffix}`));
     assert.ok(loaded.restaurantSubscriptions.some((item: any) => item.id === `restaurant_sub_${suffix}`));
     assert.ok(loaded.restaurantSubscriptionPayments.some((item: any) => item.id === `restaurant_payment_${suffix}`));
+    const relationalSubRow = await pool.query('SELECT id, restaurant_code, status FROM restaurant_subscriptions WHERE id = $1', [`restaurant_sub_${suffix}`]);
+    assert.equal(relationalSubRow.rowCount, 1);
+    assert.equal(relationalSubRow.rows[0].restaurant_code, restaurantCode);
+    const relationalPayRow = await pool.query('SELECT id, restaurant_code, amount_rwf FROM restaurant_subscription_payments WHERE id = $1', [`restaurant_payment_${suffix}`]);
+    assert.equal(relationalPayRow.rowCount, 1);
+    assert.equal(Number(relationalPayRow.rows[0].amount_rwf), 65000);
     assert.ok(loaded.subscriptionPayments.some((item: any) => item.id === `subscription_payment_${suffix}`));
     assert.ok(loaded.activationCodes.some((item: any) => item.id === `activation_${suffix}`));
     assert.ok(loaded.deletionTombstones.some((item: any) => item.id === `tombstone_menu_${suffix}`));

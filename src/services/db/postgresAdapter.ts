@@ -136,6 +136,8 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         customerRes,
         ledgerRes,
         subRes,
+        restaurantSubRes,
+        restaurantSubPaymentRes,
         checkpointRes,
         paymentRes,
         scanRes,
@@ -147,12 +149,32 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         transferRes,
         auditRes,
         settingsRes,
+        restoSubRes,
+        restoSubPayRes,
       ] = await Promise.all([
         client.query('SELECT data FROM restaurants ORDER BY code ASC'),
         client.query('SELECT data FROM licenses ORDER BY id ASC'),
         client.query('SELECT data FROM customers ORDER BY created_at ASC'),
         client.query('SELECT data FROM ledger_entries ORDER BY timestamp ASC'),
         client.query('SELECT data FROM customer_subscriptions ORDER BY created_at ASC'),
+        client.query('SELECT data FROM customer_subscription_payments ORDER BY created_at ASC'),
+        client.query(
+          `SELECT id, restaurant_code, status, price_rwf, currency,
+                  current_period_start, current_period_end, billing_anchor_day,
+                  grace_period_end, complimentary_started_at, complimentary_ends_at,
+                  complimentary_duration_value, complimentary_duration_unit,
+                  renewal_grace_days, last_payment_id, created_at, updated_at
+           FROM restaurant_subscriptions
+           ORDER BY updated_at DESC`
+        ),
+        client.query(
+          `SELECT id, restaurant_code, provider, provider_environment, internal_reference,
+                  provider_transaction_id, payer_msisdn, amount_rwf, months_purchased,
+                  currency, status, idempotency_key, request_fingerprint, provider_status,
+                  verified_at, entitlement_applied_at, created_at, updated_at
+           FROM restaurant_subscription_payments
+           ORDER BY created_at DESC`
+        ),
         client.query('SELECT data FROM balance_checkpoints ORDER BY cutoff_timestamp ASC'),
         client.query('SELECT data FROM payments ORDER BY created_at ASC'),
         client.query('SELECT data FROM scan_events ORDER BY created_at DESC LIMIT 5000'),
@@ -164,20 +186,114 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         client.query('SELECT data FROM transfers ORDER BY created_at DESC'),
         client.query('SELECT data FROM audit_logs ORDER BY created_at DESC LIMIT 5000'),
         client.query('SELECT key, value FROM system_settings'),
+        client.query('SELECT data FROM restaurant_subscriptions ORDER BY updated_at DESC'),
+        client.query('SELECT data FROM restaurant_subscription_payments ORDER BY created_at DESC'),
       ]);
 
       const settingsMap = new Map<string, any>(
         settingsRes.rows.map((r: { key: string; value: any }) => [r.key, r.value])
       );
 
+      const toIsoOrNull = (val: any): string | null => {
+        if (!val) return null;
+        const d = val instanceof Date ? val : new Date(val);
+        return Number.isFinite(d.getTime()) ? d.toISOString() : null;
+      };
+
+      const mappedRestaurantSubscriptions = restaurantSubRes.rows.map((r: any) => {
+        const currentPeriodStart = toIsoOrNull(r.current_period_start);
+        const currentPeriodEnd = toIsoOrNull(r.current_period_end);
+        const gracePeriodEnd = toIsoOrNull(r.grace_period_end);
+        const complimentaryStartedAt = toIsoOrNull(r.complimentary_started_at);
+        const complimentaryEndsAt = toIsoOrNull(r.complimentary_ends_at);
+        const createdAt = toIsoOrNull(r.created_at) || new Date().toISOString();
+        const updatedAt = toIsoOrNull(r.updated_at) || createdAt;
+        return {
+          id: r.id,
+          restaurantCode: r.restaurant_code,
+          restaurant_code: r.restaurant_code,
+          status: r.status,
+          priceRwf: Number(r.price_rwf ?? 0),
+          price_rwf: Number(r.price_rwf ?? 0),
+          currency: (r.currency || 'RWF').trim(),
+          currentPeriodStart,
+          current_period_start: currentPeriodStart,
+          currentPeriodEnd,
+          current_period_end: currentPeriodEnd,
+          billingAnchorDay: r.billing_anchor_day !== null && r.billing_anchor_day !== undefined ? Number(r.billing_anchor_day) : null,
+          billing_anchor_day: r.billing_anchor_day !== null && r.billing_anchor_day !== undefined ? Number(r.billing_anchor_day) : null,
+          gracePeriodEnd,
+          grace_period_end: gracePeriodEnd,
+          complimentaryStartedAt,
+          complimentary_started_at: complimentaryStartedAt,
+          complimentaryEndsAt,
+          complimentary_ends_at: complimentaryEndsAt,
+          complimentaryDurationValue: Number(r.complimentary_duration_value ?? 0),
+          complimentary_duration_value: Number(r.complimentary_duration_value ?? 0),
+          complimentaryDurationUnit: r.complimentary_duration_unit || 'days',
+          complimentary_duration_unit: r.complimentary_duration_unit || 'days',
+          renewalGraceDays: Number(r.renewal_grace_days ?? 3),
+          renewal_grace_days: Number(r.renewal_grace_days ?? 3),
+          lastPaymentId: r.last_payment_id || null,
+          last_payment_id: r.last_payment_id || null,
+          createdAt,
+          created_at: createdAt,
+          updatedAt,
+          updated_at: updatedAt,
+        };
+      });
+
+      const mappedRestaurantSubscriptionPayments = restaurantSubPaymentRes.rows.map((r: any) => {
+        const verifiedAt = toIsoOrNull(r.verified_at);
+        const entitlementAppliedAt = toIsoOrNull(r.entitlement_applied_at);
+        const createdAt = toIsoOrNull(r.created_at) || new Date().toISOString();
+        const updatedAt = toIsoOrNull(r.updated_at) || createdAt;
+        return {
+          id: r.id,
+          restaurantCode: r.restaurant_code,
+          restaurant_code: r.restaurant_code,
+          provider: r.provider,
+          providerEnvironment: r.provider_environment,
+          provider_environment: r.provider_environment,
+          internalReference: r.internal_reference,
+          internal_reference: r.internal_reference,
+          providerTransactionId: r.provider_transaction_id || null,
+          provider_transaction_id: r.provider_transaction_id || null,
+          payerMsisdn: r.payer_msisdn,
+          payer_msisdn: r.payer_msisdn,
+          amountRwf: Number(r.amount_rwf),
+          amount_rwf: Number(r.amount_rwf),
+          monthsPurchased: Number(r.months_purchased ?? 1),
+          months_purchased: Number(r.months_purchased ?? 1),
+          currency: (r.currency || 'RWF').trim(),
+          status: r.status,
+          idempotencyKey: r.idempotency_key,
+          idempotency_key: r.idempotency_key,
+          requestFingerprint: r.request_fingerprint,
+          request_fingerprint: r.request_fingerprint,
+          providerStatus: r.provider_status || null,
+          provider_status: r.provider_status || null,
+          verifiedAt,
+          verified_at: verifiedAt,
+          entitlementAppliedAt,
+          entitlement_applied_at: entitlementAppliedAt,
+          createdAt,
+          created_at: createdAt,
+          updatedAt,
+          updated_at: updatedAt,
+        };
+      });
+
       const loadedCheckpoints = checkpointRes.rows.map((r: { data: any }) => r.data);
       const mergeByKey = (tableRows: any[], settingsRows: any[], keyField = 'id') => {
         const merged = new Map<string, any>();
         for (const item of Array.isArray(settingsRows) ? settingsRows : []) {
-          if (item && item[keyField]) merged.set(String(item[keyField]), item);
+          const key = item?.[keyField] || item?.restaurant_code || item?.id;
+          if (key) merged.set(String(key), item);
         }
         for (const item of tableRows) {
-          if (item && item[keyField]) merged.set(String(item[keyField]), item);
+          const key = item?.[keyField] || item?.restaurant_code || item?.id;
+          if (key) merged.set(String(key), item);
         }
         return Array.from(merged.values());
       };
@@ -218,12 +334,21 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         shifts: settingsMap.get('shifts') || [],
         activationRequests: settingsMap.get('activationRequests') || [],
         pinRecoveryRequests: settingsMap.get('pinRecoveryRequests') || [],
-        studentSubscriptionPayments: settingsMap.get('studentSubscriptionPayments') || [],
-        // These billing tables are normalized relational tables and do not
-        // contain a JSONB "data" column. Until their row mappers and write path
-        // are migrated together, hydrate the durable JSONB settings snapshots.
-        restaurantSubscriptions: settingsMap.get('restaurantSubscriptions') || [],
-        restaurantSubscriptionPayments: settingsMap.get('restaurantSubscriptionPayments') || [],
+        studentSubscriptionPayments: mergeByKey(
+          customerSubPaymentRes.rows.map((r: { data: any }) => r.data),
+          settingsMap.get('studentSubscriptionPayments') || [],
+          'id'
+        ),
+        restaurantSubscriptions: mergeByKey(
+          mappedRestaurantSubscriptions,
+          settingsMap.get('restaurantSubscriptions') || [],
+          'restaurantCode'
+        ),
+        restaurantSubscriptionPayments: mergeByKey(
+          mappedRestaurantSubscriptionPayments,
+          settingsMap.get('restaurantSubscriptionPayments') || [],
+          'id'
+        ),
         subscriptionPayments: settingsMap.get('subscriptionPayments') || [],
         activationCodes: settingsMap.get('activationCodes') || [],
         deletionTombstones: settingsMap.get('deletionTombstones') || [],
@@ -511,6 +636,149 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
       }
     }
 
+    // 5b. Normalized RestoPass SaaS restaurant_subscriptions table (Protocol Section 3.2).
+    if (Array.isArray(state.restaurantSubscriptions)) {
+      for (const item of state.restaurantSubscriptions) {
+        const restaurantCode = item?.restaurantCode || item?.restaurant_code;
+        if (!restaurantCode) continue;
+        const id = String(item.id || ('rs_' + restaurantCode)).slice(0, 64);
+        const rawStatus = item.status || 'pending_payment';
+        const status = ['pending_payment', 'complimentary', 'active', 'grace_period', 'restricted', 'cancelled'].includes(rawStatus)
+          ? rawStatus
+          : 'pending_payment';
+        const priceRwf = Math.max(0, Math.trunc(Number(item.priceRwf ?? item.price_rwf ?? 0)));
+        const currentPeriodStart = status === 'pending_payment'
+          ? null
+          : (item.currentPeriodStart ?? item.current_period_start ?? null);
+        const currentPeriodEnd = status === 'pending_payment'
+          ? null
+          : (item.currentPeriodEnd ?? item.current_period_end ?? null);
+        const rawAnchor = item.billingAnchorDay ?? item.billing_anchor_day ?? null;
+        const billingAnchorDay = rawAnchor !== null && rawAnchor !== undefined && Number.isSafeInteger(Number(rawAnchor)) && Number(rawAnchor) >= 1 && Number(rawAnchor) <= 31
+          ? Number(rawAnchor)
+          : null;
+        const gracePeriodEnd = item.gracePeriodEnd ?? item.grace_period_end ?? null;
+        const complimentaryStartedAt = item.complimentaryStartedAt ?? item.complimentary_started_at ?? null;
+        const complimentaryEndsAt = item.complimentaryEndsAt ?? item.complimentary_ends_at ?? null;
+        const complimentaryDurationValue = Math.max(0, Math.trunc(Number(item.complimentaryDurationValue ?? item.complimentary_duration_value ?? 0)));
+        const rawUnit = item.complimentaryDurationUnit || item.complimentary_duration_unit || 'days';
+        const complimentaryDurationUnit = ['days', 'months', 'years'].includes(rawUnit) ? rawUnit : 'days';
+        const rawGrace = Number(item.renewalGraceDays ?? item.renewal_grace_days ?? 3);
+        const renewalGraceDays = Number.isSafeInteger(rawGrace) && rawGrace >= 0 && rawGrace <= 365 ? rawGrace : 3;
+        const lastPaymentId = item.lastPaymentId ?? item.last_payment_id ?? null;
+        const createdAt = item.createdAt ?? item.created_at ?? null;
+
+        await client.query(
+          `INSERT INTO restaurant_subscriptions
+           (id, restaurant_code, status, price_rwf, currency,
+            current_period_start, current_period_end, billing_anchor_day,
+            grace_period_end, complimentary_started_at, complimentary_ends_at,
+            complimentary_duration_value, complimentary_duration_unit,
+            renewal_grace_days, last_payment_id, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, 'RWF', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, COALESCE($15::timestamptz, NOW()), NOW())
+           ON CONFLICT (restaurant_code) DO UPDATE SET
+             status = EXCLUDED.status,
+             price_rwf = EXCLUDED.price_rwf,
+             current_period_start = EXCLUDED.current_period_start,
+             current_period_end = EXCLUDED.current_period_end,
+             billing_anchor_day = EXCLUDED.billing_anchor_day,
+             grace_period_end = EXCLUDED.grace_period_end,
+             complimentary_started_at = EXCLUDED.complimentary_started_at,
+             complimentary_ends_at = EXCLUDED.complimentary_ends_at,
+             complimentary_duration_value = EXCLUDED.complimentary_duration_value,
+             complimentary_duration_unit = EXCLUDED.complimentary_duration_unit,
+             renewal_grace_days = EXCLUDED.renewal_grace_days,
+             last_payment_id = EXCLUDED.last_payment_id,
+             updated_at = NOW()`,
+          [
+            id,
+            restaurantCode,
+            status,
+            priceRwf,
+            currentPeriodStart,
+            currentPeriodEnd,
+            billingAnchorDay,
+            gracePeriodEnd,
+            complimentaryStartedAt,
+            complimentaryEndsAt,
+            complimentaryDurationValue,
+            complimentaryDurationUnit,
+            renewalGraceDays,
+            lastPaymentId,
+            createdAt,
+          ]
+        );
+      }
+    }
+
+    // 5c. Normalized RestoPass SaaS restaurant_subscription_payments table (Protocol Section 3.2).
+    if (Array.isArray(state.restaurantSubscriptionPayments)) {
+      for (const item of state.restaurantSubscriptionPayments) {
+        const restaurantCode = item?.restaurantCode || item?.restaurant_code;
+        if (!item?.id || !restaurantCode) continue;
+        const amountRwf = Number(item.amountRwf ?? item.amount_rwf);
+        const monthsPurchased = Number(item.monthsPurchased ?? item.months_purchased ?? 1);
+        if (!Number.isSafeInteger(amountRwf) || amountRwf <= 0 ||
+            !Number.isSafeInteger(monthsPurchased) || monthsPurchased < 1 || monthsPurchased > 24) {
+          continue;
+        }
+        const rawEnv = item.providerEnvironment || item.provider_environment || 'sandbox';
+        const providerEnvironment = ['sandbox', 'production'].includes(rawEnv) ? rawEnv : 'sandbox';
+        const internalReference = String(item.internalReference || item.internal_reference || ('RPS-' + item.id)).slice(0, 64);
+        const providerTransactionId = item.providerTransactionId ?? item.provider_transaction_id ?? null;
+        const payerMsisdn = String(item.payerMsisdn || item.payer_msisdn || '250780000000').slice(0, 24);
+        const rawStatus = item.status || 'created';
+        const status = ['created', 'provider_pending', 'successful', 'failed', 'cancelled', 'expired', 'review_required'].includes(rawStatus)
+          ? rawStatus
+          : 'created';
+        const idempotencyKey = String(item.idempotencyKey || item.idempotency_key || item.id).slice(0, 128);
+        const requestFingerprint = String(
+          item.requestFingerprint ||
+          item.request_fingerprint ||
+          crypto.createHash('sha256').update(JSON.stringify({
+            restaurantCode, payer: payerMsisdn, amount: amountRwf, months: monthsPurchased, currency: 'RWF',
+          })).digest('hex')
+        ).slice(0, 64);
+        const providerStatus = item.providerStatus ?? item.provider_status ?? null;
+        const verifiedAt = item.verifiedAt ?? item.verified_at ?? null;
+        const entitlementAppliedAt = item.entitlementAppliedAt ?? item.entitlement_applied_at ?? null;
+        const createdAt = item.createdAt ?? item.created_at ?? null;
+
+        await client.query(
+          `INSERT INTO restaurant_subscription_payments
+           (id, restaurant_code, provider, provider_environment, internal_reference,
+            provider_transaction_id, payer_msisdn, amount_rwf, months_purchased,
+            currency, status, idempotency_key, request_fingerprint, provider_status,
+            verified_at, entitlement_applied_at, created_at, updated_at)
+           VALUES ($1, $2, 'mtn_momo', $3, $4, $5, $6, $7, $8, 'RWF', $9, $10, $11, $12, $13, $14, COALESCE($15::timestamptz, NOW()), NOW())
+           ON CONFLICT (id) DO UPDATE SET
+             provider_transaction_id = EXCLUDED.provider_transaction_id,
+             status = EXCLUDED.status,
+             provider_status = EXCLUDED.provider_status,
+             verified_at = EXCLUDED.verified_at,
+             entitlement_applied_at = EXCLUDED.entitlement_applied_at,
+             updated_at = NOW()`,
+          [
+            String(item.id).slice(0, 64),
+            restaurantCode,
+            providerEnvironment,
+            internalReference,
+            providerTransactionId,
+            payerMsisdn,
+            amountRwf,
+            monthsPurchased,
+            status,
+            idempotencyKey,
+            requestFingerprint,
+            providerStatus,
+            verifiedAt,
+            entitlementAppliedAt,
+            createdAt,
+          ]
+        );
+      }
+    }
+
     // 6. Balance Checkpoints
     const checkpointsToSave = Array.isArray(state.balanceCheckpoints)
       ? state.balanceCheckpoints
@@ -543,8 +811,6 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
       // Subscription payment records are kept in durable JSONB settings until
       // their dedicated normalized billing tables are introduced.
       ['studentSubscriptionPayments', state.studentSubscriptionPayments],
-      ['restaurantSubscriptions', state.restaurantSubscriptions],
-      ['restaurantSubscriptionPayments', state.restaurantSubscriptionPayments],
       ['subscriptionPayments', state.subscriptionPayments],
       ['activationCodes', state.activationCodes],
       // Durable soft-deletion markers prevent deleted operational records from
@@ -665,7 +931,7 @@ export async function upsertCustomerRecordPostgres(
     await client.query('COMMIT');
     return true;
   } catch (err) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try { await client.query('ROLLBACK'); } catch { }
     console.error('[PostgreSQL Adapter] Targeted customer upsert failed:', err);
     return false;
   } finally {
@@ -692,13 +958,13 @@ export async function computeCustomerBalanceSql(
   const cutoff = hasCheckpoint ? cpRes.rows[0].cutoff_timestamp : null;
   const ledgerRes = hasCheckpoint
     ? await client.query(
-        'SELECT COALESCE(SUM(plates_delta), 0)::int AS delta FROM ledger_entries WHERE restaurant_code = $1 AND customer_id = $2 AND timestamp > $3',
-        [restaurantCode, customerId, cutoff]
-      )
+      'SELECT COALESCE(SUM(plates_delta), 0)::int AS delta FROM ledger_entries WHERE restaurant_code = $1 AND customer_id = $2 AND timestamp > $3',
+      [restaurantCode, customerId, cutoff]
+    )
     : await client.query(
-        'SELECT COALESCE(SUM(plates_delta), 0)::int AS delta FROM ledger_entries WHERE restaurant_code = $1 AND customer_id = $2',
-        [restaurantCode, customerId]
-      );
+      'SELECT COALESCE(SUM(plates_delta), 0)::int AS delta FROM ledger_entries WHERE restaurant_code = $1 AND customer_id = $2',
+      [restaurantCode, customerId]
+    );
   return baseBalance + Number(ledgerRes.rows[0]?.delta || 0);
 }
 
@@ -847,7 +1113,7 @@ export async function commitPlateTransferPostgres(input: {
     };
   } catch (err: any) {
     if (transactionOpen) {
-      try { await client.query('ROLLBACK'); } catch {}
+      try { await client.query('ROLLBACK'); } catch { }
     }
     if (err?.code === '23505') {
       return { ok: false, code: 'IDEMPOTENCY_CONFLICT', message: 'This transfer request has already been processed. Refresh your balance before retrying.' };

@@ -39,6 +39,14 @@ interface SuperAdminViewProps {
   onSubTabChange: (tab: string) => void;
 }
 
+const toDateTimeLocalInput = (value?: string | null): string => {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return '';
+  const localDate = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60_000);
+  return localDate.toISOString().slice(0, 16);
+};
+
 export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   language,
   activeSubTab,
@@ -60,11 +68,41 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
   // Global Student Fee State
   const [globalStudentFeeInput, setGlobalStudentFeeInput] = useState<number>(studentSubSettings.priceRwf || 500);
+  const [promoAccessEnabledInput, setPromoAccessEnabledInput] = useState<boolean>(Boolean(studentSubSettings.promoAccessEnabled));
+  const [promoStartInput, setPromoStartInput] = useState<string>(toDateTimeLocalInput(studentSubSettings.promoStartsAt));
+  const [promoEndInput, setPromoEndInput] = useState<string>(toDateTimeLocalInput(studentSubSettings.promoEndsAt));
+  const [promoMessageInput, setPromoMessageInput] = useState<string>(studentSubSettings.promoMessage || 'You are enjoying complimentary RestoPass access during our launch promotion.');
+  const [customerGraceDaysInput, setCustomerGraceDaysInput] = useState<number>(studentSubSettings.graceDays ?? 3);
   const [feedbackToast, setFeedbackToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const [savingCustomerPolicy, setSavingCustomerPolicy] = useState(false);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setFeedbackToast({ message, type });
     setTimeout(() => setFeedbackToast(null), 3500);
+  };
+
+  const persistCustomerPolicy = async (updates: Partial<typeof studentSubSettings>) => {
+    if (savingCustomerPolicy) return false;
+    setSavingCustomerPolicy(true);
+    try {
+      const token = restoStore.getAuthToken();
+      const response = await fetch('/api/admin/settings/student-subscriptions', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+        body: JSON.stringify(updates),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || 'Could not save customer subscription policy.');
+      restoStore.updateStudentSubscriptionSettings(result.settings || updates, 'Super Admin');
+      showToast('Customer subscription policy saved successfully.');
+      return true;
+    } catch (error: any) {
+      showToast(error?.message || 'Customer subscription policy could not be saved.', 'error');
+      return false;
+    } finally {
+      setSavingCustomerPolicy(false);
+    }
   };
 
   // Create Restaurant State (With Custom Stations & Pricing Overrides)
@@ -78,9 +116,14 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   const [newPlanId, setNewPlanId] = useState('plan_high_volume');
   const [newMaxStations, setNewMaxStations] = useState(3);
   const [newBasePrice, setNewBasePrice] = useState(140000);
+  const [newComplimentaryDuration, setNewComplimentaryDuration] = useState(3);
+  const [newComplimentaryUnit, setNewComplimentaryUnit] = useState<'days' | 'months' | 'years'>('months');
+  const [newRenewalGraceDays, setNewRenewalGraceDays] = useState(3);
   const [newExtraScanFee, setNewExtraScanFee] = useState(15000);
-  const [newStudentSubPrice, setNewStudentSubPrice] = useState(500);
   const [newSinglePlatePrice, setNewSinglePlatePrice] = useState(1200);
+  const [newAdminUsername, setNewAdminUsername] = useState('admin');
+  const [newAdminDisplayName, setNewAdminDisplayName] = useState('Restaurant Administrator');
+  const [newAdminPassword, setNewAdminPassword] = useState('');
 
   // When selected plan changes during onboarding, sync baseline pricing defaults
   const handleOnboardPlanChange = (planId: string) => {
@@ -134,19 +177,16 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   const [editRestoMaxStations, setEditRestoMaxStations] = useState(2);
   const [editRestoBasePrice, setEditRestoBasePrice] = useState(140000);
   const [editRestoExtraScanFee, setEditRestoExtraScanFee] = useState(15000);
-  const [editRestoStudentSubPrice, setEditRestoStudentSubPrice] = useState(500);
   const [editRestoPlatePrice, setEditRestoPlatePrice] = useState(1200);
 
   const handleOpenEditResto = (resto: Restaurant) => {
     setEditingResto(resto);
     const plan = state.plans.find((p) => p.id === resto.planId) || state.plans[0];
     const lic = restoStore.getRestaurantLicense(resto.code);
-    const customStudentFee = resto.studentSubscriptionPriceRwf ?? resto.termsOverride?.studentSubscriptionPriceRwf ?? studentSubSettings.priceRwf ?? 500;
 
     setEditRestoMaxStations(lic?.maxScanPoints || resto.termsOverride?.maxScanPointsIncluded || plan.terms.maxScanPointsIncluded || 2);
     setEditRestoBasePrice(resto.saasSubscriptionPriceRwf || plan.terms.basePriceRwf);
     setEditRestoExtraScanFee(resto.termsOverride?.pricePerExtraScanPointRwf || plan.terms.pricePerExtraScanPointRwf);
-    setEditRestoStudentSubPrice(customStudentFee);
     setEditRestoPlatePrice(resto.defaultPlatePriceRwf || 1200);
   };
 
@@ -169,7 +209,6 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
     restoStore.updateRestaurantPricingAndTerms(editingResto.code, {
       saasSubscriptionPriceRwf: Number(editRestoBasePrice),
       pricePerExtraScanPointRwf: Number(editRestoExtraScanFee),
-      studentSubscriptionPriceRwf: Number(editRestoStudentSubPrice),
       defaultPlatePriceRwf: Number(editRestoPlatePrice),
       maxScanPoints: Number(editRestoMaxStations),
     });
@@ -194,10 +233,15 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  const handleCreateRestaurant = (e: React.FormEvent) => {
+  const handleCreateRestaurant = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (newAdminPassword.length < 16 || newAdminPassword.length > 128) {
+      showToast('Initial restaurant administrator password must contain 16–128 characters.', 'error');
+      return;
+    }
+    const code = newCode.trim().toUpperCase();
     restoStore.createRestaurant({
-      code: newCode,
+      code,
       name: newName,
       legalEntity: newLegal,
       phone: newPhone,
@@ -207,12 +251,46 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       planId: newPlanId,
       licensedScanPoints: Number(newMaxStations),
       saasSubscriptionPriceRwf: Number(newBasePrice),
+      saasComplimentaryDurationValue: Number(newComplimentaryDuration),
+      saasComplimentaryDurationUnit: newComplimentaryUnit,
+      saasRenewalGraceDays: Number(newRenewalGraceDays),
       pricePerExtraScanPointRwf: Number(newExtraScanFee),
-      studentSubscriptionPriceRwf: Number(newStudentSubPrice),
       singlePlatePriceRwf: Number(newSinglePlatePrice),
     });
-    showToast(`Created ${newName}. RestoPass access activates after verified subscription payment.`);
-    setCreateModalOpen(false);
+    const token = restoStore.getAuthToken();
+    const headers = { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) };
+    try {
+      let initialized = false;
+      let lastError = 'Restaurant record is not yet available in the billing database.';
+      for (let attempt = 0; attempt < 6 && !initialized; attempt++) {
+        if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 350));
+        const response = await fetch('/api/restaurant-saas/subscription?restaurantCode=' + encodeURIComponent(code), {
+          headers, cache: 'no-store',
+        });
+        const body = await response.json();
+        if (response.ok && body.success) initialized = true;
+        else lastError = body.error || lastError;
+        if (!response.ok && response.status !== 404) break;
+      }
+      if (!initialized) throw new Error('Restaurant was created locally, but billing initialization failed: ' + lastError);
+
+      const adminResponse = await fetch('/api/admin/restaurant-admins', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ restaurantCode: code, username: newAdminUsername, displayName: newAdminDisplayName, password: newAdminPassword }),
+      });
+      const adminBody = await adminResponse.json();
+      if (!adminResponse.ok || !adminBody.success) {
+        throw new Error('Restaurant billing was initialized, but administrator provisioning failed: ' + (adminBody.error || 'Unknown error'));
+      }
+      await restoStore.pullStateFromServer();
+      const tenantUrl = window.location.origin + '/?resto=' + encodeURIComponent(code);
+      showToast(`Created ${newName}. Admin username: ${newAdminUsername}. Tenant entry: ${tenantUrl}. Complimentary access: ${newComplimentaryDuration} ${newComplimentaryUnit}; paid billing starts after it ends.`);
+      setNewAdminPassword('');
+      setCreateModalOpen(false);
+    } catch (error: any) {
+      showToast(error?.message || 'Restaurant onboarding did not finish. Check the tenant record before retrying.', 'error');
+    }
   };
 
   const handleIssueLicense = (e: React.FormEvent) => {
@@ -360,8 +438,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   const licStatus = restoStore.getRestaurantLicenseStatus(resto.code);
                   const lic = licStatus.license;
                   const isCurrent = state.currentRestaurantCode === resto.code;
-                  const customStudentFee = resto.studentSubscriptionPriceRwf ?? resto.termsOverride?.studentSubscriptionPriceRwf ?? studentSubSettings.priceRwf ?? 500;
-                  const stationCount = lic?.maxScanPoints || resto.termsOverride?.maxScanPointsIncluded || 2;
+                                const stationCount = lic?.maxScanPoints || resto.termsOverride?.maxScanPointsIncluded || 2;
                   return (
                     <tr key={resto.code} className="hover:bg-slate-800/40">
                       <td className="py-3.5 px-4">
@@ -375,9 +452,6 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                         <div className="flex items-center gap-1.5 font-bold text-white">
                           <Building2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                           <span>{stationCount} Stations Licensed</span>
-                        </div>
-                        <div className="text-[11px] text-slate-400 mt-0.5">
-                          Student Sub: <strong className="text-emerald-400">{customStudentFee.toLocaleString()} RWF</strong>
                         </div>
                         <div className="text-[11px] text-slate-400">
                           Single Plate: <strong className="text-slate-300">{(resto.defaultPlatePriceRwf || 1200).toLocaleString()} RWF</strong>
@@ -701,18 +775,15 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 leading-relaxed max-w-2xl">
-                  Sets the monthly digital access fee at <strong>{studentSubSettings.priceRwf.toLocaleString()} RWF / month</strong>. Customers pay at reception; Super Admin verifies and activates access.
+                  Sets the platform-wide customer access fee at <strong>{studentSubSettings.priceRwf.toLocaleString()} RWF / calendar month</strong>. Customers can prepay multiple months through MTN MoMo after payment enforcement is enabled.
                   Activation is controlled entirely by this platform feature flag without requiring a code release.
                 </p>
               </div>
 
               <div className="flex items-center gap-3">
                 <button
-                  onClick={() => {
-                    restoStore.updateStudentSubscriptionSettings({
-                      enabled: !studentSubSettings.enabled,
-                    });
-                  }}
+                  disabled={savingCustomerPolicy}
+                  onClick={() => { void persistCustomerPolicy({ enabled: !studentSubSettings.enabled }); }}
                   className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all shadow-md cursor-pointer ${
                     studentSubSettings.enabled
                       ? 'bg-rose-600 hover:bg-rose-500 text-white'
@@ -747,10 +818,10 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
               <div className="space-y-0.5">
                 <div className="text-sm font-bold text-white flex items-center gap-2">
                   <DollarSign className="w-4 h-4 text-emerald-400" />
-                  <span>Platform-Wide Student Subscription Monthly Fee</span>
+                  <span>Platform-Wide Customer Dashboard Subscription Fee</span>
                 </div>
                 <p className="text-xs text-slate-400">
-                  Default fee charged to students across cafeterias for optional digital pass access. Individual cafeterias can also be customized with specific per-restaurant rates.
+                  One platform-wide monthly fee for all restaurant customers. Restaurant meal purchases are paid directly to each restaurant and are not part of this subscription.
                 </p>
               </div>
 
@@ -758,10 +829,10 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 <div className="relative">
                   <input
                     type="number"
-                    min={0}
+                    min={1}
                     step={50}
                     value={globalStudentFeeInput}
-                    onChange={(e) => setGlobalStudentFeeInput(Math.max(0, parseInt(e.target.value) || 0))}
+                    onChange={(e) => setGlobalStudentFeeInput(Math.max(1, parseInt(e.target.value) || 1))}
                     className="w-32 py-1.5 px-3 rounded-lg bg-slate-900 border border-slate-700 text-white font-mono font-bold text-sm focus:border-emerald-500 outline-hidden pr-12"
                   />
                   <span className="absolute right-2.5 top-2 text-[11px] text-slate-400 font-mono font-bold">RWF</span>
@@ -769,14 +840,62 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    restoStore.updateStudentSubscriptionSettings({ priceRwf: Number(globalStudentFeeInput) });
-                    showToast(`Updated default student subscription fee to ${globalStudentFeeInput.toLocaleString()} RWF/mo!`);
+                    if (promoAccessEnabledInput && !promoEndInput) {
+                      showToast('Set a promotional end date before enabling the customer promotion.', 'error');
+                      return;
+                    }
+                    const promoStartsAt = promoStartInput ? new Date(promoStartInput).toISOString() : '';
+                    const promoEndsAt = promoEndInput ? new Date(promoEndInput).toISOString() : '';
+                    if (promoStartsAt && promoEndsAt && Date.parse(promoStartsAt) >= Date.parse(promoEndsAt)) {
+                      showToast('Promotional end date must be after its start date.', 'error');
+                      return;
+                    }
+                    void persistCustomerPolicy({
+                      priceRwf: Number(globalStudentFeeInput),
+                      graceDays: Number(customerGraceDaysInput),
+                      promoAccessEnabled: promoAccessEnabledInput,
+                      promoStartsAt,
+                      promoEndsAt,
+                      promoMessage: promoMessageInput,
+                    });
                   }}
                   className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md transition-colors cursor-pointer"
                 >
                   Save Fee
                 </button>
               </div>
+            </div>
+
+            <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-bold text-white">Customer launch promotion</div>
+                  <p className="text-xs text-slate-400">Make the free period visible to customers before paid access begins.</p>
+                </div>
+                <label className="inline-flex items-center gap-2 text-xs font-semibold text-emerald-300">
+                  <input type="checkbox" checked={promoAccessEnabledInput} onChange={(e) => setPromoAccessEnabledInput(e.target.checked)} />
+                  Promotional access enabled
+                </label>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Promotion starts</label>
+                  <input type="datetime-local" value={promoStartInput} onChange={(e) => setPromoStartInput(e.target.value)} className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-white text-xs" />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Promotion ends</label>
+                  <input type="datetime-local" value={promoEndInput} onChange={(e) => setPromoEndInput(e.target.value)} className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-white text-xs" />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Renewal grace (days)</label>
+                  <input type="number" min={0} max={365} value={customerGraceDaysInput} onChange={(e) => setCustomerGraceDaysInput(Math.max(0, Math.min(365, Number(e.target.value) || 0)))} className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-white text-xs" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Customer-facing promotion message</label>
+                <textarea rows={2} maxLength={500} value={promoMessageInput} onChange={(e) => setPromoMessageInput(e.target.value)} className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-white text-xs" />
+              </div>
+              <p className="text-[11px] text-slate-500">When customer payment enforcement is disabled, customer access remains free. When enforcement is enabled, the configured promotion temporarily keeps approved customers free until its end date.</p>
             </div>
 
             {/* Policy & Architectural Safeguards Overview */}
@@ -789,7 +908,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
               <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
                 <div className="text-[10px] text-slate-400 uppercase font-mono">Grace Period</div>
-                <div className="text-sm font-bold text-amber-400 font-mono mt-0.5">3 Days (72 Hours)</div>
+                <div className="text-sm font-bold text-amber-400 font-mono mt-0.5">{studentSubSettings.graceDays ?? 3} Calendar Day(s)</div>
                 <div className="text-[10px] text-slate-500 mt-0.5">Digital features preserved</div>
               </div>
 
@@ -915,14 +1034,24 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                           <td className="py-3 px-3 text-right">
                             {sub.status === 'complimentary' && (
                               <button
-                                onClick={() => {
-                                  if (confirm(`Revoke complimentary access for #${sub.memberNo}?`)) {
-                                    restoStore.revokeComplimentarySubscription(
-                                      sub.customerId,
-                                      'Revoked by Ephrem (Super Admin)',
-                                      'Ephrem (Super Admin)'
-                                    );
+                                onClick={async () => {
+                                  const reason = window.prompt(
+                                    `Enter the mandatory reason for revoking complimentary access for #${sub.memberNo}:`
+                                  );
+                                  if (!reason || !reason.trim()) {
+                                    showToast('A revocation reason is required.', 'error');
+                                    return;
                                   }
+                                  const result = await restoStore.revokeComplimentarySubscription(
+                                    sub.customerId,
+                                    reason,
+                                    'Platform Super Admin'
+                                  );
+                                  if (!result.success) {
+                                    showToast(result.error || 'Complimentary access could not be revoked.', 'error');
+                                    return;
+                                  }
+                                  showToast('Complimentary access revoked and audit logged.');
                                 }}
                                 className="text-rose-400 hover:text-rose-300 font-semibold cursor-pointer"
                               >
@@ -1123,7 +1252,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                       className="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-white"
                     >
                       <option value="cash">Cash at reception</option>
-                      <option value="mtn_momo">MTN Mobile Money</option>
+                      
                       <option value="bank_transfer">Bank transfer</option>
                     </select>
                   </div>
@@ -1333,6 +1462,28 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 </div>
               </div>
 
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+                <div className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">Initial Restaurant Administrator</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-semibold">Administrator username</label>
+                    <input required minLength={3} maxLength={64} value={newAdminUsername} onChange={(e) => setNewAdminUsername(e.target.value)}
+                      className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white" />
+                  </div>
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-semibold">Display name</label>
+                    <input required minLength={2} maxLength={120} value={newAdminDisplayName} onChange={(e) => setNewAdminDisplayName(e.target.value)}
+                      className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white" />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-slate-300 block mb-1 font-semibold">Temporary administrator password</label>
+                  <input type="password" required minLength={16} maxLength={128} value={newAdminPassword} onChange={(e) => setNewAdminPassword(e.target.value)}
+                    autoComplete="new-password" className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white" />
+                  <span className="text-[10px] text-slate-500">At least 16 characters. The server stores only a password hash. Share it securely and ask the administrator to change it after first login.</span>
+                </div>
+              </div>
+
               <div>
                 <label className="text-slate-300 block mb-1 font-semibold">Restaurant Name</label>
                 <input
@@ -1408,18 +1559,40 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                     </label>
                     <input
                       type="number"
-                      min={0}
+                      min={1}
                       step={5000}
                       required
                       value={newBasePrice}
-                      onChange={(e) => setNewBasePrice(Math.max(0, parseInt(e.target.value) || 0))}
+                      onChange={(e) => setNewBasePrice(Math.max(1, parseInt(e.target.value) || 1))}
                       className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white font-mono"
                     />
-                    <span className="text-[10px] text-slate-500">Charged to the restaurant for 30 days of software access</span>
+                    <span className="text-[10px] text-slate-500">Monthly fee; billing uses calendar months</span>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-semibold">Complimentary Access</label>
+                    <input type="number" min={0} max={120} value={newComplimentaryDuration}
+                      onChange={(e) => setNewComplimentaryDuration(Math.max(0, Math.min(120, parseInt(e.target.value) || 0)))}
+                      className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white font-mono" />
+                  </div>
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-semibold">Free Period Unit</label>
+                    <select value={newComplimentaryUnit} onChange={(e) => setNewComplimentaryUnit(e.target.value as 'days' | 'months' | 'years')}
+                      className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white">
+                      <option value="days">Days</option><option value="months">Months</option><option value="years">Years</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-semibold">Renewal Grace (days)</label>
+                    <input type="number" min={0} max={365} value={newRenewalGraceDays}
+                      onChange={(e) => setNewRenewalGraceDays(Math.max(0, Math.min(365, parseInt(e.target.value) || 0)))}
+                      className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white font-mono" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="text-slate-300 block mb-1 font-semibold">
                       Extra Station
@@ -1430,20 +1603,6 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                       step={1000}
                       value={newExtraScanFee}
                       onChange={(e) => setNewExtraScanFee(Math.max(0, parseInt(e.target.value) || 0))}
-                      className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white font-mono"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">
-                      Student Sub
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      step={50}
-                      value={newStudentSubPrice}
-                      onChange={(e) => setNewStudentSubPrice(Math.max(0, parseInt(e.target.value) || 0))}
                       className="w-full p-2 rounded bg-slate-900 border border-slate-700 text-white font-mono"
                     />
                   </div>
@@ -1468,7 +1627,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 type="submit"
                 className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs transition-colors shadow-sm mt-2 cursor-pointer"
               >
-                Onboard Tenant &amp; Issue {newMaxStations}-Station License
+                Create Restaurant &amp; Administrator
               </button>
             </form>
           </div>
@@ -1514,18 +1673,18 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   <label className="text-slate-300 block mb-1 font-semibold">Monthly Base Fee (RWF) *</label>
                   <input
                     type="number"
-                    min={0}
+                    min={1}
                     step={5000}
                     required
                     value={editRestoBasePrice}
-                    onChange={(e) => setEditRestoBasePrice(Math.max(0, parseInt(e.target.value) || 0))}
+                    onChange={(e) => setEditRestoBasePrice(Math.max(1, parseInt(e.target.value) || 1))}
                     className="w-full p-2.5 rounded bg-slate-950 border border-slate-700 text-white font-mono focus:border-amber-500 outline-hidden"
                   />
                   <span className="text-[10px] text-slate-500">Contract base rate</span>
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="text-slate-300 block mb-1 font-semibold">Extra Station Fee</label>
                   <input
@@ -1537,19 +1696,6 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                     className="w-full p-2 rounded bg-slate-950 border border-slate-700 text-white font-mono focus:border-amber-500 outline-hidden"
                   />
                 </div>
-
-                <div>
-                  <label className="text-slate-300 block mb-1 font-semibold">Student Sub (RWF)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    step={50}
-                    value={editRestoStudentSubPrice}
-                    onChange={(e) => setEditRestoStudentSubPrice(Math.max(0, parseInt(e.target.value) || 0))}
-                    className="w-full p-2 rounded bg-slate-950 border border-slate-700 text-white font-mono focus:border-amber-500 outline-hidden"
-                  />
-                </div>
-
                 <div>
                   <label className="text-slate-300 block mb-1 font-semibold">Plate Price (RWF)</label>
                   <input

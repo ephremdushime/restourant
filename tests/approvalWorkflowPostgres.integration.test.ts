@@ -6,6 +6,8 @@ const databaseUrl = process.env.TEST_DATABASE_URL;
 test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (t) => {
   process.env.NODE_ENV = 'test';
   process.env.DATABASE_URL = databaseUrl!;
+  // This suite tests approval workflows, not SaaS entitlement enforcement.
+  process.env.RESTOPASS_TEST_ENFORCE_SAAS = 'false';
   const serverModule = await import('../server.ts');
   const adapter = await import('../src/services/db/postgresAdapter.ts');
   assert.equal(await adapter.initPostgres(), true);
@@ -90,7 +92,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
         displayName: 'Tenant Owner',
         password,
       });
-      assert.equal(created.status, 201);
+      assert.equal(created.status, 201, JSON.stringify(created.body));
       assert.equal(created.body.administrator.username, 'tenant.owner');
       const stored = await pool!.query(
         'SELECT password_hash,status FROM restaurant_admins WHERE id=$1',
@@ -128,9 +130,19 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       assert.equal(blockedLogin.status, 401);
     });
 
+    // This suite exercises approval logic, not tenant billing. Tenant-admin
+    // provisioning may initialize a pending SaaS record, so restore the explicitly
+    // active test tenant before exercising approval endpoints.
+    const approvalTestState = serverModule.getServerDbState();
+    approvalTestState.restaurants = (approvalTestState.restaurants || []).map((item: any) =>
+      item.code === restaurantCode ? { ...item, status: 'active' } : item
+    );
+    serverModule.setServerDbState(approvalTestState);
+    await pool!.query("UPDATE restaurants SET status='active',data=jsonb_set(data,'{status}','\"active\"'::jsonb) WHERE code=$1", [restaurantCode]);
+
     await t.test('registration creates customer and approval atomically; grace usage reconciles once', async () => {
       const created = await post('/api/approvals/registration', bossToken, registration('A', 60, '+250780000001'));
-      assert.equal(created.status, 201);
+      assert.equal(created.status, 201, JSON.stringify(created.body));
       assert.equal(created.body.success, true);
       const customerId = created.body.customer.id;
       const approvalId = created.body.approval.id;
@@ -334,6 +346,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
       assert.equal(stored.rowCount, 1);
       assert.match(stored.rows[0].data.passwordHash, /^scrypt\$/);
       assert.match(stored.rows[0].data.pinHash, /^scrypt\$/);
+      assert.equal(stored.rows[0].data.pin, undefined, 'legacy PIN field must not be persisted');
       assert.notEqual(stored.rows[0].data.passwordHash, staff.passwordHash);
       const login = await post('/api/auth/login', '', {
         role: 'stand_staff', username: staff.username, password: staff.passwordHash,

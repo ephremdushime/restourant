@@ -92,3 +92,78 @@ Do not configure the production gate until MTN has approved the own-merchant col
 - Complete security review of manual Super Admin licence overrides and make the override reason mandatory.
 - Add automated production monitoring/reconciliation for payment attempts left pending after network timeouts; v1 exposes manual server-side status checks only.
 - Validate the full registration-to-payment journey with a real restaurant administrator and MTN sandbox handset before enabling production collection.
+
+
+---
+
+## Subscription policy revision — 8 November 2026
+
+This section supersedes any earlier references in this document to fixed 30-day billing terms or a mandatory 72-hour renewal grace period.
+
+### Calendar-month billing
+
+- One subscription month is one calendar month, not 30 days.
+- The billing service clamps month-end dates to the final valid day of the target month and preserves end-of-month renewal anchors.
+- The API accepts 1–24 months; customer-facing and restaurant-facing checkout currently offers 1–6 months.
+- Amount due is the configured monthly RWF price multiplied by the number of months purchased.
+- An early renewal appends purchased calendar months to the current paid-through date.
+- A late renewal starts at the MTN-verified payment timestamp; unpaid time is not backdated.
+- The payment record stores the monthly price snapshot, total amount, and `months_purchased`.
+
+### Restaurant complimentary onboarding
+
+Super Admin configures these terms when onboarding a restaurant:
+
+- Monthly SaaS price in RWF.
+- Complimentary duration value and unit: days, months, or years.
+- Post-paid-expiry renewal grace period in calendar days.
+
+The complimentary clock starts at restaurant creation/onboarding time. During the complimentary period, the backend creates a server-issued time-limited complimentary licence and marks the tenant active. Payment initiation is rejected while complimentary access remains active.
+
+When the complimentary period ends, the restaurant enters `pending_payment`. The administrator can still sign in to the billing portal, but tenant write operations are blocked. The first paid period begins only after MTN confirms payment. It starts at the provider-verified timestamp.
+
+Complimentary expiry does not receive a post-expiry renewal grace period. Renewal grace applies only to a paid subscription period.
+
+Existing valid licences issued before this policy are migrated into the SaaS subscription record using their existing validity dates. The migration must not unexpectedly suspend existing active tenants. Legacy restaurants without a configured SaaS price receive a zero-price pending record and cannot initiate payment until Super Admin explicitly sets the agreed monthly amount; the system must never invent a commercial price.
+
+### Customer dashboard access policy
+
+Customer subscription pricing is global and configured by Super Admin. Restaurant-specific customer subscription price overrides are deprecated and ignored by the active price resolver.
+
+Super Admin controls:
+
+- Global monthly customer access price in RWF.
+- Customer payment enforcement enabled/disabled.
+- Promotional access enabled/disabled.
+- Promotional start and end timestamps.
+- Customer-facing promotional message.
+- Renewal grace period in calendar days.
+
+When payment enforcement is disabled, eligible approved customers receive free dashboard access. When promotional access is active, eligible approved customers receive complimentary dashboard access even if payment enforcement is enabled. After the promotion ends, payment is required only if Super Admin has enabled enforcement.
+
+The customer dashboard must identify promotional access and show the configured end date. No automatic charge is made. The customer must select a term and explicitly approve an MTN MoMo payment request.
+
+Customer subscription expiry must not erase meal balances, disable an otherwise valid physical card, or change restaurant meal-sale records.
+
+### Tenant identity and onboarding access
+
+`restaurantCode` remains the canonical tenant identifier. It scopes restaurant administrators, cashier/scanner accounts, customers, subscriptions, and transactions.
+
+During Super Admin onboarding, the system provisions the initial restaurant administrator account through the Super Admin-only administrator provisioning endpoint. The tenant entry URL uses the existing restaurant-code context, for example:
+
+`https://app.restopass.rw/?resto=RW03`
+
+Customer registration remains linked to the restaurant-specific registration QR code/context. A restaurant administrator receives a separate username and password; staff accounts remain role-restricted.
+
+### Revenue separation
+
+There are two independent RestoPass subscription revenue streams paid to BESTIE COMPANIES LTD:
+
+1. Restaurant SaaS subscriptions.
+2. Customer dashboard access subscriptions.
+
+Restaurant customers pay for food and drinks directly to the restaurant using the restaurant's accepted payment methods. RestoPass does not collect, hold, or settle those food-sale payments.
+
+### Deployment caution
+
+The code paths described here are not evidence of successful live MTN sandbox testing. Do not enable production collections until the UAT matrix is executed against MTN sandbox, reconciliation and idempotency tests pass, production credentials are approved, and the production callback/status-verification design is reviewed.

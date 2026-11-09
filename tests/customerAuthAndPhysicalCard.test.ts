@@ -328,7 +328,7 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     assert.equal(restoStore.getCustomerBalance(customer.id), initialBalance - 1);
   });
 
-  test('Step 7: Boss-approved customer waits for Super Admin free-month activation; physical card remains usable', () => {
+  test('Step 7: globally disabled customer payment grants free dashboard access; physical card remains usable', () => {
     const customer = restoStore.getState().customers.find((c) => c.name === 'Mukamana Alice');
     assert.ok(customer, 'Customer from the boss-approval workflow must exist');
 
@@ -337,11 +337,12 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
       priceRwf: 500,
     });
 
-    // New registration access is controlled by the explicit Super Admin activation,
-    // independently of the legacy global monetization toggle.
+    // Global payment enforcement is disabled during the launch promotion,
+    // so every approved customer receives free dashboard access without an
+    // individual Super Admin activation.
     const beforeActivation = restoStore.checkStudentEntitlement(customer.id, 'customer_dashboard');
-    assert.equal(beforeActivation.allowed, false);
-    assert.match(beforeActivation.reason || '', /Super Admin/i);
+    assert.equal(beforeActivation.allowed, true);
+    assert.equal(beforeActivation.status, 'complimentary');
 
     // Physical card scanning remains available while digital dashboard access is pending.
     const cardToken = generateCardToken(customer.restaurantCode, customer.memberNo, customer.cardVersion);
@@ -612,7 +613,7 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     assert.ok(typeof pnl.grossProfitRwf === 'number');
     assert.ok(pnl.healthStatus === 'profitable' || pnl.healthStatus === 'balanced' || pnl.healthStatus === 'loss_warning');
 
-    // 4. Legacy subscription toggle remains backward-compatible; new registrations still require explicit Super Admin free-month activation
+    // 4. Global customer payment toggle grants free access to approved customers during launch
     restoStore.updateStudentSubscriptionSettings({
       enabled: false,
     });
@@ -622,7 +623,8 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     const testCust = restoStore.getState().customers.find((c) => c.id === highValApproval.customerId);
     assert.ok(testCust);
     const beforeFreeMonth = restoStore.checkStudentEntitlement(testCust.id, 'digital_qr');
-    assert.equal(beforeFreeMonth.allowed, false, 'New registration remains gated until Super Admin activates the free month');
+    assert.equal(beforeFreeMonth.allowed, true, 'Approved customers receive free access while global payment enforcement is disabled');
+    assert.equal(beforeFreeMonth.status, 'complimentary');
     const freeMonth = restoStore.grantComplimentarySubscription({
       customerId: testCust.id,
       reason: 'New customer onboarding complimentary month',

@@ -55,6 +55,9 @@ export interface Restaurant {
   planId: string;
   defaultPlatePriceRwf?: number;
   saasSubscriptionPriceRwf?: number;
+  saasComplimentaryDurationValue?: number;
+  saasComplimentaryDurationUnit?: 'days' | 'months' | 'years';
+  saasRenewalGraceDays?: number;
   studentSubscriptionPriceRwf?: number;
   bundlePricing?: PlateBundlePricing;
   welcomeMessage?: string;
@@ -74,6 +77,7 @@ export interface License {
   maxScanPoints: number;
   validUntil: string; // ISO date
   graceDays: number;
+  complimentary?: boolean;
   featureFlags: {
     spotChecksEnabled: boolean;
     multiStationEnabled: boolean;
@@ -567,7 +571,11 @@ export interface StudentSubscriptionSettings {
   priceRwf: number; // default 500 RWF
   currency: string; // 'RWF'
   period: 'monthly';
-  graceDays: number; // default 3 days (72 hours)
+  graceDays: number; // calendar days after paid period ends
+  promoAccessEnabled?: boolean;
+  promoStartsAt?: string;
+  promoEndsAt?: string;
+  promoMessage?: string;
   requireForTransfers: boolean; // default true
   requireForDashboard: boolean; // default true
   updatedAt: string;
@@ -585,6 +593,8 @@ export interface CustomerSubscription {
   currency: string;
   currentPeriodStart?: string;
   currentPeriodEnd?: string;
+  /** Original day-of-month used to keep calendar renewals stable after February. */
+  billingAnchorDay?: number;
   gracePeriodEnd?: string;
   cancelAtPeriodEnd?: boolean;
   paymentMethod?: 'mtn_momo' | 'airtel_money' | 'cash' | 'bank_transfer' | 'complimentary';
@@ -606,8 +616,10 @@ export interface StudentSubscriptionPayment {
   phoneNumber: string;
   providerTransactionId?: string;
   amountRwf: number;
+  monthsPurchased?: number;
+  monthlyPriceRwf?: number;
   currency: string;
-  status: 'pending' | 'verified' | 'failed';
+  status: 'created' | 'provider_pending' | 'pending' | 'verified' | 'failed' | 'review_required';
   initiatedAt: string;
   verifiedAt?: string;
   failureReason?: string;

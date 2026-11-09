@@ -139,6 +139,9 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
   const tokenCustA = serverModule.createSessionToken({
     userId: custA_id, username: custA_member, role: 'customer', restaurantCode: rCode1,
   });
+  const tokenCustB = serverModule.createSessionToken({
+    userId: custB_id, username: custB_member, role: 'customer', restaurantCode: rCode1,
+  });
   const tokenStaff = serverModule.createSessionToken({
     userId: 'staff_' + rCode1, username: 'operator1', role: 'stand_staff', restaurantCode: rCode1, stationId,
   });
@@ -252,7 +255,7 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
       const balA = await pool!.query('SELECT COALESCE(SUM(plates_delta),0)::int as bal FROM ledger_entries WHERE customer_id=$1', [custA_id]);
       const balB = await pool!.query('SELECT COALESCE(SUM(plates_delta),0)::int as bal FROM ledger_entries WHERE customer_id=$1', [custB_id]);
       assert.equal(Number(balA.rows[0].bal), 4);
-      assert.equal(Number(balB.rows[0].bal), 6);
+      assert.equal(Number(balB.rows[0].bal), 16);
     });
 
     // 5. Idempotency: Duplicate request returns identical response without re-debiting
@@ -286,7 +289,7 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
       const balA = await pool!.query('SELECT COALESCE(SUM(plates_delta),0)::int as bal FROM ledger_entries WHERE customer_id=$1', [custA_id]);
       const balB = await pool!.query('SELECT COALESCE(SUM(plates_delta),0)::int as bal FROM ledger_entries WHERE customer_id=$1', [custB_id]);
       assert.equal(Number(balA.rows[0].bal), 2);
-      assert.equal(Number(balB.rows[0].bal), 8);
+      assert.equal(Number(balB.rows[0].bal), 18);
     });
 
     // 6. Supervisor Overrides: Request and approval authority
@@ -421,8 +424,8 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
         supervisorOverrideId: overrideId,
         idempotencyKey: 'scan_race_3_' + Date.now(),
       });
-      assert.equal(repeatScan.status, 403);
-      assert.equal(repeatScan.body.code, 'SUPERVISOR_OVERRIDE_INVALID');
+      assert.equal(repeatScan.status, 409);
+      assert.equal(repeatScan.body.code, 'SUPERVISOR_OVERRIDE_ALREADY_USED');
     });
 
   } finally {

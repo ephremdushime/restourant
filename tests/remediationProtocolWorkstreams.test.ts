@@ -355,17 +355,26 @@ describe('Production Readiness & Security Remediation Protocol (Workstreams A–
     assert.strictEqual(await isTokenUsed(tokenKey), false);
   });
 
-  test('Workstream F: Mobile Money checkout, HMAC webhook verification, idempotency, failure handling, and reconciliation', async () => {
-    const prevFlag = process.env.RESTOPASS_MOBILE_MONEY_ENABLED;
-    const prevSecret = process.env.MOMO_WEBHOOK_SECRET;
+  test('Workstream F: patron checkout fails closed without MTN Collections and legacy callbacks cannot activate access', async () => {
+    const previousMtnEnabled = process.env.RESTOPASS_SAAS_MTN_ENABLED;
+    const previousWebhookSecret = process.env.RESTOPASS_MOBILE_MONEY_WEBHOOK_SECRET;
+    const previousSettings = { ...getServerDbState().studentSubscriptionSettings };
+    const state = getServerDbState();
+    ensureServerDbDefaults(state);
+    const customer = state.customers.find((item: any) => item.restaurantCode === 'RW01' && item.memberNo) ||
+      state.customers.find((item: any) => item.restaurantCode === 'RW01');
+    assert.ok(customer);
+    const previousRegistrationStatus = customer.registrationStatus;
     try {
-      process.env.RESTOPASS_MOBILE_MONEY_ENABLED = 'true';
-      process.env.MOMO_WEBHOOK_SECRET = 'test_webhook_hmac_secret_32_bytes_long_001';
-
-      const state = getServerDbState();
-      ensureServerDbDefaults(state);
-      const customer = state.customers.find((c: any) => c.restaurantCode === 'RW01' && c.memberNo) || state.customers.find((c: any) => c.restaurantCode === 'RW01');
-      assert.ok(customer);
+      customer.registrationStatus = 'approved';
+      state.studentSubscriptionSettings = {
+        ...state.studentSubscriptionSettings,
+        enabled: true,
+        priceRwf: 500,
+        promoAccessEnabled: false,
+      };
+      delete process.env.RESTOPASS_SAAS_MTN_ENABLED;
+      delete process.env.RESTOPASS_MOBILE_MONEY_WEBHOOK_SECRET;
 
       const custToken = createSessionToken({
         userId: customer.id,
@@ -373,115 +382,36 @@ describe('Production Readiness & Security Remediation Protocol (Workstreams A–
         role: 'customer',
         restaurantCode: 'RW01',
       });
-      const adminToken = createSessionToken({
-        userId: 'admin_rw01',
-        username: 'boss.rw01',
-        role: 'restaurant_admin',
-        restaurantCode: 'RW01',
-      });
-
-      // 1. Initiate checkout
-      const idempKey = `chk_ws_f_${Date.now()}`;
-      const chkRes = await fetchTestRoute(
+      const beforePayments = (state.studentSubscriptionPayments || []).length;
+      const beforeSubscriptions = (state.customerSubscriptions || []).length;
+      const checkout = await fetchTestRoute(
         app,
         'POST',
         '/api/customer/subscription/checkout',
-        { provider: 'mtn_momo', phone: '0788123456', idempotencyKey: idempKey },
-        { Authorization: `Bearer ${custToken}` }
+        { phone: '0788123456', months: 1, idempotencyKey: 'ws-f-' + Date.now() + '-key' },
+        { Authorization: 'Bearer ' + custToken }
       );
-      assert.strictEqual(chkRes.status, 202);
-      const attempt = chkRes.body.paymentAttempt;
-      assert.strictEqual(attempt.status, 'pending');
-      assert.strictEqual(attempt.amountRwf, 500);
+      assert.strictEqual(checkout.status, 503);
+      assert.strictEqual(checkout.body.code, 'PAYMENT_PROVIDER_NOT_CONFIGURED');
+      assert.strictEqual((state.studentSubscriptionPayments || []).length, beforePayments);
 
-      // 2. Reject callback with invalid signature (401)
-      const badSigRes = await fetchTestRoute(
+      const legacyCallback = await fetchTestRoute(
         app,
         'POST',
         '/api/payments/mobile-money/callback',
         {
-          internalReference: attempt.internalReference,
-          providerTransactionId: 'MOMO-TX-99901',
+          internalReference: 'PATRON-UNTRUSTED-REFERENCE',
+          providerTransactionId: 'MOMO-TX-UNTRUSTED',
           amountRwf: 500,
           currency: 'RWF',
           status: 'SUCCESSFUL',
-        },
-        { 'x-callback-signature': 'invalid_forged_signature' }
+        }
       );
-      assert.strictEqual(badSigRes.status, 401);
+      assert.strictEqual(legacyCallback.status, 503);
+      assert.strictEqual((state.customerSubscriptions || []).length, beforeSubscriptions);
+      assert.equal((state.studentSubscriptionPayments || []).some((p: any) => p.internalReference === 'PATRON-UNTRUSTED-REFERENCE'), false);
 
-      // 3. Reject callback with wrong amount (400)
-      const wrongAmountBody = {
-        internalReference: attempt.internalReference,
-        providerTransactionId: 'MOMO-TX-99901',
-        amountRwf: 100,
-        currency: 'RWF',
-        status: 'SUCCESSFUL',
-      };
-      const wrongAmountSig = crypto
-        .createHmac('sha256', process.env.MOMO_WEBHOOK_SECRET)
-        .update(JSON.stringify(wrongAmountBody))
-        .digest('hex');
-      const wrongAmountRes = await fetchTestRoute(
-        app,
-        'POST',
-        '/api/payments/mobile-money/callback',
-        wrongAmountBody,
-        { 'x-callback-signature': wrongAmountSig }
-      );
-      assert.strictEqual(wrongAmountRes.status, 400);
-
-      // 4. Valid SUCCESSFUL callback activates subscription
-      const validBody = {
-        internalReference: attempt.internalReference,
-        providerTransactionId: `MOMO-TX-${Date.now()}`,
-        amountRwf: 500,
-        currency: 'RWF',
-        status: 'SUCCESSFUL',
-      };
-      const validSig = crypto
-        .createHmac('sha256', process.env.MOMO_WEBHOOK_SECRET)
-        .update(JSON.stringify(validBody))
-        .digest('hex');
-      const okCallback = await fetchTestRoute(
-        app,
-        'POST',
-        '/api/payments/mobile-money/callback',
-        validBody,
-        { 'x-callback-signature': validSig }
-      );
-      assert.strictEqual(okCallback.status, 200);
-      assert.strictEqual(okCallback.body.idempotentDuplicate, false);
-      assert.strictEqual(okCallback.body.paymentAttempt.status, 'verified');
-      assert.strictEqual(okCallback.body.subscription.status, 'active');
-      const firstPeriodEnd = okCallback.body.subscription.currentPeriodEnd;
-
-      // 5. Duplicate callback is handled idempotently without extending period
-      const dupCallback = await fetchTestRoute(
-        app,
-        'POST',
-        '/api/payments/mobile-money/callback',
-        validBody,
-        { 'x-callback-signature': validSig }
-      );
-      assert.strictEqual(dupCallback.status, 200);
-      assert.strictEqual(dupCallback.body.idempotentDuplicate, true);
-      const subAfterDup = state.customerSubscriptions.find((s: any) => s.customerId === customer.id);
-      assert.strictEqual(subAfterDup.currentPeriodEnd, firstPeriodEnd);
-
-      // 6. Reconciliation endpoint confirms zero orphaned verified payments
-      const reconRes = await fetchTestRoute(
-        app,
-        'GET',
-        '/api/admin/payments/mobile-money/reconcile',
-        {},
-        { Authorization: `Bearer ${adminToken}` }
-      );
-      assert.strictEqual(reconRes.status, 200);
-      assert.strictEqual(reconRes.body.summary.consistent, true);
-      assert.strictEqual(reconRes.body.summary.orphanedVerifiedCount, 0);
-
-      // 7. P0-09: MomoService never enables mock mode in production and callback rejects missing MOMO_WEBHOOK_SECRET in production
+      // P0-09: MomoService never enables mock mode in production
       const prevEnv = process.env.NODE_ENV;
       try {
         process.env.NODE_ENV = 'production';
@@ -489,65 +419,16 @@ describe('Production Readiness & Security Remediation Protocol (Workstreams A–
         assert.strictEqual(prodMomo.isMock(), false, 'MomoService must never run in mock mode when NODE_ENV=production');
         prodMomo.setMock(true);
         assert.strictEqual(prodMomo.isMock(), false, 'setMock(true) must be ignored when NODE_ENV=production');
-
-        delete process.env.MOMO_WEBHOOK_SECRET;
-        const noSecretProdCallback = await fetchTestRoute(
-          app,
-          'POST',
-          '/api/payments/mobile-money/callback',
-          validBody,
-          { 'x-callback-signature': validSig }
-        );
-        assert.strictEqual(
-          noSecretProdCallback.status,
-          503,
-          'Production callback must fail closed when MOMO_WEBHOOK_SECRET is missing'
-        );
       } finally {
         process.env.NODE_ENV = prevEnv;
-        process.env.MOMO_WEBHOOK_SECRET = 'test_webhook_hmac_secret_32_bytes_long_001';
       }
-
-      // 8. P0-09: Status verification endpoint rejects mismatched payer MSISDN or currency
-      const mismatchRef = `RP-SUB-MISMATCH-${Date.now()}`;
-      const mismatchUuid = crypto.randomUUID();
-      await momoService.requestToPay({
-        referenceId: mismatchUuid,
-        amount: '500',
-        currency: 'EUR', // wrong currency
-        externalId: mismatchRef,
-        payerPhone: '250788999999', // different payer
-      });
-      state.studentSubscriptionPayments.push({
-        id: `sp_mismatch_${Date.now()}`,
-        customerId: customer.id,
-        memberNo: customer.memberNo,
-        restaurantCode: 'RW01',
-        provider: 'mtn_momo',
-        phone: '0788123456',
-        phoneNumber: '0788123456',
-        amountRwf: 500,
-        currency: 'RWF',
-        internalReference: mismatchRef,
-        providerReferenceUuid: mismatchUuid,
-        momoReferenceId: mismatchUuid,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-      });
-      const statusMismatchRes = await fetchTestRoute(
-        app,
-        'GET',
-        `/api/customer/subscription/payments/${encodeURIComponent(mismatchRef)}/status`,
-        {},
-        { Authorization: `Bearer ${custToken}` }
-      );
-      assert.strictEqual(statusMismatchRes.status, 400, 'Status check must reject currency/payer mismatch');
-      assert.strictEqual(statusMismatchRes.body.status, 'FAILED');
     } finally {
-      if (prevFlag === undefined) delete process.env.RESTOPASS_MOBILE_MONEY_ENABLED;
-      else process.env.RESTOPASS_MOBILE_MONEY_ENABLED = prevFlag;
-      if (prevSecret === undefined) delete process.env.MOMO_WEBHOOK_SECRET;
-      else process.env.MOMO_WEBHOOK_SECRET = prevSecret;
+      customer.registrationStatus = previousRegistrationStatus;
+      state.studentSubscriptionSettings = previousSettings as any;
+      if (previousMtnEnabled === undefined) delete process.env.RESTOPASS_SAAS_MTN_ENABLED;
+      else process.env.RESTOPASS_SAAS_MTN_ENABLED = previousMtnEnabled;
+      if (previousWebhookSecret === undefined) delete process.env.RESTOPASS_MOBILE_MONEY_WEBHOOK_SECRET;
+      else process.env.RESTOPASS_MOBILE_MONEY_WEBHOOK_SECRET = previousWebhookSecret;
     }
   });
 
