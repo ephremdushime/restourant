@@ -73,6 +73,11 @@ import { applyCustomTranslations } from '../services/i18n';
 const STORAGE_KEY = 'RESTOPASS_STATE_V1.1';
 const STORAGE_KEY_PROD = 'RESTOPASS_PRODUCTION_CLEAN_V2';
 
+const hasBrowserLocalStorage = (): boolean =>
+  typeof window !== 'undefined' && typeof localStorage !== 'undefined';
+const hasBrowserSessionStorage = (): boolean =>
+  typeof window !== 'undefined' && typeof sessionStorage !== 'undefined';
+
 const DEMO_SEED_CUSTOMER_IDS = new Set([
   'cust_28491',
   'cust_28492',
@@ -83,7 +88,17 @@ const DEMO_SEED_CUSTOMER_IDS = new Set([
   'cust_rw02_1',
   'cust_rw02_2',
 ]);
-const DEMO_SEED_RESTO_CODES = new Set(['RW02', 'RW03']);
+const DEMO_SEED_RESTO_NAMES = new Set(['Nyarugenge Central Bistro', 'Huye University Canteen']);
+const DEMO_SEED_LICENSE_IDS = new Set(['LIC-RW02-2026-N9B']);
+const DEMO_SEED_PACKAGE_IDS = new Set(['pkg_rw02_10', 'pkg_rw02_20']);
+const DEMO_SEED_MENU_IDS = new Set([
+  'menu_rw02_exec_lunch',
+  'menu_rw02_express',
+  'menu_rw02_dinner',
+  'menu_rw02_breakfast',
+  'menu_rw02_special',
+]);
+const DEMO_SEED_SCAN_POINT_IDS = new Set(['sp_rw02_1']);
 const DEMO_SEED_NOTIF_IDS = new Set([
   'notif_init_1',
   'notif_init_2',
@@ -1456,6 +1471,7 @@ export class RestoStore {
   private listeners: Set<() => void> = new Set();
   private isSyncingWithServer = false;
   private authToken: string | null = null;
+  private demoModeExplicit: boolean | null = null;
   private failedPairingAttempts = 0;
   private pairingLockoutUntil = 0;
 
@@ -1505,7 +1521,7 @@ export class RestoStore {
     if (this.state.customTranslations) {
       applyCustomTranslations(this.state.customTranslations);
     }
-    if (typeof window !== 'undefined') {
+    if (hasBrowserSessionStorage()) {
       try {
         this.authToken = sessionStorage.getItem('restopass_active_token') || null;
       } catch {}
@@ -1519,7 +1535,7 @@ export class RestoStore {
 
   public setAuthToken(token: string | null): void {
     this.authToken = token;
-    if (typeof window !== 'undefined') {
+    if (hasBrowserSessionStorage()) {
       try {
         if (token) {
           sessionStorage.setItem('restopass_active_token', token);
@@ -1764,9 +1780,9 @@ export class RestoStore {
     }
   }
 
-  private mergeServerState(serverState: Partial<AppState>): void {
+  public mergeServerState(serverState: Partial<AppState>): void {
     let hasChanges = false;
-    const isProdClean = typeof window !== 'undefined' && !this.isDemoModeActive();
+    const isProdClean = !this.isDemoModeActive();
 
     // Merge durable server tombstones before merging any records. This prevents
     // stale local/offline copies from reappearing in the active UI.
@@ -1848,11 +1864,11 @@ export class RestoStore {
       }
     }
 
-    // 4. Merge restaurants
+    // 4. Merge restaurants (P0-08: filter only specific demo seed restaurant names, never real RW02/RW03 tenants)
     if (serverState.restaurants && Array.isArray(serverState.restaurants)) {
       const currentRestoMap = new Map(this.state.restaurants.map((r) => [r.code, r]));
       for (const serverResto of serverState.restaurants) {
-        if (isProdClean && DEMO_SEED_RESTO_CODES.has(serverResto.code)) continue;
+        if (isProdClean && DEMO_SEED_RESTO_NAMES.has(serverResto.name)) continue;
         const existing = currentRestoMap.get(serverResto.code);
         if (!existing) {
           this.state.restaurants.push(serverResto);
@@ -1867,9 +1883,11 @@ export class RestoStore {
 
     // 5. Server state is authoritative for station accounts; credential fields stay blank in the browser.
     if (Array.isArray(serverState.stationUsers)) {
-      this.state.stationUsers = serverState.stationUsers.map((serverUser: any) => ({
-        ...serverUser, passwordHash: '', pin: '',
-      }));
+      this.state.stationUsers = serverState.stationUsers
+        .filter((serverUser: any) => !(isProdClean && DEMO_SEED_USER_IDS.has(serverUser.id)))
+        .map((serverUser: any) => ({
+          ...serverUser, passwordHash: '', pin: '',
+        }));
       hasChanges = true;
     }
 
@@ -1881,8 +1899,7 @@ export class RestoStore {
         if (
           isProdClean &&
           (DEMO_SEED_NOTIF_IDS.has(serverNotif.id) ||
-            DEMO_SEED_CUSTOMER_IDS.has(serverNotif.target) ||
-            DEMO_SEED_RESTO_CODES.has(serverNotif.restaurantCode))
+            DEMO_SEED_CUSTOMER_IDS.has(serverNotif.target))
         ) {
           continue;
         }
@@ -1931,27 +1948,27 @@ export class RestoStore {
     mergeCollectionById(
       'packages',
       serverState.packages,
-      (item) => isProdClean && DEMO_SEED_RESTO_CODES.has(item.restaurantCode)
+      (item) => isProdClean && DEMO_SEED_PACKAGE_IDS.has(item.id)
     );
     mergeCollectionById(
       'menuItems',
       serverState.menuItems,
-      (item) => isProdClean && DEMO_SEED_RESTO_CODES.has(item.restaurantCode)
+      (item) => isProdClean && DEMO_SEED_MENU_IDS.has(item.id)
     );
     mergeCollectionById(
       'branches',
       serverState.branches,
-      (item) => isProdClean && (DEMO_SEED_BRANCH_IDS.has(item.id) || DEMO_SEED_RESTO_CODES.has(item.restaurantCode))
+      (item) => isProdClean && DEMO_SEED_BRANCH_IDS.has(item.id)
     );
     mergeCollectionById(
       'stationUsers',
       serverState.stationUsers,
-      (item) => isProdClean && (DEMO_SEED_USER_IDS.has(item.id) || DEMO_SEED_RESTO_CODES.has(item.restaurantCode))
+      (item) => isProdClean && DEMO_SEED_USER_IDS.has(item.id)
     );
     mergeCollectionById(
       'scanPoints',
       serverState.scanPoints,
-      (item) => isProdClean && DEMO_SEED_RESTO_CODES.has(item.restaurantCode)
+      (item) => isProdClean && DEMO_SEED_SCAN_POINT_IDS.has(item.id)
     );
     mergeCollectionById(
       'shifts',
@@ -1974,7 +1991,7 @@ export class RestoStore {
     mergeCollectionById(
       'expenses',
       serverState.expenses,
-      (item) => isProdClean && (DEMO_SEED_EXPENSE_IDS.has(item.id) || DEMO_SEED_RESTO_CODES.has(item.restaurantCode))
+      (item) => isProdClean && DEMO_SEED_EXPENSE_IDS.has(item.id)
     );
     mergeCollectionById('activationRequests', serverState.activationRequests);
     mergeCollectionById('pinRecoveryRequests', serverState.pinRecoveryRequests);
@@ -1982,7 +1999,7 @@ export class RestoStore {
     mergeCollectionById(
       'licenses',
       serverState.licenses,
-      (item) => isProdClean && DEMO_SEED_RESTO_CODES.has(item.restaurantCode)
+      (item) => isProdClean && DEMO_SEED_LICENSE_IDS.has(item.id)
     );
 
     if (serverState.studentSubscriptionSettings) {
@@ -2007,7 +2024,7 @@ export class RestoStore {
     }
 
     if (hasChanges) {
-      if (typeof window !== 'undefined') {
+      if (hasBrowserLocalStorage()) {
         try {
           const activeStorageKey = this.isDemoModeActive() ? STORAGE_KEY : STORAGE_KEY_PROD;
           localStorage.setItem(activeStorageKey, this.sanitizeStateForStorage(this.state));
@@ -2018,7 +2035,8 @@ export class RestoStore {
   }
 
   public isDemoModeActive(): boolean {
-    if (typeof window === 'undefined') return true;
+    if (this.demoModeExplicit !== null) return this.demoModeExplicit;
+    if (!hasBrowserSessionStorage()) return true;
     try {
       return sessionStorage.getItem('restopass_demo_mode') === 'true';
     } catch {
@@ -2027,7 +2045,8 @@ export class RestoStore {
   }
 
   public setDemoMode(isDemo: boolean): void {
-    if (typeof window !== 'undefined') {
+    this.demoModeExplicit = isDemo;
+    if (hasBrowserSessionStorage()) {
       try {
         sessionStorage.setItem('restopass_demo_mode', String(isDemo));
       } catch {}
@@ -2042,7 +2061,7 @@ export class RestoStore {
   }
 
   private loadState(): AppState {
-    if (typeof window === 'undefined') return getInitialState();
+    if (!hasBrowserLocalStorage()) return getInitialState();
     const isDemo = this.isDemoModeActive();
     const activeStorageKey = isDemo ? STORAGE_KEY : STORAGE_KEY_PROD;
     try {
@@ -2056,21 +2075,21 @@ export class RestoStore {
           theme: parsed.theme || baseState.theme,
           plans: baseState.plans,
           restaurants: Array.isArray(parsed.restaurants) && parsed.restaurants.length > 0
-            ? (isDemo ? parsed.restaurants : parsed.restaurants.filter((r: any) => !DEMO_SEED_RESTO_CODES.has(r.code)))
+            ? (isDemo ? parsed.restaurants : parsed.restaurants.filter((r: any) => !DEMO_SEED_RESTO_NAMES.has(r.name)))
             : baseState.restaurants,
           packages: Array.isArray(parsed.packages) && parsed.packages.length > 0
-            ? parsed.packages
+            ? (isDemo ? parsed.packages : parsed.packages.filter((p: any) => !DEMO_SEED_PACKAGE_IDS.has(p.id)))
             : baseState.packages,
           menuItems: Array.isArray(parsed.menuItems) && parsed.menuItems.length > 0
-            ? parsed.menuItems
+            ? (isDemo ? parsed.menuItems : parsed.menuItems.filter((m: any) => !DEMO_SEED_MENU_IDS.has(m.id)))
             : baseState.menuItems,
           branches: Array.isArray(parsed.branches) && parsed.branches.length > 0
-            ? (isDemo ? parsed.branches : parsed.branches.filter((b: any) => !DEMO_SEED_BRANCH_IDS.has(b.id) && !DEMO_SEED_RESTO_CODES.has(b.restaurantCode)))
+            ? (isDemo ? parsed.branches : parsed.branches.filter((b: any) => !DEMO_SEED_BRANCH_IDS.has(b.id)))
             : baseState.branches,
           stationUsers: Array.isArray(parsed.stationUsers) && parsed.stationUsers.length > 0
             ? (isDemo
                 ? parsed.stationUsers
-                : parsed.stationUsers.filter((u: any) => !DEMO_SEED_USER_IDS.has(u.id) && !DEMO_SEED_RESTO_CODES.has(u.restaurantCode)))
+                : parsed.stationUsers.filter((u: any) => !DEMO_SEED_USER_IDS.has(u.id)))
                 .map((u: any) => ({ ...u, passwordHash: '', pin: '' }))
             : baseState.stationUsers,
           pendingApprovals: Array.isArray(parsed.pendingApprovals)
@@ -2105,12 +2124,11 @@ export class RestoStore {
                 : parsed.notifications.filter(
                     (n: any) =>
                       !DEMO_SEED_NOTIF_IDS.has(n.id) &&
-                      !DEMO_SEED_CUSTOMER_IDS.has(n.target) &&
-                      !DEMO_SEED_RESTO_CODES.has(n.restaurantCode)
+                      !DEMO_SEED_CUSTOMER_IDS.has(n.target)
                   ))
             : baseState.notifications,
           expenses: Array.isArray(parsed.expenses)
-            ? (isDemo ? parsed.expenses : parsed.expenses.filter((e: any) => !DEMO_SEED_EXPENSE_IDS.has(e.id) && !DEMO_SEED_RESTO_CODES.has(e.restaurantCode)))
+            ? (isDemo ? parsed.expenses : parsed.expenses.filter((e: any) => !DEMO_SEED_EXPENSE_IDS.has(e.id)))
             : baseState.expenses,
           studentSubscriptionSettings: parsed.studentSubscriptionSettings
             ? { ...baseState.studentSubscriptionSettings, ...parsed.studentSubscriptionSettings }
@@ -2127,7 +2145,7 @@ export class RestoStore {
   private saveTimeout: any = null;
 
   private saveState(): void {
-    if (typeof window === 'undefined') return;
+    if (!hasBrowserLocalStorage()) return;
     try {
       const activeStorageKey = this.isDemoModeActive() ? STORAGE_KEY : STORAGE_KEY_PROD;
       localStorage.setItem(activeStorageKey, this.sanitizeStateForStorage(this.state));
@@ -5750,24 +5768,26 @@ export class RestoStore {
    */
   public isCurrentTerminalPaired(restaurantCode?: string): boolean {
     const code = restaurantCode || this.state.currentRestaurantCode;
-    try {
-      const stored = localStorage.getItem(`restopass_paired_station_${code}`);
-      if (stored) {
-        // If an explicit revocation was issued for this station in cashierSessions, clear and block
-        const sessions = (this.state.cashierSessions || []).filter(
-          (s) => s.restaurantCode === code && s.stationId === stored
-        );
-        const latestSession = sessions[0];
-        if (latestSession && latestSession.status === 'revoked') {
-          localStorage.removeItem(`restopass_paired_station_${code}`);
-          localStorage.removeItem(`restopass_paired_token_${code}`);
-          return false;
-        }
+    if (hasBrowserLocalStorage()) {
+      try {
+        const stored = localStorage.getItem(`restopass_paired_station_${code}`);
+        if (stored) {
+          // If an explicit revocation was issued for this station in cashierSessions, clear and block
+          const sessions = (this.state.cashierSessions || []).filter(
+            (s) => s.restaurantCode === code && s.stationId === stored
+          );
+          const latestSession = sessions[0];
+          if (latestSession && latestSession.status === 'revoked') {
+            localStorage.removeItem(`restopass_paired_station_${code}`);
+            localStorage.removeItem(`restopass_paired_token_${code}`);
+            return false;
+          }
 
-        const found = this.state.scanPoints.find((sp) => sp.id === stored && sp.restaurantCode === code);
-        if (found && found.isPaired !== false) return true;
-      }
-    } catch {}
+          const found = this.state.scanPoints.find((sp) => sp.id === stored && sp.restaurantCode === code);
+          if (found && found.isPaired !== false) return true;
+        }
+      } catch {}
+    }
     // If current station is marked paired in state
     const curStn = this.state.scanPoints.find(
       (sp) => sp.id === this.state.currentStationId && sp.restaurantCode === code
@@ -5820,8 +5840,10 @@ export class RestoStore {
     this.failedPairingAttempts = 0;
 
     const now = new Date().toISOString();
-    const detectedType = data.deviceType || (navigator.userAgent.includes('Mobile') ? 'phone' : 'laptop_scanner');
-    const fingerprint = data.deviceFingerprint || `${navigator.platform} · ${navigator.userAgent.slice(0, 30)}`;
+    const userAgent = typeof navigator !== 'undefined' && navigator.userAgent ? navigator.userAgent : 'NodeJS';
+    const platform = typeof navigator !== 'undefined' && navigator.platform ? navigator.platform : 'Server';
+    const detectedType = data.deviceType || (userAgent.includes('Mobile') ? 'phone' : 'laptop_scanner');
+    const fingerprint = data.deviceFingerprint || `${platform} · ${userAgent.slice(0, 30)}`;
     const sessionToken = `DEV_CERT_${station.id}_${Date.now()}`;
     const assignedUser = this.state.stationUsers.find((u) => u.id === station.assignedStaffUserId || u.stationId === station.id);
 
@@ -5867,10 +5889,12 @@ export class RestoStore {
 
     this.state.cashierSessions.unshift(newSession);
 
-    try {
-      localStorage.setItem(`restopass_paired_station_${code}`, station.id);
-      localStorage.setItem(`restopass_paired_token_${code}`, sessionToken);
-    } catch {}
+    if (hasBrowserLocalStorage()) {
+      try {
+        localStorage.setItem(`restopass_paired_station_${code}`, station.id);
+        localStorage.setItem(`restopass_paired_token_${code}`, sessionToken);
+      } catch {}
+    }
 
     this.logAudit({
       restaurantCode: code,
@@ -5908,10 +5932,12 @@ export class RestoStore {
         });
     }
 
-    try {
-      localStorage.removeItem(`restopass_paired_station_${stn.restaurantCode}`);
-      localStorage.removeItem(`restopass_paired_token_${stn.restaurantCode}`);
-    } catch {}
+    if (hasBrowserLocalStorage()) {
+      try {
+        localStorage.removeItem(`restopass_paired_station_${stn.restaurantCode}`);
+        localStorage.removeItem(`restopass_paired_token_${stn.restaurantCode}`);
+      } catch {}
+    }
 
     this.logAudit({
       restaurantCode: stn.restaurantCode,
@@ -5969,13 +5995,15 @@ export class RestoStore {
     }
 
     // If local terminal was bound to this station, evict tokens immediately
-    try {
-      const storedStation = localStorage.getItem(`restopass_paired_station_${session.restaurantCode}`);
-      if (storedStation === session.stationId) {
-        localStorage.removeItem(`restopass_paired_station_${session.restaurantCode}`);
-        localStorage.removeItem(`restopass_paired_token_${session.restaurantCode}`);
-      }
-    } catch {}
+    if (hasBrowserLocalStorage()) {
+      try {
+        const storedStation = localStorage.getItem(`restopass_paired_station_${session.restaurantCode}`);
+        if (storedStation === session.stationId) {
+          localStorage.removeItem(`restopass_paired_station_${session.restaurantCode}`);
+          localStorage.removeItem(`restopass_paired_token_${session.restaurantCode}`);
+        }
+      } catch {}
+    }
 
     this.logAudit({
       restaurantCode: session.restaurantCode,
@@ -6029,10 +6057,12 @@ export class RestoStore {
         sp.pairedAt = undefined;
       });
 
-    try {
-      localStorage.removeItem(`restopass_paired_station_${restaurantCode}`);
-      localStorage.removeItem(`restopass_paired_token_${restaurantCode}`);
-    } catch {}
+    if (hasBrowserLocalStorage()) {
+      try {
+        localStorage.removeItem(`restopass_paired_station_${restaurantCode}`);
+        localStorage.removeItem(`restopass_paired_token_${restaurantCode}`);
+      } catch {}
+    }
 
     this.logAudit({
       restaurantCode,
