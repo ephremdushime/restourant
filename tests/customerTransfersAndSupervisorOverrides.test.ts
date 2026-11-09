@@ -388,17 +388,25 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
         approvalReason: 'Super admin approval for lab student double shift',
       });
 
-      const payload = await getCardPayload(custB_member);
+      const seedTime = Date.now();
+      await pool!.query(
+        "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data,created_at) VALUES ($1,$2,$3,$4,'approved',$5,NOW())",
+        ['scan_seed_race_limit_' + seedTime, rCode1, custB_id, 'other_station_' + rCode1, JSON.stringify({ customerId: custB_id, platesDeducted: 1, status: 'approved' })]
+      );
+      // The same-station consecutive-scan guard must see a different customer,
+      // while the seeded customer scan above independently triggers the meal limit.
+      await pool!.query(
+        "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data,created_at) VALUES ($1,$2,$3,$4,'approved',$5,NOW() + INTERVAL '10 seconds')",
+        ['scan_seed_race_station_' + seedTime, rCode1, custA_id, stationId, JSON.stringify({ customerId: custA_id, platesDeducted: 1, status: 'approved' })]
+      );
+      const cardToken = await post('/api/qr/token/card', tokenCustB, { restaurantCode: rCode1, memberNo: custB_member });
+      assert.equal(cardToken.status, 200, JSON.stringify(cardToken.body));
       const pScan1 = post('/api/scans/consume', tokenStaff, {
-        payload,
-        stationId,
-        supervisorOverrideId: overrideId,
+        payload: cardToken.body.token, stationId, supervisorOverrideId: overrideId,
         idempotencyKey: 'scan_race_1_' + Date.now(),
       });
       const pScan2 = post('/api/scans/consume', tokenStaff, {
-        payload,
-        stationId,
-        supervisorOverrideId: overrideId,
+        payload: cardToken.body.token, stationId, supervisorOverrideId: overrideId,
         idempotencyKey: 'scan_race_2_' + Date.now(),
       });
 
@@ -406,22 +414,10 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
       const statuses = [s1.status, s2.status].sort();
       assert.deepEqual(statuses, [200, 409]);
       const failedScan = s1.status === 409 ? s1 : s2;
-      assert.match(failedScan.body.error, /consecutive scans/i);
+      assert.equal(failedScan.body.code, 'SUPERVISOR_OVERRIDE_ALREADY_USED', JSON.stringify(failedScan.body));
 
-      const interveningEvent = {
-        id: 'intervening_' + rCode1,
-        customerId: custA_id,
-        platesDeducted: 1,
-        status: 'approved',
-      };
-      await pool!.query(
-        "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data,created_at) VALUES ($1,$2,$3,$4,'approved',$5,NOW())",
-        [interveningEvent.id, rCode1, custA_id, stationId, JSON.stringify(interveningEvent)]
-      );
       const repeatScan = await post('/api/scans/consume', tokenStaff, {
-        payload,
-        stationId,
-        supervisorOverrideId: overrideId,
+        payload: cardToken.body.token, stationId, supervisorOverrideId: overrideId,
         idempotencyKey: 'scan_race_3_' + Date.now(),
       });
       assert.equal(repeatScan.status, 409);
