@@ -220,7 +220,7 @@ export const CustomerPortalLayout: React.FC<CustomerPortalLayoutProps> = ({
                 type="button"
                 aria-current={isActive ? 'page' : undefined}
                 onClick={() => onNavigatePage(item.id)}
-                className={`relative py-2 px-1 rounded-xl flex flex-col items-center justify-center gap-1 text-[11px] font-semibold transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
+                className={`relative py-2 px-1 rounded-xl flex flex-col items-center justify-center gap-1 text-xs font-semibold transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
                   isActive ? 'text-emerald-400 bg-slate-900' : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
