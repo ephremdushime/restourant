@@ -541,3 +541,24 @@ main th {
     overflow-wrap: anywhere;
   }
 }
+
+
+@media (max-width: 380px) {
+  .auth-portal-workspace .grid.grid-cols-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 767px) {
+  .auth-portal-workspace input:not([type="checkbox"]):not([type="radio"]),
+  .auth-portal-workspace select,
+  .auth-portal-workspace textarea {
+    min-height: 2.75rem;
+    font-size: 0.875rem;
+  }
+
+  .auth-portal-workspace label {
+    font-size: 0.875rem;
+    line-height: 1.4;
+  }
+}
