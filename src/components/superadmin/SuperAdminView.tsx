@@ -338,7 +338,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       )}
 
       {/* Console Top Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-2xl bg-gradient-to-r from-amber-950/60 via-slate-900 to-slate-900 border border-amber-900/60">
+      <div className="platform-admin-header flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-2xl bg-gradient-to-r from-amber-950/60 via-slate-900 to-slate-900 border border-amber-900/60">
         <div>
           <div className="flex items-center gap-2">
             <Award className="w-5 h-5 text-amber-400" />
