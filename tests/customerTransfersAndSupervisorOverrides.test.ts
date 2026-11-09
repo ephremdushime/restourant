@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import { createServer } from 'node:http';
 
 const server = fs.readFileSync('server.ts', 'utf8');
@@ -89,7 +90,14 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
   const custB_member = '10002';
   const custC_id = 'cust_c_' + rCode2;
   const custC_member = '20001';
-  const custA_pinHash = 'scrypt$16384$8$1$30313233343536373839616263646566$fb1523c2b96f0447e5f4dd9c1e4fb11533912cc9a9fc846a3d13f0baf799c8a60862c844eb19e535ec5effc50a2288133076ec0990a117b9641125ab09394df9';
+  const custA_pin = '123456';
+  const custA_pinSalt = '30313233343536373839616263646566';
+  const custA_pinHash = 'scrypt$16384$8$1$' + custA_pinSalt + '$' + crypto.scryptSync(custA_pin, custA_pinSalt, 64, {
+    N: 16384,
+    r: 8,
+    p: 1,
+    maxmem: 64 * 1024 * 1024,
+  }).toString('hex');
 
   serverModule.setServerDbState({
     restaurants: [
@@ -399,14 +407,13 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
         "INSERT INTO scan_events (id,restaurant_code,customer_id,station_id,status,data,created_at) VALUES ($1,$2,$3,$4,'approved',$5,NOW() + INTERVAL '10 seconds')",
         ['scan_seed_race_station_' + seedTime, rCode1, custA_id, stationId, JSON.stringify({ customerId: custA_id, platesDeducted: 1, status: 'approved' })]
       );
-      const cardToken = await post('/api/qr/token/card', tokenCustB, { restaurantCode: rCode1, memberNo: custB_member });
-      assert.equal(cardToken.status, 200, JSON.stringify(cardToken.body));
+      const payload = await getCardPayload(custB_member);
       const pScan1 = post('/api/scans/consume', tokenStaff, {
-        payload: cardToken.body.token, stationId, supervisorOverrideId: overrideId,
+        payload, stationId, supervisorOverrideId: overrideId,
         idempotencyKey: 'scan_race_1_' + Date.now(),
       });
       const pScan2 = post('/api/scans/consume', tokenStaff, {
-        payload: cardToken.body.token, stationId, supervisorOverrideId: overrideId,
+        payload, stationId, supervisorOverrideId: overrideId,
         idempotencyKey: 'scan_race_2_' + Date.now(),
       });
 
@@ -417,7 +424,7 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
       assert.equal(failedScan.body.code, 'SUPERVISOR_OVERRIDE_ALREADY_USED', JSON.stringify(failedScan.body));
 
       const repeatScan = await post('/api/scans/consume', tokenStaff, {
-        payload: cardToken.body.token, stationId, supervisorOverrideId: overrideId,
+        payload, stationId, supervisorOverrideId: overrideId,
         idempotencyKey: 'scan_race_3_' + Date.now(),
       });
       assert.equal(repeatScan.status, 409);
