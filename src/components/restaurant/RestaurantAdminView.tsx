@@ -973,7 +973,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
   const licStatus = restoStore.getRestaurantLicenseStatus(state.currentRestaurantCode);
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+    <div className="restaurant-admin-workspace max-w-7xl mx-auto min-w-0 px-4 sm:px-6 py-6 space-y-6">
       {(licStatus.status === 'grace' || licStatus.status === 'expired') && (
         <div className="p-4 rounded-2xl bg-amber-950/90 border-2 border-amber-500/80 text-amber-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
