@@ -309,7 +309,7 @@ main th {
 
 /* Keep long content and controls inside dialogs on short screens. */
 [role="dialog"] {
-  max-width: min(100%, 48rem);
+  max-width: 100%;
   max-height: calc(100dvh - 1.5rem);
   overflow-y: auto;
   overscroll-behavior: contain;
