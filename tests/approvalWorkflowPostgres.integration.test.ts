@@ -34,6 +34,14 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
     'INSERT INTO restaurants (code,name,status,data) VALUES ($1,$2,$3,$4)',
     [restaurantCode, 'Approval Integration Test', 'active', JSON.stringify({ code: restaurantCode, name: 'Approval Integration Test', status: 'active' })]
   );
+  await pool!.query(
+    "INSERT INTO licenses (id,restaurant_code,plan_id,valid_until,data) VALUES ($1,$2,'integration',NOW() + INTERVAL '365 days',$3)",
+    ['lic_' + restaurantCode, restaurantCode, JSON.stringify({ id: 'lic_' + restaurantCode, restaurantCode, planId: 'integration', validUntil: new Date(Date.now() + 365 * 86400000).toISOString() })]
+  );
+  await pool!.query(
+    "INSERT INTO restaurant_subscriptions (id,restaurant_code,status,price_rwf,currency,current_period_start,current_period_end,grace_period_end) VALUES ($1,$2,'active',10000,'RWF',NOW(),NOW() + INTERVAL '365 days',NOW() + INTERVAL '368 days')",
+    ['sub_' + restaurantCode, restaurantCode]
+  );
   serverModule.setServerDbState({
     restaurants: [{ code: restaurantCode, name: 'Approval Integration Test', status: 'active' }],
     scanPoints: [
