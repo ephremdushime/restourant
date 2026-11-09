@@ -318,7 +318,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   );
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+    <div className="platform-admin-workspace max-w-7xl mx-auto min-w-0 px-4 sm:px-6 py-6 space-y-6">
       {/* Toast Notification */}
       {feedbackToast && (
         <div
