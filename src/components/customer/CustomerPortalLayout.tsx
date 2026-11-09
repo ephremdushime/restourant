@@ -208,7 +208,7 @@ export const CustomerPortalLayout: React.FC<CustomerPortalLayoutProps> = ({
       {/* Mobile Bottom Navigation Bar */}
       <nav
         aria-label="Mobile Customer Navigation"
-        className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800 px-2 py-1.5 print:hidden"
+        className="customer-bottom-nav lg:hidden fixed bottom-0 inset-x-0 z-40 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800 px-2 py-1.5 print:hidden"
       >
         <div className="max-w-md mx-auto grid grid-cols-5 gap-1">
           {navItems.map((item) => {
