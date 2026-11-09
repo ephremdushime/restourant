@@ -439,7 +439,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const restoScanEvents = state.scanEvents.filter((ev) => ev.restaurantCode === state.currentRestaurantCode);
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-5 space-y-5">
+    <div className="scanner-workspace max-w-4xl mx-auto min-w-0 px-4 py-5 space-y-5">
       {/* 1. Clean Station Header (Simplified: No Pairing Gate, Pairing Code, or Rogue Wi-Fi Controls) */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 rounded-2xl bg-slate-900 border border-slate-700/80 shadow-lg">
         <div className="flex items-center gap-3">
