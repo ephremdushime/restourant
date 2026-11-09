@@ -1007,7 +1007,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
 
       {/* Unified Boss Navigation Bar (Wraps cleanly without horizontal scrollbar) */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-        <div className="flex items-center flex-wrap gap-1.5 text-xs font-medium">
+        <div className="restaurant-admin-nav flex items-center flex-wrap gap-1.5 text-xs font-medium">
           {[
             {
               id: 'dashboard',
