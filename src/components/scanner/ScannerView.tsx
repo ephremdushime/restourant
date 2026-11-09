@@ -455,7 +455,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         </div>
 
         {/* Staff Operational Controls */}
-        <div className="flex items-center gap-2.5 flex-wrap">
+        <div className="scanner-toolbar flex items-center gap-2.5 flex-wrap">
           {/* Auto-Advance Speed */}
           <div className="flex items-center bg-slate-950 rounded-xl p-1 border border-slate-700 text-xs sm:text-sm">
             <span className="text-slate-200 px-2 font-semibold">Auto-Next:</span>
