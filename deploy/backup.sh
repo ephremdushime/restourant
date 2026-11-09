@@ -31,7 +31,9 @@ if [ "$RESTOPASS_BACKUP_ENCRYPTION_KEY" = "$RESTOPASS_BACKUP_HMAC_KEY" ]; then
   echo "[backup] encryption key and HMAC integrity key must be distinct" >&2
   exit 1
 fi
-if [ "$RESTOPASS_BACKUP_ENCRYPTION_KEY" = "generate_a_unique_backup_encryption_passphrase_at_least_32_characters" ] || [ "$RESTOPASS_BACKUP_HMAC_KEY" = "generate_a_separate_random_backup_integrity_key_at_least_32_characters" ]; then
+if [ "$RESTOPASS_BACKUP_ENCRYPTION_KEY" = "generate_a_unique_backup_encryption_passphrase_at_least_32_characters" ] || \
+   [ "$RESTOPASS_BACKUP_HMAC_KEY" = "generate_a_separate_random_backup_integrity_key_at_least_32_characters" ] || \
+   ( [ "${CI:-false}" != "true" ] && ( [ "$RESTOPASS_BACKUP_ENCRYPTION_KEY" = "ci-backup-encryption-secret-0123456789" ] || [ "$RESTOPASS_BACKUP_HMAC_KEY" = "ci-backup-hmac-secret-0123456789" ] ) ); then
   echo "[backup] default placeholder backup keys detected; configure unique secrets" >&2
   exit 1
 fi
@@ -60,7 +62,16 @@ while true; do
     exit 1
   fi
 
-  tar -czf "$workdir/uploads.tar.gz" -C /uploads .
+  mkdir -p "$workdir/uploads-stage"
+  if [ -d /uploads ]; then
+    cp -a /uploads/. "$workdir/uploads-stage/"
+  fi
+  private_photo_dir="${RESTOPASS_PRIVATE_UPLOAD_DIR:-/app/data/private/patron-photos}"
+  if [ -d "$private_photo_dir" ]; then
+    mkdir -p "$workdir/uploads-stage/patron-photos"
+    cp -a "$private_photo_dir"/. "$workdir/uploads-stage/patron-photos/"
+  fi
+  tar -czf "$workdir/uploads.tar.gz" -C "$workdir/uploads-stage" .
   tar -czf "$workdir/archive.tar.gz" -C "$workdir" database.dump uploads.tar.gz
   openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 -md sha256 \
     -pass env:RESTOPASS_BACKUP_ENCRYPTION_KEY \

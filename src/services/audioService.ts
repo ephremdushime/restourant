@@ -18,7 +18,7 @@ class AudioService {
   private masterCompressor: DynamicsCompressorNode | null = null;
 
   constructor() {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
       try {
         const savedVol = localStorage.getItem('restopass_scanner_volume');
         if (savedVol !== null) {
@@ -125,7 +125,7 @@ class AudioService {
 
   public setSoundEnabled(enabled: boolean) {
     this.soundEnabled = enabled;
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
       try {
         localStorage.setItem('restopass_scanner_sound_enabled', String(enabled));
       } catch {}
@@ -138,7 +138,7 @@ class AudioService {
 
   public setVolume(vol: number) {
     this.volume = Math.max(0, Math.min(1, vol));
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
       try {
         localStorage.setItem('restopass_scanner_volume', String(this.volume));
       } catch {}

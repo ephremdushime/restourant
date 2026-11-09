@@ -78,7 +78,7 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
       [license.restaurantCode, license.id, license.planId]
     );
     await pool!.query(
-      "INSERT INTO restaurant_subscriptions (id,restaurant_code,status,price_rwf,current_period_start,current_period_end) VALUES ($1,$2,'active',60000,NOW(),$3)",
+      "INSERT INTO restaurant_subscriptions (id,restaurant_code,status,price_rwf,currency,current_period_start,current_period_end,grace_period_end) VALUES ($1,$2,'active',60000,'RWF',NOW(),$3,NOW() + INTERVAL '368 days')",
       ['sub_' + license.restaurantCode, license.restaurantCode, license.validUntil]
     );
   }
@@ -89,6 +89,7 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
   const custB_member = '10002';
   const custC_id = 'cust_c_' + rCode2;
   const custC_member = '20001';
+  const custA_pinHash = 'scrypt$16384$8$1$30313233343536373839616263646566$fb1523c2b96f0447e5f4dd9c1e4fb11533912cc9a9fc846a3d13f0baf799c8a60862c844eb19e535ec5effc50a2288133076ec0990a117b9641125ab09394df9';
 
   serverModule.setServerDbState({
     restaurants: [
@@ -102,10 +103,15 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
     licenses: licenseFixtures.map((license) => ({ ...license, status: 'active' })),
     plans: licenseFixtures.map((license) => ({ id: license.planId, terms: { servingWindowMinutes: 120, plateLimitPerWindow: 3 } })),
     customers: [
-      { id: custA_id, restaurantCode: rCode1, memberNo: custA_member, name: 'Customer A', cardStatus: 'active', cardVersion: 1, keyVersion: 1 },
+      { id: custA_id, restaurantCode: rCode1, memberNo: custA_member, name: 'Customer A', cardStatus: 'active', cardVersion: 1, keyVersion: 1, pinHash: custA_pinHash },
       { id: custB_id, restaurantCode: rCode1, memberNo: custB_member, name: 'Customer B', cardStatus: 'active', cardVersion: 1, keyVersion: 1 },
       { id: custC_id, restaurantCode: rCode2, memberNo: custC_member, name: 'Customer C', cardStatus: 'active', cardVersion: 1, keyVersion: 1 },
-    ], pendingApprovals: [], ledgerEntries: [], payments: [], auditLogs: [], stationUsers: [],
+    ],
+    pendingApprovals: [],
+    ledgerEntries: [],
+    payments: [],
+    auditLogs: [],
+    stationUsers: [],
   });
 
   await pool!.query(
@@ -114,9 +120,9 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
             ($6,$7,$8,$9,'active',true,$10),
             ($11,$12,$13,$14,'active',true,$15)`,
     [
-      custA_id, rCode1, custA_member, 'Customer A', JSON.stringify({ id: custA_id, restaurantCode: rCode1, memberNo: custA_member, name: 'Customer A', cardStatus: 'active' }),
-      custB_id, rCode1, custB_member, 'Customer B', JSON.stringify({ id: custB_id, restaurantCode: rCode1, memberNo: custB_member, name: 'Customer B', cardStatus: 'active' }),
-      custC_id, rCode2, custC_member, 'Customer C', JSON.stringify({ id: custC_id, restaurantCode: rCode2, memberNo: custC_member, name: 'Customer C', cardStatus: 'active' }),
+      custA_id, rCode1, custA_member, 'Customer A', JSON.stringify({ id: custA_id, restaurantCode: rCode1, memberNo: custA_member, name: 'Customer A', cardStatus: 'active', cardVersion: 1, keyVersion: 1, pinHash: custA_pinHash }),
+      custB_id, rCode1, custB_member, 'Customer B', JSON.stringify({ id: custB_id, restaurantCode: rCode1, memberNo: custB_member, name: 'Customer B', cardStatus: 'active', cardVersion: 1, keyVersion: 1 }),
+      custC_id, rCode2, custC_member, 'Customer C', JSON.stringify({ id: custC_id, restaurantCode: rCode2, memberNo: custC_member, name: 'Customer C', cardStatus: 'active', cardVersion: 1, keyVersion: 1 }),
     ]
   );
 
@@ -153,13 +159,17 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
   const baseUrl = 'http://127.0.0.1:' + address.port;
 
   const post = async (path: string, token: string, body: unknown) => {
+    const requestBody = path === '/api/customer/transfers' && body && typeof body === 'object' && !('pin' in (body as Record<string, unknown>))
+      ? { ...(body as Record<string, unknown>), pin: '123456' }
+      : body;
     const res = await fetch(baseUrl + path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-      body: JSON.stringify(body),
+      body: JSON.stringify(requestBody),
     });
     return { status: res.status, body: (await res.json()) as any };
   };
+
   const getCardPayload = async (memberNo: string) => {
     const issued = await post('/api/qr/token/card', tokenStaff, { restaurantCode: rCode1, memberNo });
     assert.equal(issued.status, 200, JSON.stringify(issued.body));
@@ -167,6 +177,25 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
   };
 
   try {
+    // 0. Missing or invalid PIN rejection (Section 5 requirement)
+    await t.test('rejects transfer when customer PIN is missing or invalid', async () => {
+      const noPinRes = await post('/api/customer/transfers', tokenCustA, {
+        recipientMemberNo: custB_member,
+        plates: 1,
+        pin: '',
+        idempotencyKey: 'idemp_nopin_' + Date.now(),
+      });
+      assert.equal(noPinRes.status, 401);
+
+      const wrongPinRes = await post('/api/customer/transfers', tokenCustA, {
+        recipientMemberNo: custB_member,
+        plates: 1,
+        pin: '999999',
+        idempotencyKey: 'idemp_wrongpin_' + Date.now(),
+      });
+      assert.equal(wrongPinRes.status, 401);
+    });
+
     // 1. Cross-restaurant transfer rejection
     await t.test('rejects transfer between different restaurants', async () => {
       const res = await post('/api/customer/transfers', tokenCustA, {
@@ -297,8 +326,6 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
     });
 
     // 7. Expired override rejection and repeated consumption guard
-    // Seed three recent successful meals on a different station so the next scan
-    // must present an override, without triggering the consecutive-same-station guard.
     for (let i = 1; i <= 3; i += 1) {
       const event = { id: 'prior_a_' + rCode1 + '_' + i, customerId: custA_id, platesDeducted: 1, status: 'approved' };
       await pool!.query(
@@ -319,7 +346,7 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
         approvalReason: 'Super admin approval for tournament exception',
       });
 
-      await pool!.query('UPDATE scan_supervisor_overrides SET expires_at=NOW()-INTERVAL \'5 minutes\' WHERE id=$1', [overrideId]);
+      await pool!.query("UPDATE scan_supervisor_overrides SET expires_at=NOW()-INTERVAL '5 minutes' WHERE id=$1", [overrideId]);
 
       const payload = await getCardPayload(custA_member);
       const scanRes = await post('/api/scans/consume', tokenStaff, {
@@ -333,8 +360,6 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
     });
 
     // 8. Concurrent attempts to consume the same supervisor override
-    // Give Customer B an available meal balance and three recent meals, so the
-    // one-time override is the only path to a successful next scan.
     await pool!.query(
       "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'purchase',10,$4,NOW(),$5)",
       ['led_seed_' + custB_id, rCode1, custB_id, 'idemp_seed_' + custB_id,
@@ -376,16 +401,10 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
 
       const [s1, s2] = await Promise.all([pScan1, pScan2]);
       const statuses = [s1.status, s2.status].sort();
-      // The first transaction consumes the override. The concurrent request is
-      // serialized behind the customer row lock and may be rejected first by the
-      // same-station consecutive-scan guard (409), before the consumed-override
-      // check is reached.
       assert.deepEqual(statuses, [200, 409]);
       const failedScan = s1.status === 409 ? s1 : s2;
       assert.match(failedScan.body.error, /consecutive scans/i);
 
-      // Model another customer using this station so the next attempt reaches the
-      // override lookup rather than the consecutive-scan guard.
       const interveningEvent = {
         id: 'intervening_' + rCode1,
         customerId: custA_id,

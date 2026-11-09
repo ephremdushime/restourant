@@ -78,8 +78,8 @@ export const CustomerHomePage: React.FC<CustomerHomePageProps> = ({
 
   const remainingGrace = graceInfo
     ? graceInfo.remaining
-    : Math.max(0, customer.gracePlatesRemaining ?? (customer.gracePlatesAllowed || 4));
-  const allowedGrace = graceInfo ? graceInfo.allowed : (customer.gracePlatesAllowed || 4);
+    : Math.max(0, customer.gracePlatesRemaining ?? (customer.gracePlatesAllowed || 3));
+  const allowedGrace = graceInfo ? graceInfo.allowed : (customer.gracePlatesAllowed || 3);
 
   return (
     <div className="space-y-5 animate-in fade-in duration-150">

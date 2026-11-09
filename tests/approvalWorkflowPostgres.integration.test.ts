@@ -46,7 +46,7 @@ test('PostgreSQL approval workflow integration', { skip: !databaseUrl }, async (
     [restaurantCode, licenseId, planId]
   );
   await pool!.query(
-    "INSERT INTO restaurant_subscriptions (id,restaurant_code,status,price_rwf,current_period_start,current_period_end) VALUES ($1,$2,'active',60000,NOW(),$3)",
+    "INSERT INTO restaurant_subscriptions (id,restaurant_code,status,price_rwf,currency,current_period_start,current_period_end,grace_period_end) VALUES ($1,$2,'active',60000,'RWF',NOW(),$3,NOW() + INTERVAL '368 days')",
     ['sub_' + restaurantCode, restaurantCode, validUntil]
   );
   serverModule.setServerDbState({

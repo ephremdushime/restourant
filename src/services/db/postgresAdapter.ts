@@ -153,7 +153,7 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         client.query('SELECT data FROM customers ORDER BY created_at ASC'),
         client.query('SELECT data FROM ledger_entries ORDER BY timestamp ASC'),
         client.query('SELECT data FROM customer_subscriptions ORDER BY created_at ASC'),
-        client.query('SELECT data FROM balance_checkpoints ORDER BY created_at ASC'),
+        client.query('SELECT data FROM balance_checkpoints ORDER BY cutoff_timestamp ASC'),
         client.query('SELECT data FROM payments ORDER BY created_at ASC'),
         client.query('SELECT data FROM scan_events ORDER BY created_at DESC LIMIT 5000'),
         client.query('SELECT data FROM pending_approvals ORDER BY created_at DESC'),
@@ -170,13 +170,26 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         settingsRes.rows.map((r: { key: string; value: any }) => [r.key, r.value])
       );
 
+      const loadedCheckpoints = checkpointRes.rows.map((r: { data: any }) => r.data);
+      const mergeByKey = (tableRows: any[], settingsRows: any[], keyField = 'id') => {
+        const merged = new Map<string, any>();
+        for (const item of Array.isArray(settingsRows) ? settingsRows : []) {
+          if (item && item[keyField]) merged.set(String(item[keyField]), item);
+        }
+        for (const item of tableRows) {
+          if (item && item[keyField]) merged.set(String(item[keyField]), item);
+        }
+        return Array.from(merged.values());
+      };
+
       const state: any = {
         restaurants: restoRes.rows.map((r: { data: any }) => r.data),
         licenses: licenseRes.rows.map((r: { data: any }) => r.data),
         customers: customerRes.rows.map((r: { data: any }) => r.data),
         ledgerEntries: ledgerRes.rows.map((r: { data: any }) => r.data),
         customerSubscriptions: subRes.rows.map((r: { data: any }) => r.data),
-        balanceCheckpoints: checkpointRes.rows.map((r: { data: any }) => r.data),
+        balanceCheckpoints: loadedCheckpoints,
+        checkpoints: loadedCheckpoints,
         payments: paymentRes.rows.map((r: { data: any }) => r.data),
         scanEvents: scanRes.rows.map((r: { data: any }) => r.data),
         pendingApprovals: approvalRes.rows.map((r: { data: any }) => r.data),
@@ -206,6 +219,9 @@ export async function loadStateFromPostgres(): Promise<any | null> {
         activationRequests: settingsMap.get('activationRequests') || [],
         pinRecoveryRequests: settingsMap.get('pinRecoveryRequests') || [],
         studentSubscriptionPayments: settingsMap.get('studentSubscriptionPayments') || [],
+        // These billing tables are normalized relational tables and do not
+        // contain a JSONB "data" column. Until their row mappers and write path
+        // are migrated together, hydrate the durable JSONB settings snapshots.
         restaurantSubscriptions: settingsMap.get('restaurantSubscriptions') || [],
         restaurantSubscriptionPayments: settingsMap.get('restaurantSubscriptionPayments') || [],
         subscriptionPayments: settingsMap.get('subscriptionPayments') || [],
@@ -352,26 +368,38 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
     }
 
     // 3b. Existing payment records (meal top-ups and other restaurant-side payments)
+    // Monotonic guard: a stale in-memory snapshot must never revert a refunded payment.
     if (Array.isArray(state.payments)) {
       for (const item of state.payments) {
         if (!item?.id || !item?.restaurantCode || !Number.isSafeInteger(Number(item.amountRwf ?? item.amount ?? 0))) continue;
         await client.query(
           `INSERT INTO payments (id, restaurant_code, customer_id, amount_rwf, data)
            VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (id) DO UPDATE SET customer_id = EXCLUDED.customer_id, amount_rwf = EXCLUDED.amount_rwf, data = EXCLUDED.data`,
+           ON CONFLICT (id) DO UPDATE
+           SET customer_id = EXCLUDED.customer_id,
+               amount_rwf = EXCLUDED.amount_rwf,
+               data = EXCLUDED.data
+           WHERE COALESCE(payments.data->>'refundStatus', '') <> 'refunded'
+              OR COALESCE(EXCLUDED.data->>'refundStatus', '') = 'refunded'`,
           [item.id, item.restaurantCode, item.customerId || null, Number(item.amountRwf ?? item.amount ?? 0), JSON.stringify(item)]
         );
       }
     }
 
     // 3c. Scan events
+    // Monotonic guard: a stale in-memory snapshot must never revert an undone scan event.
     if (Array.isArray(state.scanEvents)) {
       for (const item of state.scanEvents) {
         if (!item?.id || !item?.restaurantCode || !item?.customerId) continue;
         await client.query(
           `INSERT INTO scan_events (id, restaurant_code, customer_id, station_id, status, data)
            VALUES ($1, $2, $3, $4, $5, $6)
-           ON CONFLICT (id) DO UPDATE SET station_id = EXCLUDED.station_id, status = EXCLUDED.status, data = EXCLUDED.data`,
+           ON CONFLICT (id) DO UPDATE
+           SET station_id = EXCLUDED.station_id,
+               status = EXCLUDED.status,
+               data = EXCLUDED.data
+           WHERE COALESCE(scan_events.status, '') <> 'undone'
+              OR EXCLUDED.status = 'undone'`,
           [item.id, item.restaurantCode, item.customerId, item.stationId || null, item.status || 'recorded', JSON.stringify(item)]
         );
       }
@@ -424,13 +452,18 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
         );
       }
     }
+    // Monotonic guard: a stale in-memory snapshot must never revert a reversed transfer.
     if (Array.isArray(state.transfers)) {
       for (const item of state.transfers) {
         if (!item?.id || !item?.restaurantCode || !item?.senderCustomerId || !item?.recipientCustomerId) continue;
         await client.query(
           `INSERT INTO transfers (id, restaurant_code, sender_customer_id, recipient_customer_id, plates, data, idempotency_key)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
-           ON CONFLICT (id) DO UPDATE SET plates = EXCLUDED.plates, data = EXCLUDED.data`,
+           ON CONFLICT (id) DO UPDATE
+           SET plates = EXCLUDED.plates,
+               data = EXCLUDED.data
+           WHERE COALESCE(transfers.data->>'status', '') <> 'reversed'
+              OR COALESCE(EXCLUDED.data->>'status', '') = 'reversed'`,
           [item.id, item.restaurantCode, item.senderCustomerId, item.recipientCustomerId, Number(item.plates || 0), JSON.stringify(item), item.idempotencyKey || item.id]
         );
       }
@@ -448,6 +481,7 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
     }
 
     // 4. Pending Approvals (Boss Approvals Manager)
+    // Monotonic guard: a stale in-memory snapshot must never revert an approved/rejected/cancelled row back to pending.
     if (Array.isArray(state.pendingApprovals)) {
       for (const a of state.pendingApprovals) {
         if (!a?.id || !a?.restaurantCode) continue;
@@ -455,7 +489,9 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
           `INSERT INTO pending_approvals (id, restaurant_code, customer_id, type, status, data, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6, NOW())
            ON CONFLICT (id) DO UPDATE
-           SET status = EXCLUDED.status, data = EXCLUDED.data, updated_at = NOW()`,
+           SET status = EXCLUDED.status, data = EXCLUDED.data, updated_at = NOW()
+           WHERE pending_approvals.status = 'pending'
+              OR EXCLUDED.status IN ('approved', 'rejected', 'cancelled')`,
           [a.id, a.restaurantCode, a.customerId || '', a.type || 'new_customer', a.status || 'pending', JSON.stringify(a)]
         );
       }
@@ -476,17 +512,20 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
     }
 
     // 6. Balance Checkpoints
-    if (Array.isArray(state.balanceCheckpoints)) {
-      for (const cp of state.balanceCheckpoints) {
-        if (!cp?.id || !cp?.customerId) continue;
-        await client.query(
-          `INSERT INTO balance_checkpoints (id, customer_id, balance, cutoff_timestamp, data)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (id) DO UPDATE
-           SET balance = EXCLUDED.balance, cutoff_timestamp = EXCLUDED.cutoff_timestamp, data = EXCLUDED.data`,
-          [cp.id, cp.customerId, cp.balance || 0, cp.cutoffTimestamp || new Date().toISOString(), JSON.stringify(cp)]
-        );
-      }
+    const checkpointsToSave = Array.isArray(state.balanceCheckpoints)
+      ? state.balanceCheckpoints
+      : Array.isArray(state.checkpoints)
+        ? state.checkpoints
+        : [];
+    for (const cp of checkpointsToSave) {
+      if (!cp?.id || !cp?.customerId) continue;
+      await client.query(
+        `INSERT INTO balance_checkpoints (id, customer_id, balance, cutoff_timestamp, data)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (id) DO UPDATE
+         SET balance = EXCLUDED.balance, cutoff_timestamp = EXCLUDED.cutoff_timestamp, data = EXCLUDED.data`,
+        [cp.id, cp.customerId, cp.balance || 0, cp.cutoffTimestamp || new Date().toISOString(), JSON.stringify(cp)]
+      );
     }
 
     // 7. System Settings & Collections
@@ -534,6 +573,133 @@ export async function saveStateToPostgres(state: any): Promise<boolean> {
   } finally {
     client.release();
   }
+}
+
+/**
+ * Targeted O(1) persistence for single-customer mutations (login, PIN attempts,
+ * PIN rotation, card lock/unlock, activation, and recovery) so authentication
+ * and profile operations never trigger O(N) full-database rewrites (P0-02).
+ */
+export async function upsertCustomerRecordPostgres(
+  customer: any,
+  options?: {
+    auditLog?: any;
+    notifications?: any[];
+    systemSettings?: Array<[string, any]>;
+  }
+): Promise<boolean> {
+  const p = getPostgresPool();
+  if (!p || !isInitialized) return false;
+  if (!customer?.id || !customer?.restaurantCode) return false;
+
+  const client = await p.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `INSERT INTO customers (id, restaurant_code, member_no, name, phone, card_status, card_version, key_version, is_student, pin_hash, photo_url, data, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+       ON CONFLICT (id) DO UPDATE
+       SET restaurant_code = EXCLUDED.restaurant_code,
+           member_no = EXCLUDED.member_no,
+           name = EXCLUDED.name,
+           phone = EXCLUDED.phone,
+           card_status = EXCLUDED.card_status,
+           card_version = EXCLUDED.card_version,
+           key_version = EXCLUDED.key_version,
+           is_student = EXCLUDED.is_student,
+           pin_hash = EXCLUDED.pin_hash,
+           photo_url = EXCLUDED.photo_url,
+           data = EXCLUDED.data,
+           updated_at = NOW()`,
+      [
+        customer.id,
+        customer.restaurantCode,
+        customer.memberNo || '',
+        customer.name || 'Unknown Patron',
+        customer.phone || null,
+        customer.cardStatus || 'active',
+        customer.cardVersion || 1,
+        customer.keyVersion || 1,
+        Boolean(customer.isStudent),
+        customer.pinHash || null,
+        customer.photoUrl || null,
+        JSON.stringify(customer),
+      ]
+    );
+
+    if (options?.auditLog?.id && options?.auditLog?.action) {
+      const a = options.auditLog;
+      await client.query(
+        `INSERT INTO audit_logs (id, restaurant_code, user_id, action, data)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (id) DO NOTHING`,
+        [a.id, a.restaurantCode || customer.restaurantCode || 'GLOBAL', a.userId || a.actorId || a.actorName || customer.id, a.action, JSON.stringify(a)]
+      );
+    }
+
+    if (Array.isArray(options?.notifications)) {
+      for (const n of options.notifications) {
+        if (!n?.id || !n?.restaurantCode) continue;
+        await client.query(
+          `INSERT INTO notifications (id, restaurant_code, recipient_id, data)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (id) DO UPDATE SET recipient_id = EXCLUDED.recipient_id, data = EXCLUDED.data`,
+          [n.id, n.restaurantCode, n.target === 'all' ? null : (n.target || n.recipientId || n.customerId || null), JSON.stringify(n)]
+        );
+      }
+    }
+
+    if (Array.isArray(options?.systemSettings)) {
+      for (const [key, val] of options.systemSettings) {
+        if (val !== undefined) {
+          await client.query(
+            `INSERT INTO system_settings (key, value, updated_at)
+             VALUES ($1, $2, NOW())
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+            [key, JSON.stringify(val)]
+          );
+        }
+      }
+    }
+
+    await client.query('COMMIT');
+    return true;
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch {}
+    console.error('[PostgreSQL Adapter] Targeted customer upsert failed:', err);
+    return false;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Checkpoint-aware, tenant-scoped customer balance query (P0-03 & P0-10).
+ * Reads the latest balance_checkpoints row for the customer (if any) and sums
+ * only ledger_entries strictly after cutoff_timestamp within the same restaurant.
+ */
+export async function computeCustomerBalanceSql(
+  client: { query: (text: string, values?: any[]) => Promise<{ rows: any[] }> },
+  restaurantCode: string,
+  customerId: string
+): Promise<number> {
+  const cpRes = await client.query(
+    'SELECT balance, cutoff_timestamp FROM balance_checkpoints WHERE customer_id = $1 ORDER BY cutoff_timestamp DESC LIMIT 1',
+    [customerId]
+  );
+  const hasCheckpoint = cpRes.rows.length > 0 && cpRes.rows[0]?.cutoff_timestamp;
+  const baseBalance = hasCheckpoint ? Number(cpRes.rows[0].balance || 0) : 0;
+  const cutoff = hasCheckpoint ? cpRes.rows[0].cutoff_timestamp : null;
+  const ledgerRes = hasCheckpoint
+    ? await client.query(
+        'SELECT COALESCE(SUM(plates_delta), 0)::int AS delta FROM ledger_entries WHERE restaurant_code = $1 AND customer_id = $2 AND timestamp > $3',
+        [restaurantCode, customerId, cutoff]
+      )
+    : await client.query(
+        'SELECT COALESCE(SUM(plates_delta), 0)::int AS delta FROM ledger_entries WHERE restaurant_code = $1 AND customer_id = $2',
+        [restaurantCode, customerId]
+      );
+  return baseBalance + Number(ledgerRes.rows[0]?.delta || 0);
 }
 
 export type PlateTransferCommitErrorCode =
@@ -607,27 +773,20 @@ export async function commitPlateTransferPostgres(input: {
         transactionOpen = false;
         return { ok: false, code: 'IDEMPOTENCY_CONFLICT', message: 'This idempotency key was already used for a different transfer.' };
       }
-      const balances = await client.query(
-        'SELECT customer_id, COALESCE(SUM(plates_delta), 0)::int AS balance FROM ledger_entries WHERE restaurant_code = $1 AND customer_id = ANY($2::varchar[]) GROUP BY customer_id',
-        [transfer.restaurantCode, [transfer.senderCustomerId, transfer.recipientCustomerId]]
-      );
-      const byCustomer = new Map(balances.rows.map((row: any) => [row.customer_id, Number(row.balance)]));
+      const senderBal = await computeCustomerBalanceSql(client, transfer.restaurantCode, transfer.senderCustomerId);
+      const recipientBal = await computeCustomerBalanceSql(client, transfer.restaurantCode, transfer.recipientCustomerId);
       await client.query('COMMIT');
       transactionOpen = false;
       return {
         ok: true,
         idempotent: true,
         transfer: existing,
-        senderBalance: byCustomer.get(transfer.senderCustomerId) || 0,
-        recipientBalance: byCustomer.get(transfer.recipientCustomerId) || 0,
+        senderBalance: senderBal,
+        recipientBalance: recipientBal,
       };
     }
 
-    const balanceResult = await client.query(
-      'SELECT COALESCE(SUM(plates_delta), 0)::int AS balance FROM ledger_entries WHERE restaurant_code = $1 AND customer_id = $2',
-      [transfer.restaurantCode, transfer.senderCustomerId]
-    );
-    const senderBalance = Number(balanceResult.rows[0]?.balance || 0);
+    const senderBalance = await computeCustomerBalanceSql(client, transfer.restaurantCode, transfer.senderCustomerId);
     if (senderBalance < transfer.plates) {
       await client.query('ROLLBACK');
       transactionOpen = false;
@@ -638,6 +797,13 @@ export async function commitPlateTransferPostgres(input: {
       };
     }
 
+    // Ensure post-checkpoint transfer ledger entries are strictly after any existing cutoff_timestamp.
+    const cpMaxRes = await client.query(
+      'SELECT MAX(cutoff_timestamp) AS max_cutoff FROM balance_checkpoints WHERE customer_id = ANY($1::varchar[])',
+      [[transfer.senderCustomerId, transfer.recipientCustomerId]]
+    );
+    const maxCutoffMs = cpMaxRes.rows[0]?.max_cutoff ? new Date(cpMaxRes.rows[0].max_cutoff).getTime() : 0;
+
     await client.query(
       `INSERT INTO transfers (id, restaurant_code, sender_customer_id, recipient_customer_id, plates, data, idempotency_key)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -645,10 +811,14 @@ export async function commitPlateTransferPostgres(input: {
     );
 
     for (const entry of [ledgerOut, ledgerIn]) {
+      const parsedEntryMs = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
+      const effectiveMs = maxCutoffMs > 0 && parsedEntryMs <= maxCutoffMs ? maxCutoffMs + 1 : parsedEntryMs;
+      const effectiveIso = new Date(effectiveMs).toISOString();
+      const normalizedEntry = { ...entry, timestamp: effectiveIso };
       await client.query(
         `INSERT INTO ledger_entries (id, restaurant_code, customer_id, type, plates_delta, amount_rwf, idempotency_key, timestamp, data)
          VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8)`,
-        [entry.id, entry.restaurantCode, entry.customerId, entry.type, entry.platesDelta, entry.idempotencyKey, new Date(entry.timestamp).toISOString(), JSON.stringify(entry)]
+        [normalizedEntry.id, normalizedEntry.restaurantCode, normalizedEntry.customerId, normalizedEntry.type, normalizedEntry.platesDelta, normalizedEntry.idempotencyKey, effectiveIso, JSON.stringify(normalizedEntry)]
       );
     }
 
@@ -664,19 +834,16 @@ export async function commitPlateTransferPostgres(input: {
       );
     }
 
-    const finalBalances = await client.query(
-      'SELECT customer_id, COALESCE(SUM(plates_delta), 0)::int AS balance FROM ledger_entries WHERE restaurant_code = $1 AND customer_id = ANY($2::varchar[]) GROUP BY customer_id',
-      [transfer.restaurantCode, [transfer.senderCustomerId, transfer.recipientCustomerId]]
-    );
-    const byCustomer = new Map(finalBalances.rows.map((row: any) => [row.customer_id, Number(row.balance)]));
+    const finalSenderBalance = await computeCustomerBalanceSql(client, transfer.restaurantCode, transfer.senderCustomerId);
+    const finalRecipientBalance = await computeCustomerBalanceSql(client, transfer.restaurantCode, transfer.recipientCustomerId);
     await client.query('COMMIT');
     transactionOpen = false;
     return {
       ok: true,
       idempotent: false,
       transfer,
-      senderBalance: byCustomer.get(transfer.senderCustomerId) || 0,
-      recipientBalance: byCustomer.get(transfer.recipientCustomerId) || 0,
+      senderBalance: finalSenderBalance,
+      recipientBalance: finalRecipientBalance,
     };
   } catch (err: any) {
     if (transactionOpen) {

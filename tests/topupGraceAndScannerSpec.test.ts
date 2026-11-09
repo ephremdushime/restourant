@@ -174,7 +174,7 @@ describe('Part 1: Top-Up, Approval-Linked Ledger, and Grace-Meal Accounting Scen
     assert.equal(restoStore.getCustomerBalance(customer.id), 58);
   });
 
-  test('Scenario 4: New customer pays for 60 -> Uses up to 4 grace meals before approval; after approval account activates with 56 (60 - 4)', () => {
+  test('Scenario 4: New customer pays for 60 -> Uses up to 3 grace meals before approval; after approval account activates with 57 (60 - 3)', () => {
     const helperCustomer = setupCustomerWithBalance(10, 'Helper4');
     const helperToken = generateCardToken(helperCustomer.restaurantCode, helperCustomer.memberNo, helperCustomer.cardVersion);
 
@@ -198,8 +198,7 @@ describe('Part 1: Top-Up, Approval-Linked Ledger, and Grace-Meal Accounting Scen
     const newCustomer = reg.customer;
     const cardToken = generateCardToken(newCustomer.restaurantCode, newCustomer.memberNo, newCustomer.cardVersion);
 
-    // Consume three meals, then age the oldest scan beyond the 120-minute serving limit
-    // before using the fourth onboarding grace meal.
+    // Consume all three canonical onboarding grace meals.
     for (let i = 1; i <= 3; i++) {
       const scan = restoStore.processScan(cardToken);
       assert.equal(scan.outcome, 'ACCEPTED');
@@ -213,24 +212,66 @@ describe('Part 1: Top-Up, Approval-Linked Ledger, and Grace-Meal Accounting Scen
     priorGraceScans[priorGraceScans.length - 1].timestamp =
       new Date(restoStore.getGuardedTime('RW01') - 121 * 60 * 1000).toISOString();
     restoStore.processScan(helperToken);
-    const fourthGrace = restoStore.processScan(cardToken);
-    assert.equal(fourthGrace.outcome, 'ACCEPTED');
-    assert.equal(fourthGrace.isGraceMeal, true);
 
-    assert.equal(reg.approval.gracePlatesConsumed, 4);
+    assert.equal(reg.approval.gracePlatesConsumed, 3);
     assert.equal(newCustomer.gracePlatesRemaining, 0);
 
-    // A fifth pre-approval scan must be rejected without changing the paid package.
-    const fifthGraceAttempt = restoStore.processScan(cardToken);
-    assert.equal(fifthGraceAttempt.outcome, 'REJECTED');
-    assert.equal(fifthGraceAttempt.rejectionCode, 'NO_BALANCE');
-    assert.equal(reg.approval.gracePlatesConsumed, 4);
+    // A fourth pre-approval scan must be rejected without changing the paid package (canonical max = 3).
+    const fourthGraceAttempt = restoStore.processScan(cardToken);
+    assert.equal(fourthGraceAttempt.outcome, 'REJECTED');
+    assert.equal(fourthGraceAttempt.rejectionCode, 'NO_BALANCE');
+    assert.equal(reg.approval.gracePlatesConsumed, 3);
 
-    // Boss approves -> Account activates with 60 - 4 = 56
+    // Boss approves -> Account activates with 60 - 3 = 57
     const apprRes = restoStore.approvePendingRequest(reg.approval.id, 'Restaurant Boss');
     assert.equal(apprRes.success, true);
-    assert.equal(restoStore.getCustomerBalance(newCustomer.id), 56);
+    assert.equal(restoStore.getCustomerBalance(newCustomer.id), 57);
     assert.equal(newCustomer.provisionalStatus, 'approved');
+  });
+
+  test('Scenario 4c: Direct manager topUpCustomer reconciles consumed grace plates exactly once (P0-04)', () => {
+    const customer = setupCustomerWithBalance(0, 'Scenario4c_DirectTopup');
+    const helperCustomer = setupCustomerWithBalance(20, 'Helper4c');
+    const cardToken = generateCardToken(customer.restaurantCode, customer.memberNo, customer.cardVersion);
+    const helperToken = generateCardToken(helperCustomer.restaurantCode, helperCustomer.memberNo, helperCustomer.cardVersion);
+
+    const pending = restoStore.rechargeProvisionalCustomer({
+      restaurantCode: 'RW01',
+      customerId: customer.id,
+      platesRequested: 30,
+      amountRwf: 30000,
+      paymentMethod: 'mtn_momo',
+      paymentReference: `MOMO-SCEN4C-${Date.now()}`,
+      registeredByStaffId: 'staff_1',
+      registeredByStaffName: 'Cashier',
+      stationId: 'sp_1',
+      stationName: 'Stand 1',
+    });
+    assert.ok(pending);
+
+    // Consume 2 grace meals while awaiting top-up
+    for (let i = 1; i <= 2; i++) {
+      const scan = restoStore.processScan(cardToken);
+      assert.equal(scan.outcome, 'ACCEPTED');
+      assert.equal(scan.isGraceMeal, true);
+      restoStore.processScan(helperToken);
+    }
+    assert.equal(customer.gracePlatesConsumed, 2);
+
+    // Manager performs direct top-up of 20 plates -> net balance must be 20 - 2 = 18 and gracePlatesConsumed reset to 0
+    restoStore.topUpCustomer({
+      restaurantCode: 'RW01',
+      customerId: customer.id,
+      plates: 20,
+      amountRwf: 20000,
+      paymentMethod: 'cash',
+      reference: `CASH-DIRECT-4C-${Date.now()}`,
+      adminStaffId: 'staff_boss',
+      adminStaffName: 'Restaurant Boss',
+    });
+    assert.equal(restoStore.getCustomerBalance(customer.id), 18);
+    assert.equal(customer.gracePlatesConsumed, 0);
+    assert.equal(pending.gracePlatesConsumed, 0);
   });
 
   test('Scenario 4b: Approval-specific grace count wins over a stale customer mirror and reconciles exactly once', () => {

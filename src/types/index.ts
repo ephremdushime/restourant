@@ -159,7 +159,7 @@ export interface Customer {
   failedLoginAttempts?: number;
   lockedUntil?: string | null;
   lastLoginAt?: string;
-  gracePlatesConsumed?: number; // mirrored count consumed from a pending paid package (new registrations: max 4)
+  gracePlatesConsumed?: number; // mirrored count consumed from a pending paid package (canonical max 3)
   gracePlatesRemaining?: number;
   pendingApprovalId?: string;
   createdAt: string;
@@ -304,7 +304,7 @@ export interface PendingApproval {
   registeredByStaffName: string;
   stationId: string;
   stationName: string;
-  gracePlatesAllowed: number; // configured per pending approval (new registrations: 4)
+  gracePlatesAllowed: number; // configured per pending approval (canonical max 3)
   gracePlatesConsumed: number; // plates consumed before boss approved
   createdAt: string;
   status: ApprovalStatus;

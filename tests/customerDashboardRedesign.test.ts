@@ -346,7 +346,7 @@ describe('Customer Dashboard Redesign & Security Preservation Protocol (Items 1â
     serverState.ledgerEntries = serverState.ledgerEntries.filter((l: any) => l.id !== foreignLedger.id);
   });
 
-  test('Priority 2 & Authoritative Grace Meals: 4 grace meals allowed, 5th rejected, 60-4=56 reconciliation', () => {
+  test('Priority 2 & Authoritative Grace Meals: 3 grace meals allowed, 4th rejected, 60-3=57 reconciliation, and P0-07 QR issuance hardening', async () => {
     restoStore.setRestaurantCode('RW01');
     restoStore.setStation('sp_1');
 
@@ -378,11 +378,11 @@ describe('Customer Dashboard Redesign & Security Preservation Protocol (Items 1â
     assert.ok(regRes.customer);
     const custId = regRes.customer.id;
 
-    // Check initial grace info: 4 allowed, 0 consumed, 4 remaining
+    // Check initial grace info: 3 allowed, 0 consumed, 3 remaining
     const graceInitial = restoStore.getCustomerGraceInfo(custId);
-    assert.equal(graceInitial.allowed, 4);
+    assert.equal(graceInitial.allowed, 3);
     assert.equal(graceInitial.consumed, 0);
-    assert.equal(graceInitial.remaining, 4);
+    assert.equal(graceInitial.remaining, 3);
 
     // Setup helper customer for scanner interleaving (anti double-tap guard)
     let helper = restoStore.getState().customers.find((c) => c.restaurantCode === 'RW01' && c.id !== custId);
@@ -409,7 +409,7 @@ describe('Customer Dashboard Redesign & Security Preservation Protocol (Items 1â
     }
     const helperToken = generateCardToken('RW01', helper.memberNo, helper.cardVersion);
 
-    // 2. Consume 4 grace meals using physical card token
+    // 2. Consume 3 grace meals using physical card token
     const cardToken = generateCardToken('RW01', regRes.customer.memberNo, regRes.customer.cardVersion);
     for (let i = 1; i <= 3; i++) {
       const scanRes = restoStore.processScan(cardToken);
@@ -418,32 +418,17 @@ describe('Customer Dashboard Redesign & Security Preservation Protocol (Items 1â
       restoStore.processScan(helperToken); // Interleave to clear double-scan cooldown
     }
 
-    // Age the 3rd scan timestamp beyond 120 minutes to avoid the 3-meal meal-window limit
-    const priorGraceScans = restoStore.getState().scanEvents.filter(
-      (event) => event.customerId === custId && event.isGracePlate && event.platesDeducted > 0
-    );
-    assert.equal(priorGraceScans.length, 3);
-    priorGraceScans[priorGraceScans.length - 1].timestamp =
-      new Date(restoStore.getGuardedTime('RW01') - 121 * 60 * 1000).toISOString();
-    restoStore.processScan(helperToken);
+    const graceAfter3 = restoStore.getCustomerGraceInfo(custId);
+    assert.equal(graceAfter3.consumed, 3);
+    assert.equal(graceAfter3.remaining, 0);
 
-    // 4th grace meal
-    const fourthGrace = restoStore.processScan(cardToken);
-    assert.equal(fourthGrace.outcome, 'ACCEPTED', 'Grace meal #4 must be accepted');
-    assert.equal(fourthGrace.isGraceMeal, true);
+    // 3. 4th grace scan must be rejected with NO_BALANCE
+    const cardToken4 = generateCardToken('RW01', regRes.customer.memberNo, regRes.customer.cardVersion);
+    const scanRes4 = restoStore.processScan(cardToken4);
+    assert.equal(scanRes4.outcome, 'REJECTED');
+    assert.equal(scanRes4.rejectionCode, 'NO_BALANCE');
 
-    const graceAfter4 = restoStore.getCustomerGraceInfo(custId);
-    assert.equal(graceAfter4.consumed, 4);
-    assert.equal(graceAfter4.remaining, 0);
-
-    // 3. 5th grace scan must be rejected with NO_BALANCE
-    restoStore.processScan(helperToken);
-    const cardToken5 = generateCardToken('RW01', regRes.customer.memberNo, regRes.customer.cardVersion);
-    const scanRes5 = restoStore.processScan(cardToken5);
-    assert.equal(scanRes5.outcome, 'REJECTED');
-    assert.equal(scanRes5.rejectionCode, 'NO_BALANCE');
-
-    // 4. Boss approves the 60 plates: final authoritative balance is 60 - 4 = 56
+    // 4. Boss approves the 60 plates: final authoritative balance is 60 - 3 = 57
     const pending = restoStore.getState().pendingApprovals.find(
       (a) => a.restaurantCode === 'RW01' && a.paymentReference === momoRef
     );
@@ -451,7 +436,31 @@ describe('Customer Dashboard Redesign & Security Preservation Protocol (Items 1â
 
     const approveRes = restoStore.approvePendingRequest(pending.id, 'Manager Grace Test');
     assert.equal(approveRes.success, true);
-    assert.equal(restoStore.getCustomerBalance(custId), 56, 'Balance must reconcile to exactly 60 - 4 = 56 plates');
+    assert.equal(restoStore.getCustomerBalance(custId), 57, 'Balance must reconcile to exactly 60 - 3 = 57 plates');
+
+    // 5. P0-07: Customers cannot mint static c1 card tokens from /api/qr/token/card, and customer UI only displays rotating v1 tokens
+    const serverState = getServerDbState();
+    ensureServerDbDefaults(serverState);
+    const rw01Cust = serverState.customers.find((c: any) => c.restaurantCode === 'RW01');
+    assert.ok(rw01Cust);
+    const custSession = createSessionToken({
+      userId: rw01Cust.id,
+      username: rw01Cust.memberNo,
+      role: 'customer',
+      restaurantCode: 'RW01',
+    });
+    const cardTokenAttempt = await fetchTestRoute(
+      'POST',
+      '/api/qr/token/card',
+      { restaurantCode: 'RW01', memberNo: rw01Cust.memberNo },
+      { Authorization: `Bearer ${custSession}` }
+    );
+    assert.equal(cardTokenAttempt.status, 403, 'Customers must not be allowed to mint static c1 physical card tokens');
+
+    const cardPageSource = readRepoFile('src/components/customer/CustomerCardPage.tsx');
+    assert.doesNotMatch(cardPageSource, /permanentCardToken/);
+    const custViewSource = readRepoFile('src/components/customer/CustomerView.tsx');
+    assert.doesNotMatch(custViewSource, /generateCardToken\(/);
   });
 
   test('Priority 3 & Activity: Reversals do not inflate redeemed-meal totals and entries are strictly scoped', () => {

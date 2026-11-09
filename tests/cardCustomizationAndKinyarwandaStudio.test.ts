@@ -101,7 +101,7 @@ describe('Card Customization & Kinyarwanda Live Translation Studio', () => {
     sound.playNotificationChime();
   });
 
-  test('5. Production clean state contains zero seed expenses, branches, staff users, or mock alerts', () => {
+  test('5. Production clean state contains zero seed expenses, branches, staff users, or mock alerts, preserves real RW02/RW03 tenants (P0-08), and guards browser storage in Node (P0-12)', () => {
     // Switch to production clean mode
     restoStore.setDemoMode(false);
     const prodState = restoStore.getState();
@@ -113,6 +113,88 @@ describe('Card Customization & Kinyarwanda Live Translation Studio', () => {
     assert.equal(prodState.notifications.length, 0, 'Production must not have mock notifications');
     assert.equal(prodState.customers.length, 0, 'Production must not have mock customers');
     assert.equal(prodState.ledgerEntries.length, 0, 'Production must not have mock ledger entries');
+
+    // P0-08: Real restaurants created with code RW02 or RW03 (and their packages/branches/scanPoints) must NOT be dropped on server merge
+    restoStore.mergeServerState({
+      restaurants: [
+        {
+          code: 'RW02',
+          name: 'Kigali Innovation Dining Hall',
+          legalEntity: 'Kigali Innovation Catering Ltd',
+          phone: '+250 788 100 200',
+          email: 'ops@kigaliinnovation.rw',
+          address: 'KG 7 Ave, Kigali',
+          currency: 'RWF',
+          status: 'active',
+          planId: 'plan_starter',
+          defaultPlatePriceRwf: 1200,
+          badgeStyle: 'emerald',
+          welcomeMessage: 'Welcome to Kigali Innovation Dining Hall',
+          primaryColor: '#059669',
+          highestTimeSeen: Date.now(),
+          lastSyncAt: new Date().toISOString(),
+          softwareVersion: '1.1.0-authority',
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      packages: [
+        {
+          id: 'pkg_real_rw02_30',
+          restaurantCode: 'RW02',
+          name: '30 Plates Monthly Pack',
+          platesCount: 30,
+          priceRwf: 36000,
+          description: 'Real RW02 package',
+        },
+      ],
+      branches: [
+        {
+          id: 'br_real_rw02_1',
+          restaurantCode: 'RW02',
+          name: 'Main Innovation Hall',
+          code: 'RW02-MAIN',
+          address: 'KG 7 Ave',
+          phone: '+250 788 100 201',
+          managerName: 'Alice Uwase',
+          status: 'active',
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      scanPoints: [
+        {
+          id: 'sp_real_rw02_1',
+          restaurantCode: 'RW02',
+          name: 'Innovation Line 1',
+          deviceModel: 'Scanner Terminal',
+          pairingCode: 'PAIR-RW02',
+          status: 'active',
+          lastHeartbeat: new Date().toISOString(),
+        },
+      ],
+    });
+
+    assert.ok(
+      restoStore.getState().restaurants.some((r) => r.code === 'RW02' && r.name === 'Kigali Innovation Dining Hall'),
+      'Real RW02 restaurant must be preserved during production mergeServerState (P0-08)'
+    );
+    assert.ok(
+      restoStore.getState().packages.some((p) => p.id === 'pkg_real_rw02_30'),
+      'Real RW02 package must be preserved during production mergeServerState (P0-08)'
+    );
+    assert.ok(
+      restoStore.getState().branches.some((b) => b.id === 'br_real_rw02_1'),
+      'Real RW02 branch must be preserved during production mergeServerState (P0-08)'
+    );
+
+    // P0-12: Node execution of terminal pairing and audio persistence methods must not throw ReferenceError on localStorage/navigator
+    const pairRes = restoStore.pairTerminalDevice({
+      restaurantCode: 'RW02',
+      pairingKeyOrCode: 'PAIR-RW02',
+    });
+    assert.equal(pairRes.success, true);
+    assert.equal(restoStore.isCurrentTerminalPaired('RW02'), true);
+    assert.equal(restoStore.revokeTerminalPairing('sp_real_rw02_1'), true);
+    assert.equal(restoStore.revokeAllCashierSessions('RW02'), 0);
 
     // Switch back to demo mode for test suite continuity
     restoStore.setDemoMode(true);

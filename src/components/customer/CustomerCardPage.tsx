@@ -15,10 +15,9 @@ import {
 interface CustomerCardPageProps {
   customer: Customer;
   restaurant?: Restaurant;
-  qrPassType: 'dynamic' | 'permanent';
-  onChangeQrPassType: (type: 'dynamic' | 'permanent') => void;
+  qrPassType?: 'dynamic';
+  onChangeQrPassType?: (type: 'dynamic') => void;
   tokenInfo: { token: string; step: number; secondsRemaining: number };
-  permanentCardToken: string;
   onForceRefresh: () => void;
   onToggleLockCard: () => void;
   lockMyCardLabel: string;
@@ -29,10 +28,7 @@ interface CustomerCardPageProps {
 export const CustomerCardPage: React.FC<CustomerCardPageProps> = ({
   customer,
   restaurant,
-  qrPassType,
-  onChangeQrPassType,
   tokenInfo,
-  permanentCardToken,
   onForceRefresh,
   onToggleLockCard,
   lockMyCardLabel,
@@ -72,70 +68,42 @@ export const CustomerCardPage: React.FC<CustomerCardPageProps> = ({
         </div>
       </div>
 
-      {/* Main QR Credential Panel */}
+      {/* Main QR Credential Panel (Rotating v1 Phone Pass Only — Static c1 QR Is Printed Only on Physical PVC Cards) */}
       <div className="rounded-3xl bg-slate-900 border border-slate-800 p-6 shadow-lg text-center space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-4">
-          <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs sm:text-sm">
-            <button
-              type="button"
-              onClick={() => onChangeQrPassType('dynamic')}
-              className={`px-3.5 py-2 rounded-lg font-bold transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
-                qrPassType === 'dynamic'
-                  ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'text-slate-300 hover:text-white'
-              }`}
-            >
+          <div className="flex items-center gap-2 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs sm:text-sm">
+            <span className="px-3.5 py-2 rounded-lg font-bold bg-emerald-600 text-white shadow-xs">
               {t.customer.rotatingPhoneQr || 'Rotating Phone QR'}
-            </button>
-            <button
-              type="button"
-              onClick={() => onChangeQrPassType('permanent')}
-              className={`px-3.5 py-2 rounded-lg font-bold transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
-                qrPassType === 'permanent'
-                  ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'text-slate-300 hover:text-white'
-              }`}
-            >
-              {t.customer.cardBackupQr || 'Card Backup QR'}
-            </button>
+            </span>
+            <span className="px-2.5 py-1 text-[11px] font-mono text-cyan-300 flex items-center gap-1">
+              <CreditCard className="w-3.5 h-3.5" />
+              <span>PVC Card V{customer.cardVersion} (Staff Issued Only)</span>
+            </span>
           </div>
 
-          {qrPassType === 'dynamic' ? (
-            <button
-              type="button"
-              onClick={onForceRefresh}
-              title="Force immediate QR refresh"
-              className="flex items-center gap-1.5 text-xs sm:text-sm font-mono text-emerald-300 bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-700/80 px-3 py-1.5 rounded-xl font-bold cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>{t.customer.refreshQr || 'Refresh'}</span>
-            </button>
-          ) : (
-            <span className="text-xs font-mono text-cyan-300 bg-cyan-950/80 border border-cyan-700/80 px-2.5 py-1 rounded-full font-bold">
-              Bound to Card V{customer.cardVersion}
-            </span>
-          )}
+          <button
+            type="button"
+            onClick={onForceRefresh}
+            title="Force immediate QR refresh"
+            className="flex items-center gap-1.5 text-xs sm:text-sm font-mono text-emerald-300 bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-700/80 px-3 py-1.5 rounded-xl font-bold cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>{t.customer.refreshQr || 'Refresh'}</span>
+          </button>
         </div>
 
         {/* QR Code Canvas */}
         <div className="relative inline-block mx-auto">
           <div className="relative p-4 bg-white rounded-2xl shadow-lg border-2 border-emerald-500/80">
             <QrCanvas
-              value={qrPassType === 'dynamic' ? tokenInfo.token : permanentCardToken}
+              value={tokenInfo.token}
               size={220}
             />
             <div className="mt-2.5 pt-2 border-t border-slate-200 flex items-center justify-between text-[11px] font-mono text-slate-800">
-              {qrPassType === 'dynamic' ? (
-                <span className="flex items-center gap-1 font-black text-emerald-700">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping inline-block" />
-                  LIVE 30S PASS
-                </span>
-              ) : (
-                <span className="flex items-center gap-1 font-black text-cyan-700">
-                  <CreditCard className="w-3.5 h-3.5" />
-                  BACKUP CARD QR
-                </span>
-              )}
+              <span className="flex items-center gap-1 font-black text-emerald-700">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping inline-block" />
+                LIVE 30S PASS
+              </span>
               <span className="font-bold text-slate-900">
                 #{customer.memberNo} · {customer.cardStatus === 'active' ? 'Active' : 'Locked'}
               </span>
@@ -143,38 +111,27 @@ export const CustomerCardPage: React.FC<CustomerCardPageProps> = ({
           </div>
         </div>
 
-        {/* Token Rotation Status / Card Version Details */}
-        {qrPassType === 'dynamic' ? (
-          <div className="space-y-2 max-w-xs mx-auto">
-            <div className="flex items-center justify-between text-xs sm:text-sm font-mono text-slate-200">
-              <span className="flex items-center gap-1.5 text-emerald-400 font-bold">
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                <span>Dynamic Token (v1 · Key V{customer.keyVersion})</span>
-              </span>
-              <span className="font-bold text-white tabular-nums">
-                Rotates in {tokenInfo.secondsRemaining}s
-              </span>
-            </div>
-            <div className="w-full bg-slate-950 h-2.5 rounded-full overflow-hidden p-0.5 border border-slate-800">
-              <div
-                className="bg-emerald-500 h-full transition-all duration-1000 ease-linear rounded-full"
-                style={{ width: `${Math.min(100, Math.max(0, (tokenInfo.secondsRemaining / 30) * 100))}%` }}
-              />
-            </div>
-            <p className="text-xs text-slate-400 leading-relaxed pt-1">
-              Single-use 30-second token verified by the cafeteria scanner authority.
-            </p>
+        {/* Token Rotation Status */}
+        <div className="space-y-2 max-w-xs mx-auto">
+          <div className="flex items-center justify-between text-xs sm:text-sm font-mono text-slate-200">
+            <span className="flex items-center gap-1.5 text-emerald-400 font-bold">
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              <span>Dynamic Token (v1 · Key V{customer.keyVersion})</span>
+            </span>
+            <span className="font-bold text-white tabular-nums">
+              Rotates in {tokenInfo.secondsRemaining}s
+            </span>
           </div>
-        ) : (
-          <div className="space-y-1.5 max-w-sm mx-auto text-xs sm:text-sm text-slate-300">
-            <div className="font-mono text-cyan-300 font-bold">
-              Physical Card Credential (c1) · Card Version V{customer.cardVersion}
-            </div>
-            <p className="text-xs text-slate-400 leading-relaxed">
-              Matches your printed physical CR80 PVC card. Staff will verify your patron portrait at the scanner station.
-            </p>
+          <div className="w-full bg-slate-950 h-2.5 rounded-full overflow-hidden p-0.5 border border-slate-800">
+            <div
+              className="bg-emerald-500 h-full transition-all duration-1000 ease-linear rounded-full"
+              style={{ width: `${Math.min(100, Math.max(0, (tokenInfo.secondsRemaining / 30) * 100))}%` }}
+            />
           </div>
-        )}
+          <p className="text-xs text-slate-400 leading-relaxed pt-1">
+            Single-use 30-second token verified by the cafeteria scanner authority. Permanent card credentials (c1) are printed exclusively on physical CR80 PVC cards by restaurant staff.
+          </p>
+        </div>
       </div>
 
       {/* Card Lock / Unlock & Anti-Fraud Security Guidance */}

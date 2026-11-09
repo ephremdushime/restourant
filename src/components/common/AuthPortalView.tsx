@@ -366,7 +366,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           return;
         }
         if (statusCheck.status === 'pending_boss_approval') {
-          setErrorMessage('Your registration is awaiting final Restaurant Boss approval. Reception has already confirmed payment; you may use up to 4 grace meals.');
+          setErrorMessage('Your registration is awaiting final Restaurant Boss approval. Reception has already confirmed payment; you may use up to 3 grace meals.');
           sound.playDangerAlarm();
           setIsVerifying(false);
           return;

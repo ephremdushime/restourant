@@ -40,7 +40,7 @@ describe('RestoPass Customer Login (No OTP/SMS) & Physical Card Implementation',
     assert.equal(customer.activationStatus, 'partial_active');
     assert.equal(customer.registrationStatus, 'pending_boss_approval');
     assert.equal(customer.receptionPaymentStatus, 'confirmed');
-    assert.equal(customer.gracePlatesRemaining, 4);
+    assert.equal(customer.gracePlatesRemaining, 3);
     assert.equal(customer.cardReadyForPrint, false);
     // No active meal credit or custom PIN yet
     assert.equal(restoStore.getCustomerBalance(customer.id), 0);

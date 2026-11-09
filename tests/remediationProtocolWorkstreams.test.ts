@@ -13,6 +13,7 @@ import {
   shutdownServer,
 } from '../server';
 import * as cryptoService from '../src/services/cryptoService';
+import { MomoService, momoService } from '../src/services/momoService';
 import {
   recordTokenScan,
   isTokenUsed,
@@ -479,6 +480,69 @@ describe('Production Readiness & Security Remediation Protocol (Workstreams A–
       assert.strictEqual(reconRes.status, 200);
       assert.strictEqual(reconRes.body.summary.consistent, true);
       assert.strictEqual(reconRes.body.summary.orphanedVerifiedCount, 0);
+
+      // 7. P0-09: MomoService never enables mock mode in production and callback rejects missing MOMO_WEBHOOK_SECRET in production
+      const prevEnv = process.env.NODE_ENV;
+      try {
+        process.env.NODE_ENV = 'production';
+        const prodMomo = new MomoService({ useMock: true });
+        assert.strictEqual(prodMomo.isMock(), false, 'MomoService must never run in mock mode when NODE_ENV=production');
+        prodMomo.setMock(true);
+        assert.strictEqual(prodMomo.isMock(), false, 'setMock(true) must be ignored when NODE_ENV=production');
+
+        delete process.env.MOMO_WEBHOOK_SECRET;
+        const noSecretProdCallback = await fetchTestRoute(
+          app,
+          'POST',
+          '/api/payments/mobile-money/callback',
+          validBody,
+          { 'x-callback-signature': validSig }
+        );
+        assert.strictEqual(
+          noSecretProdCallback.status,
+          503,
+          'Production callback must fail closed when MOMO_WEBHOOK_SECRET is missing'
+        );
+      } finally {
+        process.env.NODE_ENV = prevEnv;
+        process.env.MOMO_WEBHOOK_SECRET = 'test_webhook_hmac_secret_32_bytes_long_001';
+      }
+
+      // 8. P0-09: Status verification endpoint rejects mismatched payer MSISDN or currency
+      const mismatchRef = `RP-SUB-MISMATCH-${Date.now()}`;
+      const mismatchUuid = crypto.randomUUID();
+      await momoService.requestToPay({
+        referenceId: mismatchUuid,
+        amount: '500',
+        currency: 'EUR', // wrong currency
+        externalId: mismatchRef,
+        payerPhone: '250788999999', // different payer
+      });
+      state.studentSubscriptionPayments.push({
+        id: `sp_mismatch_${Date.now()}`,
+        customerId: customer.id,
+        memberNo: customer.memberNo,
+        restaurantCode: 'RW01',
+        provider: 'mtn_momo',
+        phone: '0788123456',
+        phoneNumber: '0788123456',
+        amountRwf: 500,
+        currency: 'RWF',
+        internalReference: mismatchRef,
+        providerReferenceUuid: mismatchUuid,
+        momoReferenceId: mismatchUuid,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+      });
+      const statusMismatchRes = await fetchTestRoute(
+        app,
+        'GET',
+        `/api/customer/subscription/payments/${encodeURIComponent(mismatchRef)}/status`,
+        {},
+        { Authorization: `Bearer ${custToken}` }
+      );
+      assert.strictEqual(statusMismatchRes.status, 400, 'Status check must reject currency/payer mismatch');
+      assert.strictEqual(statusMismatchRes.body.status, 'FAILED');
     } finally {
       if (prevFlag === undefined) delete process.env.RESTOPASS_MOBILE_MONEY_ENABLED;
       else process.env.RESTOPASS_MOBILE_MONEY_ENABLED = prevFlag;

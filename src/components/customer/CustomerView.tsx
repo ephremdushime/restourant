@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Language } from '../../types';
 import { restoStore } from '../../store/restoStore';
 import { translations } from '../../services/i18n';
-import { generateCardToken } from '../../services/cryptoService';
 import { QrCanvas } from '../common/QrCanvas';
 import {
   Send,
@@ -89,7 +88,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   // Authoritative grace calculation from pending approvals and registration policy
   const graceInfo = customer
     ? restoStore.getCustomerGraceInfo(customer.id)
-    : { allowed: 4, consumed: 0, remaining: 4 };
+    : { allowed: 3, consumed: 0, remaining: 3 };
 
   // Customer digital access entitlement and renewal state
   const subSettings = restoStore.getStudentSubscriptionSettings();
@@ -102,6 +101,11 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
       customer.freeAccessExpiresAt &&
       new Date(customer.freeAccessExpiresAt).getTime() <= Date.now()
   );
+  const isProvisionalGracePassEligible = Boolean(
+    customer &&
+      customer.registrationStatus === 'pending_boss_approval' &&
+      customer.receptionPaymentStatus === 'confirmed'
+  );
   const isDashboardGated = Boolean(
     customer &&
       (customer.customerAccessStatus === 'pending_super_admin_activation' ||
@@ -109,6 +113,9 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
         customer.customerAccessStatus === 'expired' ||
         freeAccessExpired ||
         (subSettings.enabled && (!dashboardEntitlement || !dashboardEntitlement.allowed)))
+  );
+  const canRequestDynamicPhoneQr = Boolean(
+    customer && (!isDashboardGated || isProvisionalGracePassEligible)
   );
 
   // Authoritative ledger-derived meal balance
@@ -120,13 +127,12 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
   const [transferRequiresSub, setTransferRequiresSub] = useState(false);
 
-  // Dynamic 30-second token rotation (only generated when dashboard subscription is active)
+  // Dynamic 30-second token rotation (generated when dashboard subscription or provisional grace pass is active)
   const [tokenInfo, setTokenInfo] = useState(() =>
-    customer && !isDashboardGated && restoStore.isDemoModeActive()
+    customer && canRequestDynamicPhoneQr && restoStore.isDemoModeActive()
       ? restoStore.getCustomerPhoneQr(customer)
       : { token: '', step: 0, secondsRemaining: 0 }
   );
-  const [qrPassType, setQrPassType] = useState<'dynamic' | 'permanent'>('dynamic');
 
   // Security PIN & Instant Off-Screen Auto-Lock
   const [isDashboardLocked, setIsDashboardLocked] = useState(false);
@@ -164,39 +170,8 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
     };
   }, [customer?.hasCustomPin, isDashboardGated]);
 
-  const [permanentCardToken, setPermanentCardToken] = useState(() =>
-    customer && !isDashboardGated && restoStore.isDemoModeActive()
-      ? generateCardToken(customer.restaurantCode, customer.memberNo, customer.cardVersion)
-      : ''
-  );
-
-  useEffect(() => {
-    let active = true;
-    const updateCardToken = async () => {
-      if (!customer || isDashboardGated) {
-        if (active) setPermanentCardToken('');
-        return;
-      }
-      const token = restoStore.isDemoModeActive()
-        ? generateCardToken(customer.restaurantCode, customer.memberNo, customer.cardVersion)
-        : await restoStore.getServerCustomerCardQr(customer);
-      if (active) setPermanentCardToken(token);
-    };
-    void updateCardToken();
-    return () => {
-      active = false;
-    };
-  }, [
-    customer?.id,
-    customer?.restaurantCode,
-    customer?.memberNo,
-    customer?.cardVersion,
-    customer?.cardStatus,
-    isDashboardGated,
-  ]);
-
   const requestCustomerPhoneQr = async () => {
-    if (!customer || isDashboardGated) {
+    if (!customer || !canRequestDynamicPhoneQr) {
       setTokenInfo({ token: '', step: 0, secondsRemaining: 0 });
       return;
     }
@@ -211,7 +186,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
   };
 
   useEffect(() => {
-    if (!customer || isDashboardGated) {
+    if (!customer || !canRequestDynamicPhoneQr) {
       setTokenInfo({ token: '', step: 0, secondsRemaining: 0 });
       return;
     }
@@ -247,7 +222,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
     customer?.restaurantCode,
     customer?.memberNo,
     customer?.keyVersion,
-    isDashboardGated,
+    canRequestDynamicPhoneQr,
   ]);
 
   // Page Navigation State (Home, My Card, Activity, Notifications, Profile & Settings)
@@ -497,23 +472,24 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
           </div>
           <div className="rounded-2xl bg-white p-4 flex flex-col items-center gap-2">
             <QrCanvas
-              value={generateCardToken(
-                customer.restaurantCode,
-                customer.memberNo,
-                customer.cardVersion
-              )}
+              value={
+                tokenInfo.token ||
+                (restoStore.isDemoModeActive()
+                  ? restoStore.getCustomerPhoneQr(customer).token
+                  : '')
+              }
               size={210}
               className="max-w-full"
             />
             <span className="text-xs font-bold text-slate-900">
-              Temporary meal pass · #{customer.memberNo}
+              Temporary rotating meal pass (v1) · #{customer.memberNo}
             </span>
           </div>
           <p className="text-sm leading-relaxed text-slate-200">
-            Your reception payment has been confirmed. You may use up to four grace meals while the Restaurant Boss reviews your registration. Your full dashboard and physical card will be enabled after approval.
+            Your reception payment has been confirmed. You may use up to three grace meals while the Restaurant Boss reviews your registration. Your full dashboard and physical card will be enabled after approval.
           </p>
           <p className="text-xs text-amber-200">
-            Show this QR at the cafeteria scanner for your four provisional grace meals. Do not share or post your QR code.
+            Show this rotating 30-second QR at the cafeteria scanner for your three provisional grace meals. Do not share or post your QR code.
           </p>
         </div>
       </div>
@@ -676,10 +652,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
           <CustomerCardPage
             customer={customer}
             restaurant={currentRestaurant}
-            qrPassType={qrPassType}
-            onChangeQrPassType={setQrPassType}
             tokenInfo={tokenInfo}
-            permanentCardToken={permanentCardToken}
             onForceRefresh={handleForceRefresh}
             onToggleLockCard={handleToggleLockCard}
             lockMyCardLabel={t.customer.lockMyCard}

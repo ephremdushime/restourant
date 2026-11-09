@@ -111,25 +111,63 @@ export class MomoService {
   };
 
   constructor(config: MomoConfig = {}) {
+    const isProductionRuntime = process.env.NODE_ENV === 'production';
+    const hasLiveCollectionKey = Boolean(
+      config.collectionSubscriptionKey ||
+      process.env.MOMO_COLLECTION_SUBSCRIPTION_KEY ||
+      process.env.MTN_MOMO_COLLECTION_SUBSCRIPTION_KEY ||
+      process.env.MOMO_SUBSCRIPTION_KEY ||
+      process.env.MTN_MOMO_PRIMARY_KEY
+    );
     this.config = {
       baseUrl: config.baseUrl || process.env.MOMO_BASE_URL || process.env.MTN_MOMO_BASE_URL || 'https://sandbox.momodeveloper.mtn.com',
-      targetEnvironment: config.targetEnvironment || (process.env.MOMO_TARGET_ENV as any) || (process.env.MTN_MOMO_TARGET_ENV as any) || 'sandbox',
-      collectionSubscriptionKey: config.collectionSubscriptionKey || process.env.MOMO_COLLECTION_SUBSCRIPTION_KEY || process.env.MOMO_SUBSCRIPTION_KEY || process.env.MTN_MOMO_PRIMARY_KEY || 'sandbox_mock_coll_sub_key',
-      disbursementSubscriptionKey: config.disbursementSubscriptionKey || process.env.MOMO_DISBURSEMENT_SUBSCRIPTION_KEY || process.env.MOMO_SUBSCRIPTION_KEY || process.env.MTN_MOMO_DISBURSEMENT_KEY || 'sandbox_mock_disb_sub_key',
-      remittanceSubscriptionKey: config.remittanceSubscriptionKey || process.env.MOMO_REMITTANCE_SUBSCRIPTION_KEY || process.env.MOMO_SUBSCRIPTION_KEY || process.env.MTN_MOMO_REMITTANCE_KEY || 'sandbox_mock_remit_sub_key',
-      apiUser: config.apiUser || process.env.MOMO_API_USER || process.env.MTN_MOMO_API_USER || '',
-      apiKey: config.apiKey || process.env.MOMO_API_KEY || process.env.MTN_MOMO_API_KEY || '',
+      targetEnvironment:
+        config.targetEnvironment ||
+        (process.env.MOMO_TARGET_ENV as any) ||
+        (process.env.MTN_MOMO_TARGET_ENV as any) ||
+        (process.env.MTN_MOMO_TARGET_ENVIRONMENT as any) ||
+        'sandbox',
+      collectionSubscriptionKey:
+        config.collectionSubscriptionKey ||
+        process.env.MOMO_COLLECTION_SUBSCRIPTION_KEY ||
+        process.env.MTN_MOMO_COLLECTION_SUBSCRIPTION_KEY ||
+        process.env.MOMO_SUBSCRIPTION_KEY ||
+        process.env.MTN_MOMO_PRIMARY_KEY ||
+        (isProductionRuntime ? '' : 'sandbox_mock_coll_sub_key'),
+      disbursementSubscriptionKey:
+        config.disbursementSubscriptionKey ||
+        process.env.MOMO_DISBURSEMENT_SUBSCRIPTION_KEY ||
+        process.env.MTN_MOMO_DISBURSEMENT_SUBSCRIPTION_KEY ||
+        process.env.MOMO_SUBSCRIPTION_KEY ||
+        process.env.MTN_MOMO_DISBURSEMENT_KEY ||
+        (isProductionRuntime ? '' : 'sandbox_mock_disb_sub_key'),
+      remittanceSubscriptionKey:
+        config.remittanceSubscriptionKey ||
+        process.env.MOMO_REMITTANCE_SUBSCRIPTION_KEY ||
+        process.env.MTN_MOMO_REMITTANCE_SUBSCRIPTION_KEY ||
+        process.env.MOMO_SUBSCRIPTION_KEY ||
+        process.env.MTN_MOMO_REMITTANCE_KEY ||
+        (isProductionRuntime ? '' : 'sandbox_mock_remit_sub_key'),
+      apiUser: config.apiUser || process.env.MOMO_API_USER || process.env.MTN_MOMO_COLLECTION_API_USER || process.env.MTN_MOMO_API_USER || '',
+      apiKey: config.apiKey || process.env.MOMO_API_KEY || process.env.MTN_MOMO_COLLECTION_API_KEY || process.env.MTN_MOMO_API_KEY || '',
       callbackHost: config.callbackHost || process.env.MOMO_CALLBACK_HOST || 'staging.restopass.rw',
-      defaultCurrency: config.defaultCurrency || process.env.MOMO_CURRENCY || process.env.MTN_MOMO_CURRENCY || 'EUR',
-      useMock: config.useMock ?? (process.env.MOMO_USE_MOCK !== 'false' && (!(process.env.MOMO_SUBSCRIPTION_KEY || process.env.MTN_MOMO_PRIMARY_KEY) || process.env.NODE_ENV === 'test')),
+      defaultCurrency: config.defaultCurrency || process.env.MOMO_CURRENCY || process.env.MTN_MOMO_CURRENCY || 'RWF',
+      useMock: isProductionRuntime
+        ? false
+        : (config.useMock ?? (process.env.MOMO_USE_MOCK !== 'false' && (!hasLiveCollectionKey || process.env.NODE_ENV === 'test'))),
     };
   }
 
   public isMock(): boolean {
+    if (process.env.NODE_ENV === 'production') return false;
     return !!this.config.useMock;
   }
 
   public setMock(useMock: boolean): void {
+    if (process.env.NODE_ENV === 'production' && useMock) {
+      this.config.useMock = false;
+      return;
+    }
     this.config.useMock = useMock;
   }
 

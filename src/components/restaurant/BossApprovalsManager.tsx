@@ -371,7 +371,7 @@ export const BossApprovalsManager: React.FC<BossApprovalsManagerProps> = ({
                   <div className="flex items-center gap-2">
                     <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
                     <span>
-                      Grace Plates Consumed at Stand: <strong>{graceConsumed} of {appr.gracePlatesAllowed ?? (appr.type === 'new_customer' ? 4 : 3)} plates</strong>
+                      Grace Plates Consumed at Stand: <strong>{graceConsumed} of {appr.gracePlatesAllowed ?? 3} plates</strong>
                     </span>
                   </div>
 

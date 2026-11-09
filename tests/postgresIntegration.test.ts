@@ -1,14 +1,265 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   initPostgres,
   loadStateFromPostgres,
   saveStateToPostgres,
   commitPlateTransferPostgres,
+  upsertCustomerRecordPostgres,
+  computeCustomerBalanceSql,
   closePostgres,
   checkPostgresReady,
+  getPostgresPool,
 } from '../src/services/db/postgresAdapter';
+import {
+  app,
+  createSessionToken,
+  getServerCustomerBalance,
+  getServerDbState,
+  ensureServerDbDefaults,
+} from '../server';
 import { checkRedisReady, recordTokenScan, closeRedis, revokeSessionToken, isSessionTokenRevoked } from '../src/services/cache/redisClient';
+
+test('P0-01: schema.sql indexes balance_checkpoints.cutoff_timestamp and never references cutoff_date', () => {
+  const schemaPath = path.join(process.cwd(), 'src', 'services', 'db', 'schema.sql');
+  const ddl = fs.readFileSync(schemaPath, 'utf8');
+  assert.doesNotMatch(ddl, /\bcutoff_date\b/, 'schema.sql must not reference non-existent cutoff_date column');
+  assert.match(
+    ddl,
+    /CREATE INDEX IF NOT EXISTS idx_checkpoints_customer_cutoff\s+ON balance_checkpoints\s*\(\s*customer_id\s*,\s*cutoff_timestamp\s+DESC\s*\)/i
+  );
+});
+
+test('P0-02, P0-03, P0-10: monotonic snapshot SQL guards, checkpoint-aware balances, and gated transfer routes', async () => {
+  const adapterSource = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'db', 'postgresAdapter.ts'), 'utf8');
+  // P0-02 monotonic guards in saveStateToPostgres
+  assert.match(adapterSource, /WHERE COALESCE\(payments\.data->>'refundStatus', ''\) <> 'refunded'/);
+  assert.match(adapterSource, /WHERE COALESCE\(scan_events\.status, ''\) <> 'undone'/);
+  assert.match(adapterSource, /WHERE COALESCE\(transfers\.data->>'status', ''\) <> 'reversed'/);
+  assert.match(adapterSource, /WHERE pending_approvals\.status = 'pending'/);
+  assert.equal(typeof upsertCustomerRecordPostgres, 'function');
+  assert.equal(typeof computeCustomerBalanceSql, 'function');
+
+  // P0-03: getServerCustomerBalance honors both balanceCheckpoints and checkpoints
+  const cutoff = '2026-06-01T12:00:00.000Z';
+  const beforeCutoff = '2026-06-01T10:00:00.000Z';
+  const afterCutoff = '2026-06-01T14:00:00.000Z';
+  const mockStateWithCheckpoints = {
+    checkpoints: [{ id: 'cp_1', customerId: 'cust_cp_test', balance: 25, cutoffTimestamp: cutoff }],
+    ledgerEntries: [
+      { id: 'led_old', customerId: 'cust_cp_test', platesDelta: 100, timestamp: beforeCutoff },
+      { id: 'led_new', customerId: 'cust_cp_test', platesDelta: -3, timestamp: afterCutoff },
+    ],
+  };
+  assert.equal(getServerCustomerBalance(mockStateWithCheckpoints, 'cust_cp_test'), 22);
+
+  // P0-03: Both /api/customer/transfers and /api/customer/transfer fail closed with 503 when RESTOPASS_CUSTOMER_TRANSFERS_ENABLED !== 'true'
+  const prevTransferFlag = process.env.RESTOPASS_CUSTOMER_TRANSFERS_ENABLED;
+  delete process.env.RESTOPASS_CUSTOMER_TRANSFERS_ENABLED;
+  const state = getServerDbState();
+  ensureServerDbDefaults(state);
+  const custToken = createSessionToken({
+    userId: 'cust_28491',
+    username: '28491',
+    role: 'customer',
+    restaurantCode: 'RW01',
+  });
+
+  const invokeRoute = (method: string, urlPath: string, body: any, token: string) =>
+    new Promise<{ status: number; body: any }>((resolve) => {
+      let statusCode = 200;
+      const req: any = {
+        method,
+        url: urlPath,
+        path: urlPath,
+        query: {},
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body,
+        ip: '127.0.0.1',
+        socket: { remoteAddress: '127.0.0.1' },
+      };
+      const res: any = {
+        statusCode: 200,
+        status(code: number) { statusCode = code; this.statusCode = code; return this; },
+        json(data: any) { resolve({ status: statusCode, body: data }); return this; },
+        send(data: any) { resolve({ status: statusCode, body: data }); return this; },
+        setHeader() { return this; },
+        end(data?: any) { resolve({ status: statusCode, body: data || null }); return this; },
+      };
+      (app as any).handle(req, res);
+    });
+
+  try {
+    for (const endpoint of ['/api/customer/transfers', '/api/customer/transfer']) {
+      const resp = await invokeRoute('POST', endpoint, {
+        recipientMemberNo: '28492',
+        recipientIdentifier: '28492',
+        plates: 1,
+        pin: '123456',
+        idempotencyKey: 'idem_transfer_disabled_check_0001',
+      }, custToken);
+      assert.equal(resp.status, 503, `${endpoint} must return 503 when RESTOPASS_CUSTOMER_TRANSFERS_ENABLED is not 'true'`);
+      assert.equal(resp.body?.code, 'CUSTOMER_TRANSFERS_DISABLED');
+    }
+  } finally {
+    if (prevTransferFlag === undefined) delete process.env.RESTOPASS_CUSTOMER_TRANSFERS_ENABLED;
+    else process.env.RESTOPASS_CUSTOMER_TRANSFERS_ENABLED = prevTransferFlag;
+  }
+});
+
+test('P0-05: activation, registration status, and recovery routes enforce tenant isolation and block codeless memberNo takeover', async () => {
+  const state = getServerDbState();
+  ensureServerDbDefaults(state);
+
+  const invokeRoute = (method: string, urlPath: string, body: any, token?: string) =>
+    new Promise<{ status: number; body: any }>((resolve) => {
+      let statusCode = 200;
+      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      if (token) headers.authorization = `Bearer ${token}`;
+      const req: any = {
+        method,
+        url: urlPath,
+        path: urlPath,
+        query: {},
+        headers,
+        body,
+        ip: '127.0.0.1',
+        socket: { remoteAddress: '127.0.0.1' },
+      };
+      const res: any = {
+        statusCode: 200,
+        status(code: number) { statusCode = code; this.statusCode = code; return this; },
+        json(data: any) { resolve({ status: statusCode, body: data }); return this; },
+        send(data: any) { resolve({ status: statusCode, body: data }); return this; },
+        setHeader() { return this; },
+        end(data?: any) { resolve({ status: statusCode, body: data || null }); return this; },
+      };
+      (app as any).handle(req, res);
+    });
+
+  const sharedMemberNo = '99401';
+  const sharedPhone = '+250 788 994 001';
+  const rw01Cust = {
+    id: 'cust_p005_rw01',
+    memberNo: sharedMemberNo,
+    restaurantCode: 'RW01',
+    name: 'Tenant One Customer',
+    phone: sharedPhone,
+    cardVersion: 1,
+    keyVersion: 1,
+    cardStatus: 'active',
+    hasCustomPin: false,
+    pinHash: '',
+    registrationStatus: 'pending_boss_approval',
+    receptionPaymentStatus: 'confirmed',
+    provisionalStatus: 'pending_approval',
+    activationStatus: 'partial_active',
+    onboardingToken: 'OB-RW01-99401-SECRET',
+    createdAt: new Date().toISOString(),
+    consentSigned: true,
+  };
+  const rw02Cust = {
+    id: 'cust_p005_rw02',
+    memberNo: sharedMemberNo,
+    restaurantCode: 'RW02',
+    name: 'Tenant Two Customer',
+    phone: sharedPhone,
+    cardVersion: 1,
+    keyVersion: 1,
+    cardStatus: 'active',
+    hasCustomPin: false,
+    pinHash: '',
+    registrationStatus: 'approved',
+    receptionPaymentStatus: 'confirmed',
+    provisionalStatus: 'approved',
+    activationStatus: 'ready_for_activation',
+    onboardingToken: 'OB-RW02-99401-SECRET',
+    createdAt: new Date().toISOString(),
+    consentSigned: true,
+  };
+  state.customers = state.customers.filter((c: any) => c.id !== rw01Cust.id && c.id !== rw02Cust.id);
+  state.customers.push(rw01Cust, rw02Cust);
+
+  // 1. /api/customer/registration/status must NOT leak memberNo on phone-only lookup
+  const statusNoProof = await invokeRoute('POST', '/api/customer/registration/status', {
+    phone: sharedPhone,
+    restaurantCode: 'RW01',
+  });
+  assert.equal(statusNoProof.status, 200);
+  assert.equal(statusNoProof.body.status, 'needs_pin_setup');
+  assert.equal(statusNoProof.body.memberNo, undefined, 'Must not leak memberNo on unauthenticated phone-only lookup');
+
+  const statusWithToken = await invokeRoute('POST', '/api/customer/registration/status', {
+    phone: sharedPhone,
+    restaurantCode: 'RW01',
+    onboardingToken: 'OB-RW01-99401-SECRET',
+  });
+  assert.equal(statusWithToken.status, 200);
+  assert.equal(statusWithToken.body.memberNo, sharedMemberNo);
+
+  // 2. Codeless PIN takeover attempt using sequential memberNo on pending_boss_approval account must be rejected
+  const takeoverAttempt = await invokeRoute('POST', '/api/customer/activation/complete', {
+    phoneOrMember: sharedMemberNo,
+    newPin: '654321',
+    restaurantCode: 'RW01',
+  });
+  assert.equal(takeoverAttempt.status, 400);
+  assert.equal(rw01Cust.hasCustomPin, false, 'Codeless activation attempt must not set customer PIN');
+
+  // 3. Staff in RW02 requesting activation by shared memberNo must resolve RW02 customer, never RW01
+  const rw02AdminToken = createSessionToken({
+    userId: 'staff_rw02_boss',
+    username: 'rw02_boss',
+    role: 'restaurant_admin',
+    restaurantCode: 'RW02',
+  });
+  const actReqResp = await invokeRoute('POST', '/api/customer/activation/request', {
+    memberNo: sharedMemberNo,
+  }, rw02AdminToken);
+  assert.equal(actReqResp.status, 200);
+  assert.equal(actReqResp.body.customerName, 'Tenant Two Customer');
+
+  // Cross-tenant activation completion using RW02's code against RW01 must fail
+  const crossTenantComplete = await invokeRoute('POST', '/api/customer/activation/complete', {
+    phoneOrMember: sharedPhone,
+    activationCode: actReqResp.body.activationCode,
+    newPin: '765432',
+    restaurantCode: 'RW01',
+  });
+  assert.equal(crossTenantComplete.status, 400);
+  assert.equal(rw01Cust.hasCustomPin, false);
+
+  // Valid tenant activation completion for RW02 succeeds
+  const validComplete = await invokeRoute('POST', '/api/customer/activation/complete', {
+    phoneOrMember: sharedPhone,
+    activationCode: actReqResp.body.activationCode,
+    newPin: '765432',
+    restaurantCode: 'RW02',
+  });
+  assert.equal(validComplete.status, 200);
+  assert.equal(validComplete.body.customer.restaurantCode, 'RW02');
+  assert.equal(rw02Cust.hasCustomPin, true);
+
+  // 4. Recovery request by phone requires restaurantCode and scopes to the requested tenant
+  const recMissingTenant = await invokeRoute('POST', '/api/customer/recovery/request', {
+    phone: sharedPhone,
+    reason: 'Forgot PIN',
+  });
+  assert.equal(recMissingTenant.status, 400);
+
+  const recRw02 = await invokeRoute('POST', '/api/customer/recovery/request', {
+    phone: sharedPhone,
+    restaurantCode: 'RW02',
+    reason: 'Forgot PIN',
+  });
+  assert.equal(recRw02.status, 200);
+  const createdRec = (state.pinRecoveryRequests || []).find((r: any) => r.id === recRw02.body.requestId);
+  assert.ok(createdRec);
+  assert.equal(createdRec.customerId, rw02Cust.id);
+  assert.equal(createdRec.restaurantCode, 'RW02');
+});
 
 test('PostgreSQL persistence round-trip and concurrent transfer invariants', {
   skip: !process.env.TEST_DATABASE_URL,
@@ -26,7 +277,17 @@ test('PostgreSQL persistence round-trip and concurrent transfer invariants', {
 
   try {
     assert.equal(await initPostgres(), true);
+    // Repeat initialization must be safe and idempotent (P0-01).
+    assert.equal(await initPostgres(), true);
     assert.equal(await checkPostgresReady(), true);
+
+    const pool = getPostgresPool();
+    assert.ok(pool);
+    const idxCheck = await pool.query(
+      `SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'balance_checkpoints' AND indexname = 'idx_checkpoints_customer_cutoff'`
+    );
+    assert.equal(idxCheck.rowCount, 1);
+    assert.match(String(idxCheck.rows[0]?.indexdef || ''), /cutoff_timestamp/i);
 
     const state = {
       restaurants: [{ code: restaurantCode, name: 'Integration Test Restaurant', status: 'active' }],
