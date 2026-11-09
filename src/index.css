@@ -232,3 +232,128 @@
     page-break-inside: avoid !important;
   }
 }
+
+
+/* =========================================================================
+   RESPONSIVE APPLICATION FOUNDATION
+   Keep operational screens usable from narrow phones through desktop POS.
+   Component-specific layouts may opt into their own scroll containers.
+   ========================================================================= */
+
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 320px;
+  min-height: 100%;
+}
+
+html {
+  overflow-x: clip;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: clip;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+#root,
+#root main,
+#root main > *,
+#root main > * > * {
+  min-width: 0;
+}
+
+#root main {
+  width: 100%;
+  padding-inline: clamp(0.75rem, 2vw, 1.5rem);
+  padding-bottom: max(4.5rem, env(safe-area-inset-bottom));
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  max-width: 100%;
+}
+
+input,
+select,
+textarea {
+  min-width: 0;
+}
+
+img,
+video,
+canvas,
+svg {
+  max-width: 100%;
+}
+
+/* Wide data grids remain readable without forcing the whole page wider. */
+main table {
+  max-width: 100%;
+}
+
+main td,
+main th {
+  overflow-wrap: anywhere;
+}
+
+/* Keep long content and controls inside dialogs on short screens. */
+[role="dialog"] {
+  max-width: min(100%, 48rem);
+  max-height: calc(100dvh - 1.5rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 767px) {
+  header {
+    max-width: 100vw;
+  }
+
+  header > div {
+    height: auto !important;
+    min-height: 4rem;
+    flex-wrap: wrap;
+    gap: 0.5rem !important;
+    padding-block: 0.5rem;
+  }
+
+  header nav {
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+
+  #root main {
+    padding-inline: 0.75rem;
+  }
+
+  [role="dialog"] {
+    width: calc(100vw - 1rem);
+    max-width: calc(100vw - 1rem);
+    max-height: calc(100dvh - 1rem);
+    margin-inline: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
