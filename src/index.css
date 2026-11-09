@@ -339,6 +339,24 @@ main th {
     padding-inline: 0.75rem;
   }
 
+  main table {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  main label {
+    font-size: max(0.75rem, 1em);
+  }
+
+  main input:not([type="checkbox"]):not([type="radio"]),
+  main select {
+    min-height: 2.75rem;
+  }
+
   [role="dialog"] {
     width: calc(100vw - 1rem);
     max-width: calc(100vw - 1rem);
