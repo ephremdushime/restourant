@@ -126,6 +126,21 @@ function validateProductionSecrets(env: NodeJS.ProcessEnv = process.env): {
       throw new Error('[FATAL SECURITY ERROR] RESTOPASS_SUPERADMIN_PASSWORD must be configured with at least 16 non-placeholder characters in production.');
     }
 
+    if (env.RESTOPASS_MOBILE_MONEY_ENABLED === 'true') {
+      const momoBaseUrl = (env.MOMO_BASE_URL || env.MTN_MOMO_BASE_URL || '').trim();
+      const momoTarget = (env.MOMO_TARGET_ENV || env.MTN_MOMO_TARGET_ENV || env.MTN_MOMO_TARGET_ENVIRONMENT || '').trim().toLowerCase();
+      const momoCurrency = (env.MOMO_CURRENCY || env.MTN_MOMO_CURRENCY || '').trim().toUpperCase();
+      const collectionKey = (env.MOMO_COLLECTION_SUBSCRIPTION_KEY || env.MTN_MOMO_COLLECTION_SUBSCRIPTION_KEY ||
+        env.MOMO_SUBSCRIPTION_KEY || env.MTN_MOMO_PRIMARY_KEY || '').trim();
+      const apiUser = (env.MOMO_API_USER || env.MTN_MOMO_COLLECTION_API_USER || env.MTN_MOMO_API_USER || '').trim();
+      const apiKey = (env.MOMO_API_KEY || env.MTN_MOMO_COLLECTION_API_KEY || env.MTN_MOMO_API_KEY || '').trim();
+      if (!/^https:\/\/(?!sandbox\.momodeveloper\.mtn\.com)/i.test(momoBaseUrl) ||
+          momoTarget !== 'production' || momoCurrency !== 'RWF' ||
+          !collectionKey || !apiUser || !apiKey) {
+        throw new Error('[FATAL PAYMENT CONFIGURATION] Live Mobile Money is enabled, but production MTN credentials, HTTPS base URL, production target environment, and RWF currency are not all configured. Server startup aborted.');
+      }
+    }
+
     // Production restaurant administrators must have unique tenant-scoped
     // identities. A single global boss password is explicitly rejected.
     if (env.RESTOPASS_BOSS_PASSWORD || env.BOSS_PASSWORD) {
