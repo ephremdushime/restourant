@@ -330,7 +330,7 @@ export default function App() {
       />
 
       {/* Main Viewport Container */}
-      <main className="flex-1 w-full max-w-7xl mx-auto pb-16">
+      <main className="flex-1 w-full min-w-0 max-w-7xl mx-auto pb-16">
         {!sessions[state.currentRole] ? (
           <AuthPortalView
             currentRole={state.currentRole}
