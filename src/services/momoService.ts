@@ -151,7 +151,7 @@ export class MomoService {
       apiUser: config.apiUser || process.env.MOMO_API_USER || process.env.MTN_MOMO_COLLECTION_API_USER || process.env.MTN_MOMO_API_USER || '',
       apiKey: config.apiKey || process.env.MOMO_API_KEY || process.env.MTN_MOMO_COLLECTION_API_KEY || process.env.MTN_MOMO_API_KEY || '',
       callbackHost: config.callbackHost || process.env.MOMO_CALLBACK_HOST || 'staging.restopass.rw',
-      defaultCurrency: config.defaultCurrency || process.env.MOMO_CURRENCY || process.env.MTN_MOMO_CURRENCY || 'EUR',
+      defaultCurrency: config.defaultCurrency || process.env.MOMO_CURRENCY || process.env.MTN_MOMO_CURRENCY || 'RWF',
       useMock: isProductionRuntime
         ? false
         : (config.useMock ?? (process.env.MOMO_USE_MOCK !== 'false' && (!hasLiveCollectionKey || process.env.NODE_ENV === 'test'))),
