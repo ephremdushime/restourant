@@ -562,3 +562,22 @@ main th {
     line-height: 1.4;
   }
 }
+
+
+@media (max-width: 480px) {
+  .restaurant-admin-workspace form .grid.grid-cols-2,
+  .platform-admin-workspace form .grid.grid-cols-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .customer-bottom-nav {
+    padding-bottom: max(0.375rem, env(safe-area-inset-bottom));
+  }
+}
+
+.restaurant-admin-workspace *,
+.platform-admin-workspace *,
+.scanner-workspace *,
+.auth-portal-workspace * {
+  min-width: 0;
+}
