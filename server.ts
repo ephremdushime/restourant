@@ -432,16 +432,32 @@ function persistCustomerMutation(
   customer: any,
   options?: {
     auditLog?: any;
-    systemSettings?: Record<string, any>;
+    notifications?: any[];
+    systemSettings?: Array<[string, any]> | Record<string, any>;
+    persistFullState?: boolean;
   }
 ): Promise<boolean> {
   if (!isPostgresConfigured()) {
     return queueDbSave(serverDbState);
   }
+  const normalizedSystemSettings: Array<[string, any]> | undefined = options?.systemSettings
+    ? Array.isArray(options.systemSettings)
+      ? options.systemSettings
+      : Object.entries(options.systemSettings)
+    : (options?.persistFullState && serverDbState
+        ? [
+            ['activation_requests', serverDbState.activationRequests || []],
+            ['pin_recovery_requests', serverDbState.pinRecoveryRequests || []],
+          ]
+        : undefined);
   return new Promise((resolve) => {
     dbWriteQueue = dbWriteQueue.then(async () => {
       try {
-        const ok = await upsertCustomerRecordPostgres(customer, options);
+        const ok = await upsertCustomerRecordPostgres(customer, {
+          auditLog: options?.auditLog,
+          notifications: options?.notifications,
+          systemSettings: normalizedSystemSettings,
+        });
         resolve(ok);
         return ok;
       } catch (err) {

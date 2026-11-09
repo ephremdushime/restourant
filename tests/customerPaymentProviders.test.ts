@@ -56,7 +56,7 @@ test('server-issued customer QR uses the stored customer key version', () => {
   assert.match(qrRoute, /customerRecord\.id !== user\.userId/);
 });
 
-test('customer permanent card QR is server-issued and uses the stored card version', () => {
+test('customer permanent card QR is server-issued for staff/admins only and uses the stored card version (P0-07)', () => {
   const server = fs.readFileSync(path.resolve(process.cwd(), 'server.ts'), 'utf8');
   const store = fs.readFileSync(path.resolve(process.cwd(), 'src/store/restoStore.ts'), 'utf8');
   const customerView = fs.readFileSync(
@@ -68,9 +68,9 @@ test('customer permanent card QR is server-issued and uses the stored card versi
     server.indexOf('// POST /api/qr/verify')
   );
   assert.match(cardRoute, /customerRecord\.cardVersion/);
-  assert.match(cardRoute, /requireAuth\(\['super_admin', 'restaurant_admin', 'stand_staff', 'customer'\]\)/);
+  assert.match(cardRoute, /requireAuth\(\['super_admin', 'restaurant_admin', 'stand_staff'\]\)/);
   assert.match(store, /getServerCustomerCardQr/);
-  assert.match(customerView, /restoStore\.getServerCustomerCardQr\(customer\)/);
+  assert.doesNotMatch(customerView, /restoStore\.getServerCustomerCardQr\(customer\)/);
 });
 
 test('production card printing, registration and admin copy use server-signed tokens', () => {
