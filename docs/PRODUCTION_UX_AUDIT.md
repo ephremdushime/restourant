@@ -59,6 +59,8 @@ The follow-on implementation adds role-scoped responsive behavior:
 - Customer portal: mobile bottom navigation has larger labels and touch targets; header actions can wrap.
 - Accessibility: removed the viewport setting that disabled pinch zoom, and enabled safe-area viewport support for modern mobile devices.
 
+- Very narrow admin onboarding and management forms stack two-column fields; customer bottom navigation respects device safe-area insets.
+
 The changes are presentation-layer adjustments only. They do not intentionally alter authentication policy, tenant boundaries, balances, payment processing, scan authorization, offline synchronization, or backup behavior.
 
 ## Validation status
