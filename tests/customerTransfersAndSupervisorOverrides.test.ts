@@ -134,13 +134,16 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
     ]
   );
 
-  // Seed Customer A with 10 plates via ledger_entries
+  // Seed Customer A and Customer B with 10 plates via ledger_entries
   await pool!.query(
     `INSERT INTO ledger_entries (id, restaurant_code, customer_id, type, plates_delta, idempotency_key, timestamp, data)
-     VALUES ($1,$2,$3,'purchase',10,$4,NOW(),$5)`,
+     VALUES ($1,$2,$3,'purchase',10,$4,NOW(),$5),
+            ($6,$7,$8,'purchase',10,$9,NOW(),$10)`,
     [
       'led_seed_' + custA_id, rCode1, custA_id, 'idemp_seed_' + custA_id,
       JSON.stringify({ id: 'led_seed_' + custA_id, customerId: custA_id, platesDelta: 10, type: 'purchase' }),
+      'led_seed_' + custB_id, rCode1, custB_id, 'idemp_seed_' + custB_id,
+      JSON.stringify({ id: 'led_seed_' + custB_id, customerId: custB_id, platesDelta: 10, type: 'purchase' }),
     ]
   );
 
@@ -371,11 +374,6 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
     });
 
     // 8. Concurrent attempts to consume the same supervisor override
-    await pool!.query(
-      "INSERT INTO ledger_entries (id,restaurant_code,customer_id,type,plates_delta,idempotency_key,timestamp,data) VALUES ($1,$2,$3,'purchase',10,$4,NOW(),$5)",
-      ['led_seed_' + custB_id, rCode1, custB_id, 'idemp_seed_' + custB_id,
-       JSON.stringify({ id: 'led_seed_' + custB_id, customerId: custB_id, platesDelta: 10, type: 'purchase' })]
-    );
     for (let i = 1; i <= 3; i += 1) {
       const event = { id: 'prior_b_' + rCode1 + '_' + i, customerId: custB_id, platesDeducted: 1, status: 'approved' };
       await pool!.query(
