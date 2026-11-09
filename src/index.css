@@ -488,17 +488,17 @@ main th {
     overflow-wrap: anywhere;
   }
 
-  .platform-admin-workspace > div:first-child > div:first-child {
+  .platform-admin-header > div:first-child {
     min-width: 0;
     flex-wrap: wrap;
   }
 
-  .platform-admin-workspace > div:first-child > div:last-child {
+  .platform-admin-header > div:last-child {
     width: 100%;
     flex-wrap: wrap;
   }
 
-  .platform-admin-workspace > div:first-child > div:last-child > button {
+  .platform-admin-header > div:last-child > button {
     flex: 1 1 10rem;
     min-height: 2.75rem;
     justify-content: center;
@@ -513,5 +513,31 @@ main th {
   .restaurant-admin-nav > button,
   .platform-admin-tabs > button {
     flex-basis: 100%;
+  }
+}
+
+
+@media (max-width: 767px) {
+  .restaurant-admin-workspace label,
+  .platform-admin-workspace label {
+    font-size: 0.875rem;
+    line-height: 1.4;
+  }
+
+  .restaurant-admin-workspace input:not([type="checkbox"]):not([type="radio"]),
+  .restaurant-admin-workspace select,
+  .restaurant-admin-workspace textarea,
+  .platform-admin-workspace input:not([type="checkbox"]):not([type="radio"]),
+  .platform-admin-workspace select,
+  .platform-admin-workspace textarea {
+    min-height: 2.75rem;
+    font-size: 0.875rem;
+  }
+
+  .restaurant-admin-workspace [role="alert"],
+  .platform-admin-workspace [role="alert"] {
+    font-size: 0.875rem;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
   }
 }
