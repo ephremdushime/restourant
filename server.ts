@@ -2180,7 +2180,7 @@ app.post(
       if (r.customerId === cust.id && !r.used) r.used = true;
     });
 
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const code = crypto.randomInt(100000, 1000000).toString();
     const codeHash = crypto.createHash('sha256').update(code).digest('hex');
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
@@ -2346,7 +2346,7 @@ app.post('/api/customer/recovery/request', authRateLimiter, (req, res) => {
   if (!cust) return res.status(404).json({ success: false, error: 'Customer not found' });
 
   if (!serverDbState.pinRecoveryRequests) serverDbState.pinRecoveryRequests = [];
-  const requestId = `rec_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const requestId = `rec_${crypto.randomUUID()}`;
   const recReq = {
     id: requestId,
     customerId: cust.id,
@@ -2385,8 +2385,9 @@ app.post(
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
     recReq.status = 'approved';
-    recReq.recoveryCode = code;
+    delete recReq.recoveryCode;
     recReq.recoveryCodeHash = codeHash;
+    recReq.failedCodeAttempts = 0;
     recReq.authorizingStaffId = req.user!.userId;
     recReq.authorizingStaffName = req.user!.username;
     recReq.approvedAt = new Date().toISOString();
@@ -2415,8 +2416,18 @@ app.post('/api/customer/recovery/complete', authRateLimiter, async (req, res) =>
 
   const cleanCode = typeof recoveryCode === 'string' ? recoveryCode.trim() : '';
   const codeHash = crypto.createHash('sha256').update(cleanCode).digest('hex');
-  if (recReq.recoveryCode !== cleanCode && recReq.recoveryCodeHash !== codeHash) {
-    return res.status(400).json({ success: false, error: 'Invalid recovery code' });
+  if (typeof recReq.recoveryCodeHash !== 'string' ||
+      !timingSafeCompare(recReq.recoveryCodeHash, codeHash)) {
+    recReq.failedCodeAttempts = Number(recReq.failedCodeAttempts || 0) + 1;
+    if (recReq.failedCodeAttempts >= 5) {
+      recReq.status = 'locked';
+      recReq.lockedAt = new Date().toISOString();
+    }
+    await queueDbSave(serverDbState);
+    return res.status(400).json({
+      success: false,
+      error: recReq.status === 'locked' ? 'Recovery request locked after too many invalid codes.' : 'Invalid recovery code',
+    });
   }
 
   const customers = serverDbState?.customers || [];
@@ -4150,9 +4161,9 @@ app.post('/api/customer/transfers', apiRateLimiter, requireAuth(['customer']), a
     }
     const sender = locked.rows.find((c: any) => c.id === user.userId);
     const suppliedPin = typeof req.body?.pin === 'string' ? req.body.pin.trim() : '';
-    if (suppliedPin && !verifyServerCustomerPin(suppliedPin, sender?.data)) {
+    if (!/^\d{6,}$/.test(suppliedPin) || !verifyServerCustomerPin(suppliedPin, sender?.data)) {
       await client.query('ROLLBACK');
-      return res.status(401).json({ success: false, error: 'Incorrect security PIN.' });
+      return res.status(401).json({ success: false, error: 'A valid security PIN is required.' });
     }
     const senderBalance = await computeCustomerBalanceSql(client, user.restaurantCode, user.userId);
     const recipientBalance = await computeCustomerBalanceSql(client, user.restaurantCode, recipient.id);
@@ -5805,8 +5816,8 @@ app.get('/api/customer/subscription/payments/:internalReference/status', apiRate
 
       const amountValid = receivedAmount === 500;
       const currencyValid = receivedCurrency === 'RWF';
-      const externalIdValid = !receivedExternalId || receivedExternalId === payment.internalReference;
-      const payerValid = !expectedPhone || !receivedPhone || receivedPhone === expectedPhone;
+      const externalIdValid = Boolean(receivedExternalId) && receivedExternalId === payment.internalReference;
+      const payerValid = Boolean(expectedPhone) && Boolean(receivedPhone) && receivedPhone === expectedPhone;
 
       if (!amountValid || !currencyValid || !externalIdValid || !payerValid) {
         payment.status = 'failed';
