@@ -64,12 +64,12 @@ while true; do
 
   mkdir -p "$workdir/uploads-stage"
   if [ -d /uploads ]; then
-    cp -a /uploads/. "$workdir/uploads-stage/" 2>/dev/null || true
+    cp -a /uploads/. "$workdir/uploads-stage/"
   fi
   private_photo_dir="${RESTOPASS_PRIVATE_UPLOAD_DIR:-/app/data/private/patron-photos}"
   if [ -d "$private_photo_dir" ]; then
     mkdir -p "$workdir/uploads-stage/patron-photos"
-    cp -a "$private_photo_dir"/. "$workdir/uploads-stage/patron-photos/" 2>/dev/null || true
+    cp -a "$private_photo_dir"/. "$workdir/uploads-stage/patron-photos/"
   fi
   tar -czf "$workdir/uploads.tar.gz" -C "$workdir/uploads-stage" .
   tar -czf "$workdir/archive.tar.gz" -C "$workdir" database.dump uploads.tar.gz
