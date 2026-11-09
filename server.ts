@@ -5366,9 +5366,13 @@ app.get('/api/customer/subscription', apiRateLimiter, requireAuth(), (req, res) 
   });
 });
 
-// POST /api/customer/subscription/checkout: Server-authoritative Mobile Money initiation (Workstream F)
+// POST /api/customer/subscription/checkout: Server-authoritative Mobile Money initiation (Workstream F / P0-09)
 app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['customer']), async (req, res) => {
-  if (process.env.RESTOPASS_MOBILE_MONEY_ENABLED !== 'true') {
+  if (
+    process.env.RESTOPASS_MOBILE_MONEY_ENABLED !== 'true' ||
+    process.env.MTN_COLLECTIONS_ENABLED === 'false' ||
+    (process.env.NODE_ENV === 'production' && momoService.isMock())
+  ) {
     return res.status(503).json({
       success: false,
       code: 'PAYMENT_PROVIDER_NOT_CONFIGURED',
@@ -5445,10 +5449,13 @@ app.post('/api/customer/subscription/checkout', apiRateLimiter, requireAuth(['cu
   });
 });
 
-// POST /api/payments/mobile-money/callback: Webhook callback from Mobile Money provider with Idempotency
+// POST /api/payments/mobile-money/callback: Webhook callback from Mobile Money provider with Idempotency (P0-09)
 app.post('/api/payments/mobile-money/callback', apiRateLimiter, async (req, res) => {
-  if (process.env.RESTOPASS_MOBILE_MONEY_ENABLED !== 'true') {
+  if (process.env.RESTOPASS_MOBILE_MONEY_ENABLED !== 'true' || process.env.MTN_COLLECTIONS_ENABLED === 'false') {
     return res.status(503).json({ success: false, error: 'Payment callback verification is not configured. No subscription was activated.' });
+  }
+  if (process.env.NODE_ENV === 'production' && (!process.env.MOMO_WEBHOOK_SECRET || process.env.MOMO_WEBHOOK_SECRET.length < 16)) {
+    return res.status(503).json({ success: false, error: 'Dedicated MOMO_WEBHOOK_SECRET is required in production.' });
   }
 
   ensureServerDbDefaults(serverDbState);
@@ -5540,6 +5547,7 @@ app.post('/api/payments/mobile-money/callback', apiRateLimiter, async (req, res)
       status: 'active',
       currentPeriodStart: new Date(nowMs).toISOString(),
       currentPeriodEnd: new Date(periodEndMs).toISOString(),
+      gracePeriodEnd: new Date(graceEndMs).toISOString(),
       gracePeriodEndsAt: new Date(graceEndMs).toISOString(),
       lastPaymentId: attempt.id,
       updatedAt: new Date(nowMs).toISOString(),
@@ -5549,9 +5557,14 @@ app.post('/api/payments/mobile-money/callback', apiRateLimiter, async (req, res)
     sub.status = 'active';
     sub.currentPeriodStart = new Date(nowMs).toISOString();
     sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
+    sub.gracePeriodEnd = new Date(graceEndMs).toISOString();
     sub.gracePeriodEndsAt = new Date(graceEndMs).toISOString();
     sub.lastPaymentId = attempt.id;
     sub.updatedAt = new Date(nowMs).toISOString();
+  }
+  const customerRecord = (serverDbState.customers || []).find((c: any) => c.id === attempt.customerId);
+  if (customerRecord && customerRecord.registrationStatus === 'approved') {
+    customerRecord.customerAccessStatus = 'active';
   }
 
   serverDbState.auditLogs.unshift({
@@ -5768,15 +5781,26 @@ app.get('/api/customer/subscription/payments/:internalReference/status', apiRate
     const providerStatus = String(statusRes.data?.status || 'PENDING').toUpperCase();
     if (providerStatus === 'SUCCESSFUL') {
       const receivedAmount = Number(statusRes.data?.amount ?? 0);
-      if (receivedAmount !== 500) {
+      const receivedCurrency = String(statusRes.data?.currency || '').toUpperCase();
+      const receivedExternalId = String(statusRes.data?.externalId || '');
+      const normalizeMsisdn = (val: string) => String(val || '').replace(/\D/g, '').replace(/^0/, '250');
+      const expectedPhone = normalizeMsisdn(payment.phone || payment.phoneNumber || '');
+      const receivedPhone = normalizeMsisdn(statusRes.data?.payer?.partyId || '');
+
+      const amountValid = receivedAmount === 500;
+      const currencyValid = receivedCurrency === 'RWF';
+      const externalIdValid = !receivedExternalId || receivedExternalId === payment.internalReference;
+      const payerValid = !expectedPhone || !receivedPhone || receivedPhone === expectedPhone;
+
+      if (!amountValid || !currencyValid || !externalIdValid || !payerValid) {
         payment.status = 'failed';
-        payment.failureReason = `MTN transaction amount mismatch (received ${receivedAmount}).`;
+        payment.failureReason = `MTN transaction verification mismatch (amount=${receivedAmount}, currency=${receivedCurrency}, externalId=${receivedExternalId}, payer=${receivedPhone}).`;
         payment.failedAt = new Date().toISOString();
         await queueDbSave(serverDbState);
         return res.status(400).json({
           success: false,
           status: 'FAILED',
-          error: 'Provider-confirmed payment amount does not match 500 RWF.',
+          error: 'Provider-confirmed payment details (amount, currency, reference, or payer MSISDN) do not match the expected 500 RWF subscription request.',
         });
       }
 
@@ -5800,6 +5824,7 @@ app.get('/api/customer/subscription/payments/:internalReference/status', apiRate
           status: 'active',
           currentPeriodStart: new Date(nowMs).toISOString(),
           currentPeriodEnd: new Date(periodEndMs).toISOString(),
+          gracePeriodEnd: new Date(graceEndMs).toISOString(),
           gracePeriodEndsAt: new Date(graceEndMs).toISOString(),
           lastPaymentId: payment.id,
           updatedAt: new Date(nowMs).toISOString(),
@@ -5809,9 +5834,14 @@ app.get('/api/customer/subscription/payments/:internalReference/status', apiRate
         sub.status = 'active';
         sub.currentPeriodStart = new Date(nowMs).toISOString();
         sub.currentPeriodEnd = new Date(periodEndMs).toISOString();
+        sub.gracePeriodEnd = new Date(graceEndMs).toISOString();
         sub.gracePeriodEndsAt = new Date(graceEndMs).toISOString();
         sub.lastPaymentId = payment.id;
         sub.updatedAt = new Date(nowMs).toISOString();
+      }
+      const customerRecord = (serverDbState.customers || []).find((c: any) => c.id === payment.customerId);
+      if (customerRecord && customerRecord.registrationStatus === 'approved') {
+        customerRecord.customerAccessStatus = 'active';
       }
       await queueDbSave(serverDbState);
       return res.json({ success: true, status: 'SUCCESSFUL', payment, subscription: sub });
