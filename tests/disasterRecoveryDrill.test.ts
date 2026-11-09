@@ -209,7 +209,7 @@ describe('Phase 3: Disaster Recovery, Backup Verification & Restoration Drill', 
               ($6, $2, $3, 'consumption', -1, $7, NOW(), $8)`,
       [
         'led_dr_1_' + custId, rCode, custId, 'idemp_dr_1_' + custId, JSON.stringify({ platesDelta: 25 }),
-        'led_dr_2_' + custId, rCode, custId, 'idemp_dr_2_' + custId, JSON.stringify({ platesDelta: -1 }),
+        'led_dr_2_' + custId, 'idemp_dr_2_' + custId, JSON.stringify({ platesDelta: -1 }),
       ]
     );
 
