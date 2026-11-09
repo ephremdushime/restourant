@@ -1,0 +1,4 @@
+# Force LF line endings for all shell scripts so they run reliably on Linux
+*.sh text eol=lf
+Dockerfile* text eol=lf
+Caddyfile text eol=lf
