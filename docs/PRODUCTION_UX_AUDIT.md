@@ -46,3 +46,21 @@ This is a code review, not a claim that every route has been visually exercised 
 ## Release rule
 
 Do not deploy or onboard the first restaurant based only on this initial CSS pass. The branch must pass automated checks and a browser-based responsive review before it is considered release-ready.
+
+
+## Implementation progress — responsive role workspaces
+
+The follow-on implementation adds role-scoped responsive behavior:
+
+- Scanner workspace: controls wrap into usable touch targets on phones; scanner input and submit action retain a usable width; camera and status/error content are bounded to the workspace.
+- Restaurant administration: the multi-section navigation wraps into readable, tappable controls; form labels, fields, and error messages are enlarged on small screens.
+- Platform administration: tab navigation and onboarding actions wrap on phones; dense tenant tables remain in their own horizontal scroll regions.
+- Authentication: activation and recovery form fields stack on very narrow screens; labels and controls use more legible mobile sizing.
+- Customer portal: mobile bottom navigation has larger labels and touch targets; header actions can wrap.
+- Accessibility: removed the viewport setting that disabled pinch zoom, and enabled safe-area viewport support for modern mobile devices.
+
+The changes are presentation-layer adjustments only. They do not intentionally alter authentication policy, tenant boundaries, balances, payment processing, scan authorization, offline synchronization, or backup behavior.
+
+## Validation status
+
+The initial responsive-foundation commit passed the full repository CI workflow, including typecheck, security/integrity tests, backup/restore checks, Docker runtime tests, and production build. The expanded role-specific changes require their own latest-commit CI result. Browser-based viewport and assistive-technology verification is still outstanding; the source review must not be treated as proof of visual responsiveness.
