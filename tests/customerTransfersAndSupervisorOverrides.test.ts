@@ -354,7 +354,6 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
     delete process.env.RESTOPASS_SUPERVISOR_OVERRIDES_ENABLED;
   }
 });
- + salt + ',
       custB_id, rCode1, custB_member, 'Customer B', JSON.stringify({ id: custB_id, restaurantCode: rCode1, memberNo: custB_member, name: 'Customer B', cardStatus: 'active' }),
       custC_id, rCode2, custC_member, 'Customer C', JSON.stringify({ id: custC_id, restaurantCode: rCode2, memberNo: custC_member, name: 'Customer C', cardStatus: 'active' }),
     ]
