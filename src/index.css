@@ -357,3 +357,33 @@ main th {
     transition-duration: 0.01ms !important;
   }
 }
+
+
+@media (max-width: 767px) {
+  header > div > div:first-child {
+    min-width: 0;
+    max-width: 100%;
+    flex-shrink: 1 !important;
+    flex-wrap: wrap;
+    row-gap: 0.5rem;
+  }
+
+  header > div > div:last-child {
+    min-width: 0;
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .customer-bottom-nav button {
+    min-height: 3rem;
+    padding-block: 0.5rem;
+    font-size: 0.75rem;
+  }
+
+  .fixed.inset-0.z-50 > div {
+    max-height: calc(100dvh - 2rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
