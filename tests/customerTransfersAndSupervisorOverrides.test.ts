@@ -96,7 +96,7 @@ test('PostgreSQL customer transfers and supervisor overrides live integration', 
             ($6,$7,$8,$9,'active',true,$10),
             ($11,$12,$13,$14,'active',true,$15)`,
     [
-      custA_id, rCode1, custA_member, 'Customer A', JSON.stringify({ id: custA_id, restaurantCode: rCode1, memberNo: custA_member, name: 'Customer A', cardStatus: 'active', pinHash: (() => { const salt = crypto.randomBytes(16).toString('hex'); const derived = crypto.scryptSync('123456', salt, 64, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }).toString('hex'); return 'scrypt$16384$8$1,
+      custA_id, rCode1, custA_member, 'Customer A', JSON.stringify({ id: custA_id, restaurantCode: rCode1, memberNo: custA_member, name: 'Customer A', cardStatus: 'active', pinHash: 'scrypt$16384$8$1$30313233343536373839616263646566$fb1523c2b96f0447e5f4dd9c1e4fb11533912cc9a9fc846a3d13f0baf799c8a60862c844eb19e535ec5effc50a2288133076ec0990a117b9641125ab09394df9' }),
       custB_id, rCode1, custB_member, 'Customer B', JSON.stringify({ id: custB_id, restaurantCode: rCode1, memberNo: custB_member, name: 'Customer B', cardStatus: 'active' }),
       custC_id, rCode2, custC_member, 'Customer C', JSON.stringify({ id: custC_id, restaurantCode: rCode2, memberNo: custC_member, name: 'Customer C', cardStatus: 'active' }),
     ]
