@@ -374,7 +374,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       </div>
 
       {/* Sub Tabs */}
-      <div className="flex flex-wrap gap-2 border-b border-slate-800 pb-3 text-sm font-medium text-slate-300">
+      <div className="platform-admin-tabs flex flex-wrap gap-2 border-b border-slate-800 pb-3 text-sm font-medium text-slate-300">
         {[
           { id: 'restaurants', label: 'Tenants & Health' },
           { id: 'kinyarwanda_cms', label: '🇷🇼 Kinyarwanda & Translations CMS' },
