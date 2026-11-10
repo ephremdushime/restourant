@@ -342,7 +342,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
         <div>
           <div className="flex items-center gap-2">
             <Award className="w-5 h-5 text-amber-400" />
-            <h1 className="text-xl font-bold text-white tracking-tight">
+            <h1 className="platform-admin-title text-xl font-bold text-white tracking-tight">
               RestoPass Master Control
             </h1>
             <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
@@ -374,7 +374,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
       </div>
 
       {/* Sub Tabs */}
-      <div className="platform-admin-tabs flex flex-wrap gap-2 border-b border-slate-800 pb-3 text-sm font-medium text-slate-300">
+      <div role="navigation" aria-label="Platform administration sections" className="platform-admin-tabs flex flex-wrap gap-2 border-b border-slate-800 pb-3 text-sm font-medium text-slate-300">
         {[
           { id: 'restaurants', label: 'Tenants & Health' },
           { id: 'kinyarwanda_cms', label: '🇷🇼 Kinyarwanda & Translations CMS' },
@@ -394,8 +394,10 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
         ].map((tab) => (
           <button
             key={tab.id}
+            type="button"
+            aria-current={activeSubTab === tab.id ? 'page' : undefined}
             onClick={() => onSubTabChange(tab.id)}
-            className={`px-3.5 py-2 rounded-xl transition-colors cursor-pointer ${
+            className={`platform-admin-tab px-3.5 py-2 rounded-xl transition-colors cursor-pointer ${
               activeSubTab === tab.id
                 ? 'bg-amber-600 text-white font-bold shadow-xs'
                 : 'hover:text-white hover:bg-slate-900'
