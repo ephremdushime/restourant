@@ -112,8 +112,18 @@ export const Header: React.FC<HeaderProps> = ({
         setIsProfileDropdownOpen(false);
       }
     };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsRestoDropdownOpen(false);
+        setIsProfileDropdownOpen(false);
+      }
+    };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
 
   // Customers are strictly isolated to their authenticated restaurant tenant
@@ -149,11 +159,11 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className="sticky top-0 z-50 bg-slate-950/85 backdrop-blur-xl border-b border-slate-800/80 text-slate-100 transition-all select-none print:hidden">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+      <div className="app-header-inner max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
         {/* ========================================================
             ZONE 1: Enterprise Brand & Authenticated Facility Context
            ======================================================== */}
-        <div className="flex items-center gap-4 shrink-0">
+        <div className="app-header-brand flex items-center gap-4 shrink-0">
           <a
             href="#home"
             onClick={(e) => { e.preventDefault(); }}
@@ -184,6 +194,8 @@ export const Header: React.FC<HeaderProps> = ({
                   <button
                     type="button"
                     onClick={() => setIsRestoDropdownOpen((prev) => !prev)}
+                    aria-expanded={isRestoDropdownOpen}
+                    aria-haspopup="true"
                     className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-xs font-semibold text-slate-200 transition-all cursor-pointer shadow-inner"
                     title="Switch active dining facility scope"
                   >
@@ -212,7 +224,7 @@ export const Header: React.FC<HeaderProps> = ({
                 )}
 
                 {canSwitchFacility && isRestoDropdownOpen && (
-                  <div className="absolute left-0 mt-2 w-72 rounded-2xl bg-slate-900/95 backdrop-blur-xl border border-slate-800 shadow-2xl p-2 z-50 animate-in fade-in zoom-in-95 duration-100">
+                  <div className="header-dropdown absolute left-0 mt-2 w-72 rounded-2xl bg-slate-900/95 backdrop-blur-xl border border-slate-800 shadow-2xl p-2 z-50 animate-in fade-in zoom-in-95 duration-100">
                     <div className="px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800/80 mb-1 flex items-center justify-between">
                       <span>{currentRole === 'super_admin' ? 'Target Tenant Scope' : 'Active Dining Facility'}</span>
                       {isDemoMode && (
@@ -259,7 +271,7 @@ export const Header: React.FC<HeaderProps> = ({
         {/* ========================================================
             ZONE 2: Executive Controls & Authenticated Profile Menu
            ======================================================== */}
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+        <div className="app-header-actions flex items-center gap-2 sm:gap-3 shrink-0">
           {import.meta.env.DEV && isSessionActive && isDemoMode && onToggleDemoMode && (
             <button
               type="button"
@@ -333,13 +345,13 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           {/* Language Switcher */}
-          <div className="flex items-center bg-slate-900/90 border border-slate-800 rounded-xl p-0.5 text-xs">
+          <div role="group" aria-label="Language" className="flex items-center bg-slate-900/90 border border-slate-800 rounded-xl p-0.5 text-xs">
             {(['en', 'rw', 'fr'] as Language[]).map((lang) => (
               <button
                 key={lang}
                 type="button"
                 onClick={() => onLanguageChange(lang)}
-                className={`px-2 py-0.5 rounded-lg text-[11px] font-bold uppercase transition-colors cursor-pointer ${
+                className={`min-h-9 min-w-9 px-2 py-1 rounded-lg text-xs font-bold uppercase transition-colors cursor-pointer ${
                   language === lang
                     ? 'bg-slate-700 text-white shadow-xs'
                     : 'text-slate-400 hover:text-slate-200'
@@ -359,6 +371,9 @@ export const Header: React.FC<HeaderProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsProfileDropdownOpen((prev) => !prev)}
+                  aria-label={`Account menu for ${resolvedUserLabel}`}
+                  aria-expanded={isProfileDropdownOpen}
+                  aria-haspopup="true"
                   className="flex items-center gap-2 p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 transition-all cursor-pointer shadow-inner"
                 >
                   <div className="w-7 h-7 rounded-lg bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 font-bold text-xs flex items-center justify-center shrink-0">
@@ -376,7 +391,7 @@ export const Header: React.FC<HeaderProps> = ({
                 </button>
 
                 {isProfileDropdownOpen && (
-                  <div className="absolute right-0 mt-2 w-72 rounded-2xl bg-slate-900/95 backdrop-blur-xl border border-slate-800 shadow-2xl p-2 z-50 animate-in fade-in zoom-in-95 duration-100">
+                  <div className="header-dropdown absolute right-0 mt-2 w-72 rounded-2xl bg-slate-900/95 backdrop-blur-xl border border-slate-800 shadow-2xl p-2 z-50 animate-in fade-in zoom-in-95 duration-100">
                     {/* User Info Header */}
                     <div className="px-3 py-2.5 border-b border-slate-800">
                       <div className="text-xs font-bold text-white">

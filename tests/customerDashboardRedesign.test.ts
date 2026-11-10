@@ -140,8 +140,8 @@ describe('Customer Dashboard Redesign & Security Preservation Protocol (Items 1â
     }
 
     const layout = readRepoFile('src/components/customer/CustomerPortalLayout.tsx');
-    assert.match(layout, /aria-label="Customer Portal Navigation"/);
-    assert.match(layout, /aria-label="Mobile Customer Navigation"/);
+    assert.match(layout, /aria-label="Customer portal sections"/);
+    assert.equal((layout.match(/aria-label="Customer portal sections"/g) || []).length, 2);
     assert.match(layout, /lg:grid-cols-12/);
     assert.match(layout, /fixed bottom-0 inset-x-0/);
   });

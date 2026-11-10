@@ -508,8 +508,8 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   }
 
   return (
-    <div className="min-h-[80vh] flex flex-col items-center justify-center p-4 sm:p-6">
-      <div className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl p-6 sm:p-8 space-y-6">
+    <div className="auth-portal-workspace min-h-[80vh] min-w-0 flex flex-col items-center justify-center p-3 sm:p-6">
+      <div className="w-full min-w-0 max-w-xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl p-4 sm:p-8 space-y-5 sm:space-y-6">
         {/* Header Branding */}
         <div className="text-center space-y-2">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 mb-1 shadow-inner">

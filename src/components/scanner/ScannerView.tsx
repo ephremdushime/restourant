@@ -439,7 +439,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const restoScanEvents = state.scanEvents.filter((ev) => ev.restaurantCode === state.currentRestaurantCode);
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-5 space-y-5">
+    <div className="scanner-workspace max-w-4xl mx-auto min-w-0 px-4 py-5 space-y-5">
       {/* 1. Clean Station Header (Simplified: No Pairing Gate, Pairing Code, or Rogue Wi-Fi Controls) */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 rounded-2xl bg-slate-900 border border-slate-700/80 shadow-lg">
         <div className="flex items-center gap-3">
@@ -455,7 +455,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         </div>
 
         {/* Staff Operational Controls */}
-        <div className="flex items-center gap-2.5 flex-wrap">
+        <div className="scanner-toolbar flex items-center gap-2.5 flex-wrap">
           {/* Auto-Advance Speed */}
           <div className="flex items-center bg-slate-950 rounded-xl p-1 border border-slate-700 text-xs sm:text-sm">
             <span className="text-slate-200 px-2 font-semibold">Auto-Next:</span>
@@ -701,11 +701,14 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           e.preventDefault();
           handleExecuteScan(inputPayload);
         }}
-        className="relative"
+        className="scanner-input-form relative"
       >
-        <div className="relative">
+        <div className="scanner-input-shell relative">
           <input
             ref={keyboardInputRef}
+            aria-label="Scan customer card or QR token"
+            autoComplete="off"
+            enterKeyHint="done"
             type="text"
             value={inputPayload}
             onChange={(e) => handleInputChange(e.target.value)}
@@ -715,7 +718,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           <Barcode className="w-6 h-6 text-emerald-400 absolute left-4 top-4" />
           <button
             type="submit"
-            className="absolute right-2.5 top-2.5 bottom-2.5 px-5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-sm transition-colors cursor-pointer shadow-sm"
+            className="scanner-submit absolute right-2.5 top-2.5 bottom-2.5 px-5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-sm transition-colors cursor-pointer shadow-sm"
           >
             Scan
           </button>
