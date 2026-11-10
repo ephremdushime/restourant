@@ -812,3 +812,95 @@ main th {
     justify-content: center;
   }
 }
+
+
+/* Final portal-level refinements for compact phones and keyboard navigation. */
+.customer-portal-workspace {
+  overflow-wrap: anywhere;
+}
+
+.customer-context-actions {
+  max-width: 100%;
+}
+
+.customer-context-action,
+.customer-icon-action {
+  min-height: 2.75rem;
+}
+
+.customer-bottom-nav {
+  padding-bottom: max(0.375rem, env(safe-area-inset-bottom));
+}
+
+.customer-bottom-nav-item {
+  min-width: 0;
+  min-height: 3rem;
+}
+
+.customer-bottom-nav-label {
+  max-width: 100%;
+  font-size: clamp(0.625rem, 2.5vw, 0.75rem);
+  line-height: 1.15;
+}
+
+.platform-admin-tab {
+  min-height: 2.75rem;
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+  line-height: 1.25;
+}
+
+.platform-admin-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .platform-admin-title {
+    font-size: 1.125rem;
+  }
+
+  .platform-admin-header-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .platform-admin-header-actions > button {
+    flex: 1 1 10rem;
+    min-height: 2.75rem;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 380px) {
+  .customer-portal-workspace {
+    padding-inline: 0.5rem;
+  }
+
+  .customer-context-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .customer-context-action {
+    flex: 1 1 7rem;
+    justify-content: center;
+  }
+
+  .customer-bottom-nav {
+    padding-inline: 0.25rem;
+  }
+
+  .customer-bottom-nav-inner {
+    gap: 0.125rem;
+  }
+
+  .customer-bottom-nav-item {
+    padding-inline: 0.125rem;
+  }
+
+  .customer-bottom-nav-label {
+    letter-spacing: -0.02em;
+  }
+}
