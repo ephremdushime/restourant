@@ -81,3 +81,24 @@ The initial responsive-foundation commit passed the full repository CI workflow,
 - Browser-based visual review is still not available from this repository session. Verify 320/360/390/430/768/1024/1440/1920px viewports, including keyboard navigation, dropdown positioning, scanner result/error states, and table scrolling.
 - Restaurant-admin view decomposition remains outstanding. It must be performed by extracting isolated sections with their existing props/state boundaries and verified after each extraction; do not rewrite the full workflow in one pass.
 - Do not merge or deploy solely on CI success. CI validates code/build/runtime invariants but does not prove visual correctness or live Google Drive backup connectivity.
+
+
+## Latest interaction and navigation pass
+
+- Restaurant administration primary navigation now exposes a named navigation landmark and marks the selected section with `aria-current="page"`.
+- Secondary patron/card/pricing navigation has a named landmark and uses a single-column touch layout on narrow phones; the primary section navigation uses two columns down to 361px and one column at 360px and below.
+- Scanner token entry now has an explicit accessible name, disables irrelevant browser autocomplete, and exposes a mobile-friendly enter-key hint.
+- On very narrow phones (380px and below), the scan action moves below the input as a full-width button rather than competing with the token text for horizontal space.
+- These changes preserve scan handling and authorization logic; they only adjust input semantics and presentation.
+
+## Updated manual viewport acceptance matrix
+
+Before merge, verify each role and representative workflow at 320px, 360px, 390px, 430px, 768px, 1024px, 1440px, and 1920px:
+- Global header: brand, role actions, facility dropdown, profile dropdown, language control, Escape close.
+- Restaurant admin: all section tabs, sub-navigation, member directory table, registration form, approvals, pricing, reports, billing, appearance and security.
+- Scanner: USB keyboard-wedge scanner, manual token entry, camera permission/preview, success/rejection/photo mismatch, recent servings, PIN desk and registration/top-up dialogs.
+- Super admin: onboarding, plans, licensing, student subscription policy and financial exceptions.
+- Customer: dashboard, card/pass, top-up, history and bottom navigation.
+- Confirm no page-level horizontal scroll; table overflow must be contained in its own region; modal content must remain reachable with the virtual keyboard open; keyboard focus must be visible.
+
+The viewport matrix is a required human/browser acceptance test. Passing CI alone does not satisfy it.
