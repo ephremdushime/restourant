@@ -102,3 +102,12 @@ Before merge, verify each role and representative workflow at 320px, 360px, 390p
 - Confirm no page-level horizontal scroll; table overflow must be contained in its own region; modal content must remain reachable with the virtual keyboard open; keyboard focus must be visible.
 
 The viewport matrix is a required human/browser acceptance test. Passing CI alone does not satisfy it.
+
+## Responsive browser verification and component-boundary progress
+
+- Added a Chromium/Playwright smoke suite to CI. It launches the real development server and signs into each of the four role workspaces using the repository's development-only demo shortcuts.
+- The browser suite checks 320, 360, 390, 430, 768, 1024, 1440, and 1920 CSS-pixel widths for page-level horizontal overflow and uncaught browser errors. It does not use production credentials or alter production authentication.
+- Extracted restaurant administration's primary navigation, patron/card sub-navigation, and pricing/rules sub-navigation into `RestaurantAdminNavigation.tsx`. The parent view supplies counts, active section and callbacks; business state and workflows remain in the parent and are not duplicated.
+- The restaurant administration view is still a large orchestration component. Existing dedicated workflow components (approvals, branches/stations, pricing analytics, security/audit, appearance, billing, financial exceptions and metric cards) remain the preferred boundaries; further extraction should target isolated workflows rather than move stateful business logic wholesale.
+- The CI test for customer navigation was updated to assert the current shared accessible landmark label on both desktop and mobile navigation.
+- The new Playwright suite and latest full CI run must complete successfully before merge. Human acceptance of camera permissions, USB keyboard-wedge hardware, physical scanner behavior and real device rendering remains required before production onboarding.
