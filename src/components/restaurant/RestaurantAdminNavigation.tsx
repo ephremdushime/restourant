@@ -118,6 +118,7 @@ export const RestaurantAdminNavigation: React.FC<RestaurantAdminNavigationProps>
             return (
               <button
                 key={tab.id}
+                type="button"
                 onClick={() => {
                   onSubTabChange(tab.id);
                   if (tab.id === 'customers') onSelectCustomers();
