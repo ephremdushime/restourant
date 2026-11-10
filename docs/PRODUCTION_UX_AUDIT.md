@@ -66,3 +66,18 @@ The changes are presentation-layer adjustments only. They do not intentionally a
 ## Validation status
 
 The initial responsive-foundation commit passed the full repository CI workflow, including typecheck, security/integrity tests, backup/restore checks, Docker runtime tests, and production build. The expanded role-specific changes require their own latest-commit CI result. Browser-based viewport and assistive-technology verification is still outstanding; the source review must not be treated as proof of visual responsiveness.
+
+
+## Follow-on responsive refinements
+
+- Added explicit global-header layout hooks so brand context and action controls wrap predictably on phone widths instead of relying only on generic header descendant selectors.
+- Constrained facility and profile dropdown width and height to the viewport, with independent scrolling for long tenant lists.
+- Increased language-switcher touch target dimensions and added consistent visible keyboard focus styling.
+- Stacked two-column operational grids on narrow phones and bounded role-workspace dialogs to the available viewport height.
+- Latest CI run for commit `9c984b5a99d336866b91d8297cfc00ec7fac12b1` completed successfully. These follow-on commits require a fresh CI run.
+
+## Remaining release gates
+
+- Browser-based visual review is still not available from this repository session. Verify 320/360/390/430/768/1024/1440/1920px viewports, including keyboard navigation, dropdown positioning, scanner result/error states, and table scrolling.
+- Restaurant-admin view decomposition remains outstanding. It must be performed by extracting isolated sections with their existing props/state boundaries and verified after each extraction; do not rewrite the full workflow in one pass.
+- Do not merge or deploy solely on CI success. CI validates code/build/runtime invariants but does not prove visual correctness or live Google Drive backup connectivity.
