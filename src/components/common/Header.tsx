@@ -345,7 +345,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           {/* Language Switcher */}
-          <div className="flex items-center bg-slate-900/90 border border-slate-800 rounded-xl p-0.5 text-xs">
+          <div role="group" aria-label="Language" className="flex items-center bg-slate-900/90 border border-slate-800 rounded-xl p-0.5 text-xs">
             {(['en', 'rw', 'fr'] as Language[]).map((lang) => (
               <button
                 key={lang}
@@ -371,6 +371,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsProfileDropdownOpen((prev) => !prev)}
+                  aria-label={`Account menu for ${resolvedUserLabel}`}
                   aria-expanded={isProfileDropdownOpen}
                   aria-haspopup="true"
                   className="flex items-center gap-2 p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 transition-all cursor-pointer shadow-inner"
