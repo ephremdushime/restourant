@@ -656,3 +656,47 @@ main th {
     padding-inline: 0.5rem;
   }
 }
+
+
+/* Keyboard focus must remain visible on dark and light operational surfaces. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid #34d399;
+  outline-offset: 2px;
+}
+
+@media (max-width: 480px) {
+  .restaurant-admin-workspace .grid.grid-cols-2,
+  .platform-admin-workspace .grid.grid-cols-2,
+  .scanner-workspace .grid.grid-cols-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .restaurant-admin-workspace,
+  .platform-admin-workspace,
+  .scanner-workspace {
+    overflow-wrap: anywhere;
+  }
+
+  .restaurant-admin-workspace table,
+  .platform-admin-workspace table,
+  .scanner-workspace table {
+    font-size: 0.8125rem;
+  }
+}
+
+@media (max-width: 767px) {
+  .restaurant-admin-nav > button,
+  .platform-admin-tabs > button,
+  .scanner-toolbar > button {
+    min-height: 2.75rem;
+  }
+
+  .restaurant-admin-workspace [role="dialog"],
+  .platform-admin-workspace [role="dialog"],
+  .scanner-workspace [role="dialog"] {
+    width: calc(100vw - 1rem);
+    max-width: calc(100vw - 1rem);
+    max-height: calc(100dvh - 1rem);
+    overflow: auto;
+  }
+}
