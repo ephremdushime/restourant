@@ -701,11 +701,14 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           e.preventDefault();
           handleExecuteScan(inputPayload);
         }}
-        className="relative"
+        className="scanner-input-form relative"
       >
-        <div className="relative">
+        <div className="scanner-input-shell relative">
           <input
             ref={keyboardInputRef}
+            aria-label="Scan customer card or QR token"
+            autoComplete="off"
+            enterKeyHint="done"
             type="text"
             value={inputPayload}
             onChange={(e) => handleInputChange(e.target.value)}
@@ -715,7 +718,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           <Barcode className="w-6 h-6 text-emerald-400 absolute left-4 top-4" />
           <button
             type="submit"
-            className="absolute right-2.5 top-2.5 bottom-2.5 px-5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-sm transition-colors cursor-pointer shadow-sm"
+            className="scanner-submit absolute right-2.5 top-2.5 bottom-2.5 px-5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-sm transition-colors cursor-pointer shadow-sm"
           >
             Scan
           </button>
