@@ -765,3 +765,50 @@ main th {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+
+/* Scanner input remains easy to use with both handheld scanners and touch. */
+.scanner-input-form,
+.scanner-input-shell {
+  min-width: 0;
+  width: 100%;
+}
+
+.scanner-input-shell input {
+  min-height: 3.75rem;
+}
+
+.scanner-submit {
+  min-width: 5rem;
+  min-height: 2.75rem;
+}
+
+@media (max-width: 380px) {
+  .scanner-input-shell {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.5rem;
+  }
+
+  .scanner-input-shell input {
+    padding: 0.875rem 0.75rem 0.875rem 2.75rem !important;
+    font-size: 0.9375rem;
+  }
+
+  .scanner-submit {
+    position: static !important;
+    width: 100%;
+    min-height: 2.875rem;
+  }
+
+  .scanner-toolbar {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .scanner-toolbar > button,
+  .scanner-toolbar > div {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+}
