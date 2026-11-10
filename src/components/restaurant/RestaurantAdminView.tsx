@@ -1007,7 +1007,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
 
       {/* Unified Boss Navigation Bar (Wraps cleanly without horizontal scrollbar) */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-        <div className="restaurant-admin-nav flex items-center flex-wrap gap-1.5 text-xs font-medium">
+        <div role="navigation" aria-label="Restaurant administration sections" className="restaurant-admin-nav flex items-center flex-wrap gap-1.5 text-xs font-medium">
           {[
             {
               id: 'dashboard',
@@ -1098,7 +1098,8 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                   onSubTabChange(tab.id);
                   if (tab.id === 'customers') setUserSection('members');
                 }}
-                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl whitespace-nowrap transition-all font-bold text-xs cursor-pointer ${
+                aria-current={isSelected ? "page" : undefined}
+                className={`restaurant-admin-tab flex items-center gap-1.5 px-3.5 py-2 rounded-xl whitespace-nowrap transition-all font-bold text-xs cursor-pointer ${
                   isSelected
                     ? tab.isBossRoom
                       ? 'bg-amber-500 text-slate-950 shadow-md font-black'
@@ -1133,7 +1134,7 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
 
       {/* Sub-Navigation Bar for Patrons & Cards Group */}
       {(activeSubTab === 'customers' || activeSubTab === 'registration' || activeSubTab === 'cards') && (
-        <div className="flex items-center justify-between gap-2 p-2 rounded-2xl bg-slate-900/90 border border-slate-800 text-xs">
+        <div role="navigation" aria-label="Patron, card, pricing and policy sections" className="restaurant-admin-subnav flex items-center justify-between gap-2 p-2 rounded-2xl bg-slate-900/90 border border-slate-800 text-xs">
           <div className="flex items-center gap-1.5 flex-wrap">
             <button
               type="button"
