@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Restaurant, Plan, License, SubscriptionPayment, Language } from '../../types';
 import { restoStore } from '../../store/restoStore';
 import { translations } from '../../services/i18n';
@@ -31,6 +31,7 @@ import {
   Sliders,
   Settings,
   Edit,
+  X,
 } from 'lucide-react';
 
 interface SuperAdminViewProps {
@@ -107,6 +108,22 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
   // Create Restaurant State (With Custom Stations & Pricing Overrides)
   const [createModalOpen, setCreateModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (!createModalOpen) return;
+
+    const previousBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setCreateModalOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [createModalOpen]);
   const [newCode, setNewCode] = useState('RW03');
   const [newName, setNewName] = useState('Butare University Cafeteria');
   const [newLegal, setNewLegal] = useState('Southern Province Food Ltd');
@@ -1429,16 +1446,33 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
       {/* ONBOARD RESTAURANT MODAL */}
       {createModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-base font-bold text-white">Onboard New Restaurant</h3>
-              <button onClick={() => setCreateModalOpen(false)} className="text-slate-400 hover:text-white text-xs">
-                Close
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/80 p-3 backdrop-blur-xs sm:p-6"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setCreateModalOpen(false);
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="onboard-restaurant-title"
+            className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl sm:max-h-[calc(100dvh-3rem)]"
+          >
+            <div className="flex shrink-0 items-center justify-between gap-4 border-b border-slate-800 bg-slate-900 px-5 py-4">
+              <h3 id="onboard-restaurant-title" className="text-base font-bold text-white">Onboard New Restaurant</h3>
+              <button
+                type="button"
+                onClick={() => setCreateModalOpen(false)}
+                aria-label="Close restaurant onboarding dialog"
+                title="Close"
+                className="inline-flex min-h-10 min-w-10 shrink-0 items-center justify-center rounded-lg border border-slate-700 text-slate-300 transition-colors hover:border-slate-500 hover:bg-slate-800 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400"
+              >
+                <X className="h-5 w-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateRestaurant} className="space-y-3 text-xs">
+            <form onSubmit={handleCreateRestaurant} className="flex min-h-0 flex-1 flex-col text-xs">
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-5 py-4">
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-slate-300 block mb-1 font-semibold">Restaurant Code</label>
@@ -1625,14 +1659,17 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 </div>
               </div>
 
-              <button
-                type="submit"
-                className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs transition-colors shadow-sm mt-2 cursor-pointer"
-              >
-                Create Restaurant &amp; Administrator
-              </button>
+              </div>
+              <div className="shrink-0 border-t border-slate-800 bg-slate-900 px-5 py-3">
+                <button
+                  type="submit"
+                  className="w-full min-h-11 rounded-xl bg-amber-600 py-2.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-amber-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400 cursor-pointer"
+                >
+                  Create Restaurant &amp; Administrator
+                </button>
+              </div>
             </form>
-          </div>
+          </section>
         </div>
       )}
 
