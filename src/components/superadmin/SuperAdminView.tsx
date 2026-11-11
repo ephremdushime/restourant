@@ -1473,7 +1473,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
             <form onSubmit={handleCreateRestaurant} className="flex min-h-0 flex-1 flex-col text-xs">
               <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-5 py-4">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                   <label className="text-slate-300 block mb-1 font-semibold">Restaurant Code</label>
                   <input
@@ -1500,7 +1500,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
               <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
                 <div className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">Initial Restaurant Administrator</div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
                     <label className="text-slate-300 block mb-1 font-semibold">Administrator username</label>
                     <input required minLength={3} maxLength={64} value={newAdminUsername} onChange={(e) => setNewAdminUsername(e.target.value)}
@@ -1542,7 +1542,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                   <label className="text-slate-300 block mb-1 font-semibold">Phone</label>
                   <input
@@ -1572,7 +1572,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   <span>Licensed Stations &amp; Pricing Customization</span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
                     <label className="text-slate-300 block mb-1 font-semibold">
                       Licensed Stations *
@@ -1606,7 +1606,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <div>
                     <label className="text-slate-300 block mb-1 font-semibold">Complimentary Access</label>
                     <input type="number" min={0} max={120} value={newComplimentaryDuration}
@@ -1628,7 +1628,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <div>
                     <label className="text-slate-300 block mb-1 font-semibold">
                       Extra Station
