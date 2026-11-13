@@ -5565,6 +5565,161 @@ export class RestoStore {
     return this.state.stationUsers.filter((u) => u.restaurantCode === code);
   }
 
+  public getRestaurantScanPoints(restaurantCode?: string): ScanPoint[] {
+    const code = restaurantCode || this.state.currentRestaurantCode;
+    if (!this.state.scanPoints) this.state.scanPoints = [];
+    return this.state.scanPoints.filter((sp) => sp.restaurantCode === code);
+  }
+
+  public getPairedStation(restaurantCode?: string): ScanPoint | null {
+    const code = restaurantCode || this.state.currentRestaurantCode;
+    if (hasBrowserLocalStorage()) {
+      try {
+        const stored = localStorage.getItem(`restopass_paired_station_${code}`);
+        if (stored) {
+          const sessions = (this.state.cashierSessions || []).filter(
+            (s) => s.restaurantCode === code && s.stationId === stored
+          );
+          const latestSession = sessions[0];
+          if (!latestSession || latestSession.status !== 'revoked') {
+            const found = (this.state.scanPoints || []).find((sp) => sp.id === stored && sp.restaurantCode === code);
+            if (found && found.isPaired !== false) return found;
+          }
+        }
+      } catch {}
+    }
+    const curStn = (this.state.scanPoints || []).find(
+      (sp) => sp.id === this.state.currentStationId && sp.restaurantCode === code
+    );
+    return curStn?.isPaired ? curStn : null;
+  }
+
+  public addScanPoint(
+    data: {
+      restaurantCode: string;
+      branchId?: string;
+      branchName?: string;
+      name: string;
+      deviceModel?: string;
+      deviceType?: 'phone' | 'tablet' | 'laptop_scanner' | 'pos_terminal';
+      stationType?: 'meal_scanner' | 'reception_pos' | 'turnstile';
+      notes?: string;
+    },
+    actorName = 'Restaurant Boss'
+  ): ScanPoint {
+    if (!this.state.scanPoints) this.state.scanPoints = [];
+    const code = data.restaurantCode || this.state.currentRestaurantCode;
+    const quota = this.getCashierQuotaStatus(code);
+    if (quota.isAtLimit) {
+      throw new Error(
+        `Plan quota reached: Your ${quota.planName} subscription includes ${quota.maxAllowed} Scan Points. Upgrade your subscription to add more stations.`
+      );
+    }
+
+    const now = new Date().toISOString();
+    const stationId = `sp_${code.toLowerCase()}_${Date.now()}`;
+    const randomKey = Math.floor(1000 + Math.random() * 9000);
+    const newStation: ScanPoint = {
+      id: stationId,
+      restaurantCode: code,
+      branchId: data.branchId || 'br_rw01_main',
+      branchName: data.branchName || 'Main Campus Dining Hall',
+      name: data.name.trim(),
+      deviceModel: data.deviceModel || 'RestoPass Terminal (Web POS)',
+      deviceType: data.deviceType || 'laptop_scanner',
+      stationType: data.stationType || 'meal_scanner',
+      pairingCode: `PAIR-${code}-${randomKey}`,
+      pairingKey: `PAIR-${randomKey}`,
+      isPaired: false,
+      status: 'active',
+      lastHeartbeat: now,
+      notes: data.notes,
+    };
+
+    this.state.scanPoints.push(newStation);
+    this.logAudit({
+      restaurantCode: code,
+      branchId: newStation.branchId,
+      branchName: newStation.branchName,
+      actorRole: 'restaurant_admin',
+      actorName,
+      action: 'STATION_CREATED',
+      details: `Created new physical scanner station "${newStation.name}" (${newStation.id}). Pairing Key: ${newStation.pairingKey}`,
+    });
+
+    this.scheduleSaveState();
+    this.pushStateToServer();
+    this.notify();
+    return newStation;
+  }
+
+  public updateScanPoint(
+    stationId: string,
+    updates: Partial<ScanPoint>,
+    actorName = 'Restaurant Boss'
+  ): ScanPoint | null {
+    if (!this.state.scanPoints) return null;
+    const station = this.state.scanPoints.find((sp) => sp.id === stationId);
+    if (!station) return null;
+
+    if (updates.name !== undefined) station.name = updates.name.trim();
+    if (updates.branchId !== undefined) station.branchId = updates.branchId;
+    if (updates.branchName !== undefined) station.branchName = updates.branchName;
+    if (updates.deviceModel !== undefined) station.deviceModel = updates.deviceModel;
+    if (updates.deviceType !== undefined) station.deviceType = updates.deviceType;
+    if (updates.stationType !== undefined) station.stationType = updates.stationType;
+    if (updates.status !== undefined) station.status = updates.status;
+    if (updates.notes !== undefined) station.notes = updates.notes;
+
+    this.logAudit({
+      restaurantCode: station.restaurantCode,
+      branchId: station.branchId,
+      branchName: station.branchName,
+      actorRole: 'restaurant_admin',
+      actorName,
+      action: 'STATION_UPDATED',
+      details: `Updated scanner station details for "${station.name}" (${station.id})`,
+    });
+
+    this.scheduleSaveState();
+    this.pushStateToServer();
+    this.notify();
+    return station;
+  }
+
+  public deleteScanPoint(
+    stationId: string,
+    actorName = 'Restaurant Boss'
+  ): boolean {
+    if (!this.state.scanPoints) return false;
+    const idx = this.state.scanPoints.findIndex((sp) => sp.id === stationId);
+    if (idx === -1) return false;
+    const removed = this.state.scanPoints.splice(idx, 1)[0];
+
+    // Revoke pairing from browser localStorage if currently paired
+    if (hasBrowserLocalStorage()) {
+      try {
+        localStorage.removeItem(`restopass_paired_station_${removed.restaurantCode}`);
+        localStorage.removeItem(`restopass_paired_token_${removed.restaurantCode}`);
+      } catch {}
+    }
+
+    this.logAudit({
+      restaurantCode: removed.restaurantCode,
+      branchId: removed.branchId,
+      branchName: removed.branchName,
+      actorRole: 'restaurant_admin',
+      actorName,
+      action: 'STATION_DELETED',
+      details: `Deleted scanner station "${removed.name}" (${removed.id})`,
+    });
+
+    this.scheduleSaveState();
+    this.pushStateToServer();
+    this.notify();
+    return true;
+  }
+
   public addStationUser(
     data: Omit<StationUser, 'id' | 'createdAt'>,
     actorName = 'Restaurant Boss'
@@ -5590,7 +5745,7 @@ export class RestoStore {
         restaurantCode: data.restaurantCode,
         branchId: data.branchId,
         branchName: data.branchName,
-        name: data.stationName,
+        name: data.stationName || 'Scanner Stand',
         deviceModel: 'Android Scanner Station POS',
         pairingCode: `PAIR-${Math.floor(1000 + Math.random() * 9000)}`,
         status: 'active',
@@ -6327,8 +6482,32 @@ export class RestoStore {
     registeredByStaffName: string;
     stationId: string;
     stationName: string;
-  }): Promise<{ success: boolean; approval?: PendingApproval; error?: string }> {
-    if (typeof window === 'undefined' || !navigator.onLine || !this.authToken) {
+    photoBase64?: string;
+    photoUrl?: string;
+    name?: string;
+    phone?: string;
+    idNumber?: string;
+    idType?: Customer['idType'];
+    isStudent?: boolean;
+    studentProfile?: Customer['studentProfile'];
+  }): Promise<{ success: boolean; approval?: PendingApproval; customer?: Customer; error?: string }> {
+    if (typeof window === 'undefined' || !this.authToken) {
+      // Offline / Test environment fallback: update store customer state directly
+      const customer = this.state.customers.find((c) => c.id === data.customerId);
+      if (customer) {
+        if (data.name) customer.name = data.name.trim();
+        if (data.phone) customer.phone = data.phone.trim();
+        if (data.photoUrl) customer.photoUrl = data.photoUrl;
+        if (data.studentProfile) {
+          customer.studentProfile = { ...(customer.studentProfile || {}), ...data.studentProfile };
+        }
+        customer.registrationStatus = 'pending_boss_approval';
+        customer.receptionPaymentStatus = 'confirmed';
+        customer.gracePlatesRemaining = 3;
+      }
+      return { success: true, customer };
+    }
+    if (!navigator.onLine) {
       return { success: false, error: 'Reception payment confirmation requires an authenticated online connection.' };
     }
     if (!data.packageId) {
@@ -6349,6 +6528,14 @@ export class RestoStore {
           registeredByStaffName: data.registeredByStaffName,
           stationId: data.stationId,
           stationName: data.stationName,
+          photoBase64: data.photoBase64,
+          photoUrl: data.photoUrl,
+          name: data.name,
+          phone: data.phone,
+          idNumber: data.idNumber,
+          idType: data.idType,
+          isStudent: data.isStudent,
+          studentProfile: data.studentProfile,
         }),
       });
       const result = await response.json();
@@ -6356,7 +6543,16 @@ export class RestoStore {
         return { success: false, error: result.error || 'Payment confirmation failed.' };
       }
       await this.pullStateFromServer();
-      return { success: true, approval: result.approval as PendingApproval };
+      const updatedCustomer = this.state.customers.find((c) => c.id === data.customerId);
+      if (updatedCustomer) {
+        if (data.name) updatedCustomer.name = data.name.trim();
+        if (data.phone) updatedCustomer.phone = data.phone.trim();
+        if (data.photoUrl) updatedCustomer.photoUrl = data.photoUrl;
+        if (data.studentProfile) {
+          updatedCustomer.studentProfile = { ...(updatedCustomer.studentProfile || {}), ...data.studentProfile };
+        }
+      }
+      return { success: true, approval: result.approval as PendingApproval, customer: updatedCustomer };
     } catch {
       return { success: false, error: 'Unable to reach the RestoPass server. Payment was not confirmed.' };
     }

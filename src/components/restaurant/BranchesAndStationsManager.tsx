@@ -52,8 +52,8 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
   const scanPoints = state.scanPoints.filter((sp) => sp.restaurantCode === restaurantCode);
   const quota = restoStore.getCashierQuotaStatus(restaurantCode);
 
-  // Tab: 'branches' | 'station_users' | 'activity'
-  const [activeTab, setActiveTab] = useState<'station_users' | 'branches' | 'activity'>('station_users');
+  // Tab: 'stations' | 'station_users' | 'branches' | 'activity'
+  const [activeTab, setActiveTab] = useState<'stations' | 'station_users' | 'branches' | 'activity'>('stations');
 
   // Search & Filter
   const [searchQuery, setSearchQuery] = useState('');
@@ -67,6 +67,13 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
   const [branchPhone, setBranchPhone] = useState('+250 78');
   const [branchManager, setBranchManager] = useState('');
 
+  // Add Physical Station Modal
+  const [isAddStationModalOpen, setIsAddStationModalOpen] = useState(false);
+  const [newStationName, setNewStationName] = useState('');
+  const [newStationBranchId, setNewStationBranchId] = useState(branches[0]?.id || '');
+  const [newStationType, setNewStationType] = useState<'meal_scanner' | 'reception_pos' | 'turnstile'>('meal_scanner');
+  const [newStationDeviceType, setNewStationDeviceType] = useState<'tablet' | 'laptop_scanner' | 'phone' | 'pos_terminal'>('tablet');
+
   // Add Station User Modal
   const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
   const [userFullName, setUserFullName] = useState('');
@@ -74,7 +81,8 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
   const [userPhone, setUserPhone] = useState('+250 78');
   const [userRole, setUserRole] = useState<'scanner' | 'reception' | 'cashier' | 'stand_staff'>('stand_staff');
   const [userBranchId, setUserBranchId] = useState<string>(branches[0]?.id || '');
-  const [userStationName, setUserStationName] = useState('Stand 1 - Main Buffet');
+  const [userStationId, setUserStationId] = useState<string>(scanPoints[0]?.id || '');
+  const [userStationName, setUserStationName] = useState(scanPoints[0]?.name || 'Stand 1 - Main Buffet');
   const [userPassword, setUserPassword] = useState('');
   const [userPin, setUserPin] = useState('');
   const [showUserPassword, setShowUserPassword] = useState(false);
@@ -109,7 +117,7 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
       u.name.toLowerCase().includes(q) ||
       u.username.toLowerCase().includes(q) ||
       u.phone.includes(q) ||
-      u.stationName.toLowerCase().includes(q) ||
+      (u.stationName || '').toLowerCase().includes(q) ||
       u.branchName.toLowerCase().includes(q) ||
       u.role.toLowerCase().includes(q)
     );
@@ -144,38 +152,60 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
     showToast(`Branch "${branchName}" created successfully!`);
   };
 
-  // Handle Add Station User
-  const handleCreateStationUser = (e: React.FormEvent) => {
+  // Handle Add Scanner Station (Physical Workstation)
+  const handleCreateStation = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userFullName.trim() || !userUsername.trim() || userPassword.trim().length < 12 || !/^\d{8,12}$/.test(userPin.trim())) {
-      showToast('Enter a username, a password of at least 12 characters, and an 8–12 digit POS PIN.', 'error');
+    if (!newStationName.trim()) {
+      showToast('Please provide a Station Name', 'error');
       return;
     }
 
-    const quota = restoStore.getCashierQuotaStatus(restaurantCode);
-    if (quota.isAtLimit) {
-      showToast(
-        `Plan Quota Limit: Your ${quota.planName} subscription includes max ${quota.maxAllowed} cashiers (1 cashier = 1 scan point). Contact Super Admin to add extra scan points.`,
-        'error'
+    try {
+      const branch = branches.find((b) => b.id === newStationBranchId) || branches[0];
+      const created = restoStore.addScanPoint(
+        {
+          restaurantCode,
+          branchId: branch?.id || 'br_main',
+          branchName: branch?.name || 'Main Dining Hall',
+          name: newStationName.trim(),
+          stationType: newStationType,
+          deviceType: newStationDeviceType,
+        },
+        'Restaurant Boss (Executive)'
       );
+
+      setIsAddStationModalOpen(false);
+      setNewStationName('');
+      setSelectedStationForPairing(created);
+      showToast(`Scanner Station "${created.name}" created! Pairing key generated.`);
+    } catch (err: any) {
+      showToast(err.message || 'Failed to create scanner station', 'error');
+    }
+  };
+
+  // Handle Add Station User (Staff Operator)
+  const handleCreateStationUser = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userFullName.trim() || !userUsername.trim() || userPassword.trim().length < 12 || !/^\d{6,12}$/.test(userPin.trim())) {
+      showToast('Enter a username, a password of at least 12 characters, and a 6–12 digit POS PIN.', 'error');
       return;
     }
 
     try {
       const branch = branches.find((b) => b.id === userBranchId) || branches[0];
-      const stationId = `sp_${restaurantCode.toLowerCase()}_${Date.now()}`;
+      const chosenStation = scanPoints.find((sp) => sp.id === userStationId) || scanPoints[0];
 
       restoStore.addStationUser(
         {
           restaurantCode,
           branchId: branch ? branch.id : 'br_main',
           branchName: branch ? branch.name : 'Main Campus Dining Hall',
-          stationId,
-          stationName: userStationName.trim(),
+          stationId: chosenStation ? chosenStation.id : undefined,
+          stationName: chosenStation ? chosenStation.name : userStationName.trim(),
           name: userFullName.trim(),
           username: userUsername.trim().toLowerCase(),
           phone: userPhone.trim(),
-          role: 'scanner',
+          role: userRole,
           status: 'active',
           passwordHash: userPassword,
           pin: userPin.trim(),
@@ -192,7 +222,7 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
       setUserPin('');
       showToast(`Station operator account "@${userUsername}" created with active credentials!`);
     } catch (err: any) {
-      showToast(err.message || 'Failed to create cashier account', 'error');
+      showToast(err.message || 'Failed to create operator account', 'error');
     }
   };
 
@@ -200,8 +230,8 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
   const handleExecutePasswordReset = (e: React.FormEvent) => {
     e.preventDefault();
     if (!userToReset) return;
-    if (resetPasswordInput.trim().length < 12 || (resetPinInput.trim() && !/^\d{8,12}$/.test(resetPinInput.trim()))) {
-      showToast('New password must be at least 12 characters; optional POS PIN must contain 8–12 digits.', 'error');
+    if (resetPasswordInput.trim().length < 12 || (resetPinInput.trim() && !/^\d{6,12}$/.test(resetPinInput.trim()))) {
+      showToast('New password must be at least 12 characters; optional POS PIN must contain 6–12 digits.', 'error');
       return;
     }
 
@@ -285,6 +315,22 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
         <div className="flex items-center gap-1.5 p-1 bg-slate-950 rounded-xl border border-slate-800 text-xs">
           <button
             type="button"
+            onClick={() => setActiveTab('stations')}
+            className={`px-3.5 py-1.5 rounded-lg font-bold transition-colors cursor-pointer flex items-center gap-1.5 ${
+              activeTab === 'stations'
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Radio className="w-3.5 h-3.5" />
+            <span>Scanner Stations</span>
+            <span className="px-1.5 py-0.2 rounded-full font-mono text-[10px] bg-black/40 text-emerald-200">
+              {scanPoints.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab('station_users')}
             className={`px-3.5 py-1.5 rounded-lg font-bold transition-colors cursor-pointer flex items-center gap-1.5 ${
               activeTab === 'station_users'
@@ -329,6 +375,191 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
           </button>
         </div>
       </div>
+
+      {/* TAB 1: PHYSICAL SCANNER STATIONS & PAIRING CODES */}
+      {activeTab === 'stations' && (() => {
+        const quota = restoStore.getCashierQuotaStatus(restaurantCode);
+        return (
+          <div className="space-y-4">
+            {/* Quota Banner */}
+            <div className={`p-4 rounded-xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+              quota.isAtLimit ? 'bg-amber-950/30 border-amber-800/60' : 'bg-slate-900 border-slate-800'
+            }`}>
+              <div className="flex items-center gap-3">
+                <div className={`p-2.5 rounded-xl border ${
+                  quota.isAtLimit
+                    ? 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                    : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                }`}>
+                  <Radio className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold text-white">Physical Stations &amp; Device Pairing</span>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+                      Hardware Workstations
+                    </span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800">
+                      {quota.planName}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Physical Stations: <strong className="text-white">{scanPoints.length}</strong> / {quota.maxAllowed} Licensed
+                    · Devices are paired once via pairing code or QR. Operators sign in individually on paired devices.
+                  </p>
+                </div>
+              </div>
+
+              {quota.isAtLimit && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono text-amber-300 bg-amber-900/40 px-2.5 py-1 rounded-lg border border-amber-700/60 font-bold">
+                    Station Quota Full ({scanPoints.length}/{quota.maxAllowed})
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Action Toolbar */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-slate-900 border border-slate-800">
+              <div className="flex items-center gap-3 flex-1 max-w-md">
+                <div className="relative w-full">
+                  <input
+                    type="text"
+                    placeholder="Search stations, branches, device models..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pl-8 pr-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white placeholder-slate-500 focus:border-emerald-500 outline-hidden"
+                  />
+                  <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5" />
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsAddStationModalOpen(true)}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 transition-colors cursor-pointer shadow-md shrink-0"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add Scanner Station</span>
+              </button>
+            </div>
+
+            {/* Stations Table */}
+            <div className="rounded-xl bg-slate-900 border border-slate-800 overflow-hidden shadow-lg">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-950 text-slate-400 font-semibold border-b border-slate-800">
+                  <tr>
+                    <th className="py-3 px-4">Station / Location</th>
+                    <th className="py-3 px-4">Station Type</th>
+                    <th className="py-3 px-4">Hardware Device</th>
+                    <th className="py-3 px-4">Pairing Key</th>
+                    <th className="py-3 px-4">Device Status</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {scanPoints.map((station) => (
+                    <tr key={station.id} className="hover:bg-slate-800/30 transition-colors">
+                      <td className="py-3 px-4">
+                        <div className="font-bold text-white flex items-center gap-2">
+                          <Radio className="w-4 h-4 text-emerald-400" />
+                          <span>{station.name}</span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">
+                          {station.branchName || 'Main Campus'} · ID: <code className="font-mono text-[10px] text-slate-500">{station.id}</code>
+                        </div>
+                      </td>
+
+                      <td className="py-3 px-4">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase bg-slate-800 text-slate-300 border border-slate-700">
+                          {station.stationType === 'reception_pos' ? 'Reception / POS' : station.stationType === 'turnstile' ? 'Turnstile Scanner' : 'Meal Scanner'}
+                        </span>
+                      </td>
+
+                      <td className="py-3 px-4">
+                        <div className="text-white font-medium flex items-center gap-1.5">
+                          {station.deviceType === 'laptop_scanner' ? <Laptop className="w-3.5 h-3.5 text-blue-400" /> : <Smartphone className="w-3.5 h-3.5 text-emerald-400" />}
+                          <span>{station.deviceModel || 'Web Scanner Terminal'}</span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 font-mono">
+                          {station.pairedDeviceFingerprint || 'No device paired yet'}
+                        </div>
+                      </td>
+
+                      <td className="py-3 px-4 font-mono">
+                        <span className="px-2 py-0.5 rounded bg-slate-950 text-amber-300 border border-slate-800 font-bold text-[11px]">
+                          {station.pairingKey || station.pairingCode || 'PAIR-0001'}
+                        </span>
+                      </td>
+
+                      <td className="py-3 px-4">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                            station.isPaired !== false
+                              ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                              : 'bg-amber-950 text-amber-400 border border-amber-800'
+                          }`}
+                        >
+                          {station.isPaired !== false ? 'Paired & Active' : 'Unpaired'}
+                        </span>
+                      </td>
+
+                      <td className="py-3 px-4 text-right space-x-1.5 whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedStationForPairing(station);
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900 border border-emerald-700/60 text-emerald-300 hover:text-white font-semibold text-xs transition-colors cursor-pointer inline-flex items-center gap-1"
+                          title="Show Station Pairing QR code & key"
+                        >
+                          <QrCode className="w-3.5 h-3.5" />
+                          <span>Pair Device</span>
+                        </button>
+
+                        {station.isPaired !== false && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              restoStore.revokeTerminalPairing(station.id, 'Restaurant Boss');
+                              showToast(`Revoked pairing for "${station.name}". Device locked.`);
+                            }}
+                            className="px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-rose-950 border border-slate-700 hover:border-rose-800 text-slate-300 hover:text-rose-300 font-semibold text-xs transition-colors cursor-pointer"
+                            title="Revoke device pairing"
+                          >
+                            Revoke
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm(`Delete scanner station "${station.name}"?`)) {
+                              restoStore.deleteScanPoint(station.id);
+                              showToast(`Deleted scanner station "${station.name}".`);
+                            }
+                          }}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-950 border border-slate-700 hover:border-rose-800 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
+                          title="Delete station"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {scanPoints.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="text-center py-8 text-slate-500">
+                        No physical scanner stations registered yet. Click "Add Scanner Station" to provision one.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* TAB 1: STATION USERS & SECURITY CONTROLS */}
       {activeTab === 'station_users' && (() => {
@@ -854,6 +1085,117 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
         </div>
       )}
 
+      {/* MODAL: ADD PHYSICAL SCANNER STATION */}
+      {isAddStationModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <form
+            onSubmit={handleCreateStation}
+            className="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl"
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <Radio className="w-5 h-5 text-emerald-400" />
+                <span>Register Physical Scanner Station</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsAddStationModalOpen(false)}
+                className="text-slate-400 hover:text-white text-xs font-semibold"
+              >
+                Cancel
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="text-slate-300 font-semibold block mb-1">Station Name / Location *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Dining Hall Stand 2, Main Buffet Line, Gate 1"
+                  value={newStationName}
+                  onChange={(e) => setNewStationName(e.target.value)}
+                  className="w-full p-2.5 rounded-lg bg-slate-950 border border-slate-700 text-white focus:border-emerald-500 outline-hidden"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-slate-300 font-semibold block mb-1">Assigned Branch *</label>
+                  <select
+                    value={newStationBranchId}
+                    onChange={(e) => setNewStationBranchId(e.target.value)}
+                    className="w-full p-2.5 rounded-lg bg-slate-950 border border-slate-700 text-white focus:border-emerald-500 outline-hidden"
+                  >
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-slate-300 font-semibold block mb-1">Station Capability / Type</label>
+                  <select
+                    value={newStationType}
+                    onChange={(e: any) => setNewStationType(e.target.value)}
+                    className="w-full p-2.5 rounded-lg bg-slate-950 border border-slate-700 text-white focus:border-emerald-500 outline-hidden"
+                  >
+                    <option value="meal_scanner">Meal Scanner (Buffet / Counter)</option>
+                    <option value="reception_pos">Reception &amp; POS (Cashier / Reg)</option>
+                    <option value="turnstile">Turnstile / Gate Scanner</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-slate-300 font-semibold block mb-1">Device Hardware Profile</label>
+                <select
+                  value={newStationDeviceType}
+                  onChange={(e: any) => setNewStationDeviceType(e.target.value)}
+                  className="w-full p-2.5 rounded-lg bg-slate-950 border border-slate-700 text-white focus:border-emerald-500 outline-hidden"
+                >
+                  <option value="tablet">Android / iPad Tablet (Kiosk)</option>
+                  <option value="laptop_scanner">Laptop / Desktop PC + USB Scanner</option>
+                  <option value="phone">Staff Mobile Phone</option>
+                  <option value="pos_terminal">Dedicated POS Smart Terminal</option>
+                </select>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1 text-slate-400 text-[11px] leading-relaxed">
+                <p className="font-semibold text-slate-300">How 2-Stage Station Pairing works:</p>
+                <p>
+                  1. Creating this station registers a physical point and generates a secure <strong>Pairing Key</strong> and <strong>Pairing QR Code</strong>.
+                </p>
+                <p>
+                  2. Open the scanner station portal on the physical tablet or laptop once to pair it.
+                </p>
+                <p>
+                  3. Multiple authorized operators (e.g. Jean, Bosco) can sign in on the paired station with their personal credentials.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setIsAddStationModalOpen(false)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md cursor-pointer"
+              >
+                Register Station &amp; Get Pairing Key
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* MODAL: ADD STATION OPERATOR */}
       {isAddUserModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
@@ -917,62 +1259,42 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
                   </select>
                 </div>
                 <div>
-                  <label className="text-slate-300 font-semibold block mb-1">Station Account Role</label>
-                  <div className="p-2.5 rounded-lg bg-emerald-950/40 border border-emerald-800 text-emerald-300 font-semibold flex items-center justify-between">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span className="truncate text-xs">Scanner Station Operator</span>
-                    </div>
-                    <span className="text-[9px] font-mono bg-emerald-900/80 px-1.5 py-0.5 rounded text-emerald-200 uppercase tracking-wider font-bold shrink-0">
-                      Unified
-                    </span>
-                  </div>
+                  <label className="text-slate-300 font-semibold block mb-1">Primary Physical Station</label>
+                  <select
+                    value={userStationId}
+                    onChange={(e) => {
+                      setUserStationId(e.target.value);
+                      const stn = scanPoints.find((sp) => sp.id === e.target.value);
+                      if (stn) setUserStationName(stn.name);
+                    }}
+                    className="w-full p-2.5 rounded-lg bg-slate-950 border border-slate-700 text-white focus:border-emerald-500 outline-hidden"
+                  >
+                    {scanPoints.map((sp) => (
+                      <option key={sp.id} value={sp.id}>
+                        {sp.name} ({sp.branchName})
+                      </option>
+                    ))}
+                    {scanPoints.length === 0 && (
+                      <option value="">Main Campus Station</option>
+                    )}
+                  </select>
                 </div>
               </div>
 
-              {/* Station Capability & License Quota Banner */}
-              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+              {/* Station Operator Security Model Banner */}
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-white flex items-center gap-1.5">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>1 Physical Station = 1 Operator Account</span>
+                    <span>Personal Operator Credentials</span>
                   </span>
                   <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
-                    License Quota: {quota.activeCashiers} / {quota.maxAllowed} Used
+                    Named Human Operator
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-400 leading-relaxed">
-                  Every physical scanner station requires exactly one operator account. Under <span className="text-emerald-400 font-mono font-bold">/#scanner</span>, this operator has full counter authority: <strong>Meal Plate Deductions</strong>, <strong>Customer Registration</strong>, <strong>Cash Top-Ups</strong>, and <strong>Card Issuance</strong>.
+                  Operators log in to paired workstations using their username and personal 6–12 digit PIN. Every meal deduction, cash top-up, or registration is attributed to this operator for precise auditing.
                 </p>
-
-                {quota.isAtLimit ? (
-                  <div className="p-2.5 rounded-lg bg-rose-950/70 border border-rose-800 text-rose-200 text-[11px] flex items-start gap-2">
-                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                    <div>
-                      <strong className="text-rose-300 block">Station Quota Reached ({quota.activeCashiers}/{quota.maxAllowed} Licensed)</strong>
-                      <span>Your restaurant has provisioned all licensed stations. Contact Super Admin to expand your license scan points.</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-2 rounded-lg bg-emerald-950/30 border border-emerald-900/50 text-emerald-300 text-[11px] flex items-center justify-between">
-                    <span>License Capacity Available</span>
-                    <span className="font-mono text-emerald-400 font-bold">
-                      {quota.maxAllowed - quota.activeCashiers} Station Slots Remaining
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <label className="text-slate-300 font-semibold block mb-1">Station / Stand Name *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Stand 1 - Main Buffet Line"
-                  value={userStationName}
-                  onChange={(e) => setUserStationName(e.target.value)}
-                  className="w-full p-2.5 rounded-lg bg-slate-950 border border-slate-700 text-white focus:border-emerald-500 outline-hidden"
-                />
               </div>
 
               <div className="grid grid-cols-2 gap-3 p-3 rounded-xl bg-slate-950 border border-slate-800">
@@ -999,15 +1321,15 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
                 </div>
                 <div>
                   <label className="text-slate-300 font-semibold block mb-1">
-                    8–12 Digit POS PIN *
+                    6–12 Digit POS PIN *
                   </label>
                   <input
                     type="password"
                     maxLength={12}
-                    minLength={8}
-                    pattern="[0-9]{8,12}"
+                    minLength={6}
+                    pattern="[0-9]{6,12}"
                     required
-                    placeholder="8–12 digits"
+                    placeholder="6–12 digits (e.g. 123456)"
                     value={userPin}
                     onChange={(e) => setUserPin(e.target.value)}
                     className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-white font-mono font-bold tracking-widest text-center focus:border-emerald-500 outline-hidden"
@@ -1026,14 +1348,9 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
               </button>
               <button
                 type="submit"
-                disabled={quota.isAtLimit}
-                className={`px-5 py-2 rounded-xl font-bold text-xs shadow-md transition-all ${
-                  quota.isAtLimit
-                    ? 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
-                    : 'bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer'
-                }`}
+                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md cursor-pointer"
               >
-                {quota.isAtLimit ? 'Station Quota Full (Upgrade License)' : 'Create Account & Provision Station'}
+                Create Operator Account
               </button>
             </div>
           </form>
@@ -1092,14 +1409,14 @@ export const BranchesAndStationsManager: React.FC<BranchesAndStationsManagerProp
 
               <div>
                 <label className="text-slate-300 font-semibold block mb-1">
-                  New 8–12 Digit POS PIN (Optional)
+                  New 6–12 Digit POS PIN (Optional)
                 </label>
                 <input
                   type="password"
                   maxLength={12}
-                  minLength={8}
-                  pattern="[0-9]{8,12}"
-                  placeholder="Optional 8–12 digits"
+                  minLength={6}
+                  pattern="[0-9]{6,12}"
+                  placeholder="Optional 6–12 digits"
                   value={resetPinInput}
                   onChange={(e) => setResetPinInput(e.target.value)}
                   className="w-full p-2.5 rounded-lg bg-slate-950 border border-slate-700 text-white font-mono font-bold tracking-widest text-center focus:border-amber-500 outline-hidden"

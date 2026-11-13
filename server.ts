@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -1156,6 +1157,41 @@ app.post('/api/reception/customer/payment-confirm', apiRateLimiter, requireAuth(
   );
   if (duplicateRef) return res.status(409).json({ success: false, error: 'This payment reference has already been recorded.' });
 
+  // Update customer portrait photo and profile details if provided at reception
+  if (typeof body.photoBase64 === 'string' && body.photoBase64.startsWith('data:image/')) {
+    try {
+      const uploaded = await uploadBase64Photo(body.photoBase64, customer.restaurantCode);
+      const photoUrl = `/api/customers/${encodeURIComponent(customer.id)}/photo`;
+      customer.photoStorageKey = uploaded.key;
+      customer.photoStorageType = uploaded.storageType;
+      customer.photoUrl = photoUrl;
+    } catch (photoErr: any) {
+      console.warn('[Reception Payment Confirm] Photo upload failed:', photoErr?.message || photoErr);
+    }
+  } else if (typeof body.photoUrl === 'string' && body.photoUrl.trim() && !body.photoUrl.startsWith('data:')) {
+    customer.photoUrl = body.photoUrl.trim();
+  }
+
+  if (typeof body.name === 'string' && body.name.trim().length >= 2) {
+    customer.name = body.name.trim();
+  }
+  if (typeof body.phone === 'string' && body.phone.trim().length >= 7) {
+    customer.phone = body.phone.trim();
+  }
+  if (typeof body.idNumber === 'string' && body.idNumber.trim()) {
+    const trimmedId = body.idNumber.trim();
+    customer.idNumberMasked = trimmedId.length > 5 ? `${trimmedId.slice(0, 5)}****` : '****';
+  }
+  if (body.studentProfile && typeof body.studentProfile === 'object') {
+    customer.studentProfile = {
+      ...(customer.studentProfile || {}),
+      institution: typeof body.studentProfile.institution === 'string' ? body.studentProfile.institution.trim() : customer.studentProfile?.institution,
+      programme: typeof body.studentProfile.programme === 'string' ? body.studentProfile.programme.trim() : customer.studentProfile?.programme,
+      year: Number.isInteger(body.studentProfile.year) ? body.studentProfile.year : customer.studentProfile?.year,
+      registrationNumber: typeof body.studentProfile.registrationNumber === 'string' ? body.studentProfile.registrationNumber.trim() : customer.studentProfile?.registrationNumber,
+    };
+  }
+
   const now = new Date().toISOString();
   const approvalId = `appr_reg_${crypto.randomUUID()}`;
   const branch = (serverDbState.branches || []).find((b: any) => b.id === customer.branchId && b.restaurantCode === customer.restaurantCode);
@@ -1258,7 +1294,18 @@ app.post('/api/reception/customer/payment-confirm', apiRateLimiter, requireAuth(
     Object.assign(customer, previousCustomer);
     return res.status(503).json({ success: false, error: 'Payment confirmation could not be saved. Do not retry with a new reference; contact support.' });
   }
-  return res.json({ success: true, approval, customer: { id: customer.id, registrationStatus: customer.registrationStatus, gracePlatesRemaining: customer.gracePlatesRemaining } });
+  return res.json({
+    success: true,
+    approval,
+    customer: {
+      id: customer.id,
+      name: customer.name,
+      phone: customer.phone,
+      photoUrl: customer.photoUrl,
+      registrationStatus: customer.registrationStatus,
+      gracePlatesRemaining: customer.gracePlatesRemaining,
+    },
+  });
 });
 
 app.post('/api/public/customer/registration', apiRateLimiter, async (req, res) => {
@@ -3157,7 +3204,70 @@ app.post(
 
     const pool = getPostgresPool();
     if (!pool || !isPostgresConfigured()) {
-      return res.status(503).json({ success: false, error: 'Authoritative scanning requires the production database.' });
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(503).json({ success: false, error: 'Authoritative scanning requires the production database.' });
+      }
+      // Local development fallback against serverDbState
+      const customer = (serverDbState?.customers || []).find(
+        (c: any) => c.restaurantCode === restaurantCode && c.memberNo === memberNo
+      );
+      if (!customer) {
+        return res.status(404).json({ success: false, error: 'Customer record not found.' });
+      }
+      if (customer.cardStatus !== 'active' || customer.activationStatus === 'suspended') {
+        return res.status(403).json({ success: false, error: 'Customer account or card is inactive.' });
+      }
+      const balanceBefore = (serverDbState?.ledgerEntries || [])
+        .filter((l: any) => l.customerId === customer.id && l.restaurantCode === restaurantCode)
+        .reduce((sum: number, l: any) => sum + (Number(l.platesDelta) || 0), 0);
+      if (balanceBefore <= 0) {
+        return res.status(402).json({ success: false, error: 'Insufficient meal balance.' });
+      }
+      const now = new Date();
+      const ledgerId = `led_${crypto.randomUUID()}`;
+      const scanId = `scan_${crypto.randomUUID()}`;
+      const ledgerEntry = {
+        id: ledgerId,
+        customerId: customer.id,
+        restaurantCode,
+        type: 'scan',
+        platesDelta: -1,
+        timestamp: now.toISOString(),
+        scanPointId: requestedStationId,
+        staffId: user.userId,
+        reference: `SCAN-${memberNo}`,
+        idempotencyKey: `scan:${idempotencyKey}`,
+      };
+      const event = {
+        id: scanId,
+        restaurantCode,
+        customerId: customer.id,
+        customerName: customer.name || 'Customer',
+        customerPhoto: customer.photoUrl || '',
+        memberNo,
+        scanPointId: requestedStationId,
+        scanPointName: station.name || 'Scanner',
+        staffId: user.userId,
+        staffName: user.username,
+        timestamp: now.toISOString(),
+        platesInWindow: 1,
+        platesDeducted: 1,
+        photoCheckRequired: false,
+        photoCheckReason: 'none',
+        photoCheckResult: 'none',
+        status: 'approved',
+      };
+      if (Array.isArray(serverDbState?.ledgerEntries)) serverDbState.ledgerEntries.push(ledgerEntry);
+      if (Array.isArray(serverDbState?.scanEvents)) serverDbState.scanEvents.unshift(event);
+      queueDbSave(serverDbState);
+      return res.json({
+        success: true,
+        accepted: true,
+        scanEvent: event,
+        ledgerEntry,
+        balanceBefore,
+        balanceAfter: balanceBefore - 1,
+      });
     }
 
     const client = await pool.connect();

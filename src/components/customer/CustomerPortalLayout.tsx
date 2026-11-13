@@ -44,45 +44,64 @@ export const CustomerPortalLayout: React.FC<CustomerPortalLayoutProps> = ({
 }) => {
   const t = translations[language || 'en'] || translations.en;
 
-  const navItems: Array<{
+  const desktopNavItems: Array<{
     id: CustomerPortalPage;
     label: string;
-    shortLabel: string;
     icon: React.ComponentType<{ className?: string }>;
     badge?: number;
   }> = [
-    { id: 'home', label: t.customer.navHome || 'Home', shortLabel: t.customer.navHome || 'Home', icon: Home },
-    { id: 'my_card', label: t.customer.navMyCard || 'My Card', shortLabel: t.customer.navMyCard || 'My Card', icon: QrCode },
-    { id: 'activity', label: t.customer.navActivity || 'Activity', shortLabel: t.customer.navActivity || 'Activity', icon: History },
+    { id: 'home', label: t.customer.navHome || 'Home', icon: Home },
+    { id: 'my_card', label: t.customer.navMyCard || 'My QR Pass', icon: QrCode },
+    { id: 'activity', label: t.customer.navActivity || 'Passbook Activity', icon: History },
     {
       id: 'notifications',
       label: t.customer.navNotifications || 'Notifications',
-      shortLabel: t.customer.navNotifications || 'Alerts',
       icon: Bell,
       badge: unreadNotifCount > 0 ? unreadNotifCount : undefined,
     },
-    { id: 'profile', label: t.customer.navProfile || 'Profile & Settings', shortLabel: t.customer.navPersonalInfo || 'Profile', icon: User },
+    { id: 'profile', label: t.customer.navProfile || 'Profile & Settings', icon: User },
+  ];
+
+  const mobileNavItems: Array<{
+    id: CustomerPortalPage;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    isCenter?: boolean;
+    badge?: number;
+  }> = [
+    { id: 'home', label: 'Home', icon: Home },
+    { id: 'activity', label: 'Passbook', icon: History },
+    { id: 'my_card', label: 'QR Pass', icon: QrCode, isCenter: true },
+    {
+      id: 'notifications',
+      label: 'Alerts',
+      icon: Bell,
+      badge: unreadNotifCount > 0 ? unreadNotifCount : undefined,
+    },
+    { id: 'profile', label: 'Profile', icon: User },
   ];
 
   return (
-    <div className="customer-portal-workspace w-full max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-5 pb-24 lg:pb-10">
-      {/* Compact Tenant & Patron Context Bar */}
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-900/90 border border-slate-800 px-4 py-3 shadow-sm">
+    <div className="customer-portal-workspace w-full max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-5 pb-28 lg:pb-10">
+      {/* Airtel-Style Patron Context Header Bar */}
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-900/90 border border-slate-800 px-4 py-3 shadow-md">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0">
-            <Building2 className="w-5 h-5" />
+          <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-black text-sm flex items-center justify-center shrink-0 shadow-inner">
+            {customer.name.slice(0, 2).toUpperCase()}
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm sm:text-base font-bold text-white truncate">
-                {restaurant?.name || 'Campus Dining'}
+              <span className="text-sm sm:text-base font-black text-white truncate">
+                Hello, {customer.name.split(' ')[0]}!
               </span>
-              <span className="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 text-[11px] font-mono font-bold text-emerald-400">
+              <span className="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 text-[10px] sm:text-[11px] font-mono font-bold text-emerald-400">
                 {customer.restaurantCode}
               </span>
             </div>
-            <div className="text-xs text-slate-400 truncate">
-              {customer.name} · <span className="font-mono text-slate-300">#{customer.memberNo}</span>
+            <div className="text-xs text-slate-400 truncate flex items-center gap-1.5 mt-0.5">
+              <span>{restaurant?.name || 'Campus Dining'}</span>
+              <span>·</span>
+              <span className="font-mono text-slate-300 font-semibold">#{customer.memberNo}</span>
             </div>
           </div>
         </div>
@@ -91,14 +110,14 @@ export const CustomerPortalLayout: React.FC<CustomerPortalLayoutProps> = ({
           <button
             type="button"
             onClick={() => onNavigatePage('my_card')}
-            className={`customer-context-action px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
+            className={`customer-context-action px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
               activePage === 'my_card'
                 ? 'bg-emerald-600 text-white'
                 : 'bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300'
             }`}
           >
-            <QrCode className="w-3.5 h-3.5" />
-            <span>{t.customer.showMyQr || 'My QR'}</span>
+            <QrCode className="w-4 h-4" />
+            <span>{t.customer.showMyQr || 'QR Pass'}</span>
           </button>
 
           <button
@@ -135,7 +154,7 @@ export const CustomerPortalLayout: React.FC<CustomerPortalLayoutProps> = ({
             aria-label="Customer portal sections"
             className="rounded-2xl bg-slate-900 border border-slate-800 p-2.5 space-y-1 shadow-sm"
           >
-            {navItems.map((item) => {
+            {desktopNavItems.map((item) => {
               const Icon = item.icon;
               const isActive = activePage === item.id;
               return (
@@ -205,29 +224,60 @@ export const CustomerPortalLayout: React.FC<CustomerPortalLayoutProps> = ({
         <section className="lg:col-span-9 min-w-0">{children}</section>
       </div>
 
-      {/* Mobile Bottom Navigation Bar */}
+      {/* Airtel-Style Mobile Bottom Navigation Bar with Elevated Center QR Button */}
       <nav
         aria-label="Customer portal sections"
-        className="customer-bottom-nav lg:hidden fixed bottom-0 inset-x-0 z-40 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800 px-2 py-1.5 print:hidden"
+        className="customer-bottom-nav lg:hidden fixed bottom-0 inset-x-0 z-40 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800 px-3 py-2 print:hidden"
       >
-        <div className="customer-bottom-nav-inner max-w-md mx-auto grid grid-cols-5 gap-1">
-          {navItems.map((item) => {
+        <div className="customer-bottom-nav-inner max-w-md mx-auto grid grid-cols-5 items-center justify-items-center">
+          {mobileNavItems.map((item) => {
             const Icon = item.icon;
             const isActive = activePage === item.id;
+
+            if (item.isCenter) {
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-current={isActive ? 'page' : undefined}
+                  onClick={() => onNavigatePage(item.id)}
+                  className="relative -mt-6 flex flex-col items-center justify-center group cursor-pointer focus-visible:outline-none"
+                  title="Show QR Meal Pass"
+                >
+                  <div
+                    className={`w-13 h-13 rounded-full flex items-center justify-center shadow-xl transition-all active:scale-95 border-4 border-slate-950 ${
+                      isActive
+                        ? 'bg-emerald-500 text-slate-950 shadow-emerald-500/50 ring-2 ring-emerald-400 scale-105'
+                        : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-950/80'
+                    }`}
+                  >
+                    <QrCode className="w-6 h-6 shrink-0" />
+                  </div>
+                  <span
+                    className={`text-[10px] font-bold mt-1 tracking-tight ${
+                      isActive ? 'text-emerald-400' : 'text-slate-400'
+                    }`}
+                  >
+                    QR Pass
+                  </span>
+                </button>
+              );
+            }
+
             return (
               <button
                 key={item.id}
                 type="button"
                 aria-current={isActive ? 'page' : undefined}
                 onClick={() => onNavigatePage(item.id)}
-                className={`customer-bottom-nav-item relative py-2 px-1 rounded-xl flex flex-col items-center justify-center gap-1 text-xs font-semibold transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
-                  isActive ? 'text-emerald-400 bg-slate-900' : 'text-slate-400 hover:text-slate-200'
+                className={`customer-bottom-nav-item relative py-1 px-1 rounded-xl flex flex-col items-center justify-center gap-1 text-[11px] font-semibold transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
+                  isActive ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                <Icon className="w-4 h-4 shrink-0" />
-                <span className="customer-bottom-nav-label truncate max-w-full">{item.shortLabel}</span>
+                <Icon className="w-5 h-5 shrink-0" />
+                <span className="customer-bottom-nav-label truncate max-w-full text-[10px]">{item.label}</span>
                 {item.badge !== undefined && (
-                  <span className="absolute top-1 right-2 px-1.5 py-0.2 rounded-full bg-emerald-500 text-slate-950 font-mono font-black text-[10px]">
+                  <span className="absolute top-0 right-1 px-1.5 py-0.2 rounded-full bg-emerald-500 text-slate-950 font-mono font-black text-[9px]">
                     {item.badge}
                   </span>
                 )}

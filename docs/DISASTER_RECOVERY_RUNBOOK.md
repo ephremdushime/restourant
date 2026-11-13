@@ -19,82 +19,72 @@ This runbook defines the operational procedures for off-site backup configuratio
 
 ---
 
-## 2. Dedicated Off-Site Backup Bucket Architecture
+## 2. Authoritative Off-Site Backup Architecture (Google Drive via Rclone)
 
-### A. Separation of Concerns
-- **Patron Photo Storage (`S3_*`)**: Stores customer avatars and photo IDs. Managed by the application layer.
-- **Off-Site Backups (`RESTOPASS_BACKUP_S3_*`)**: Stores encrypted PostgreSQL dumps and upload archives. Managed exclusively by the backup worker.
-- **Mandatory Rule**: The backup bucket credentials must be dedicated and separate from the photo storage credentials.
+### A. Approved Architecture: Host-Level Paired Encrypted Off-Site Backups
+RestoPass production uses **paired encrypted PostgreSQL + private patron-photo backups at 00:00 and 18:00 Africa/Kigali time**, synchronized to a dedicated Google Drive folder via `rclone`.
 
-### B. Supported Providers
-- **AWS S3**: Standard S3 bucket with Object Lock or lifecycle rules.
-- **Cloudflare R2**: Zero-egress S3-compatible bucket (set `RESTOPASS_BACKUP_S3_ENDPOINT="https://<account-id>.r2.cloudflarestorage.com"`).
-- **DigitalOcean Spaces**: Set `RESTOPASS_BACKUP_S3_ENDPOINT="https://<region>.digitaloceanspaces.com"`.
-- **MinIO**: Self-hosted private S3 server on an independent network.
+- **PostgreSQL Database Archive**: Encrypted custom-format database dump (`restopass_YYYYMMDDTHHMMSSZ.dump.enc`) with `.sha256` checksum and `.hmac` cryptographic sidecars.
+- **Private Patron Photo Archive**: Encrypted tarball of all customer portraits (`restopass_photos_YYYYMMDDTHHMMSSZ.tar.gz.enc`) with `.sha256` checksum and `.hmac` cryptographic sidecars.
+- **Atomic Paired Manifest**: `restopass_YYYYMMDDTHHMMSSZ.manifest` published remotely only after both database and photo archives pass byte-for-byte read-back verification.
+- **Legacy S3 Profile Note**: The `legacy-s3-backup` profile in Docker Compose is deprecated and inactive by default. All production backups are executed via host cron (`deploy/install-backup-schedule.sh`).
 
-### C. Least-Privilege IAM Policy
-Configure the backup service user with permissions strictly limited to the backup prefix. Deny `s3:DeleteObject` to prevent an attacker on a compromised host from purging remote backups:
+### B. Remote Storage Configuration
+1. Install `rclone` on the production Linux host.
+2. Authenticate the dedicated Bestie / RestoPass Google Drive account:
+   ```bash
+   rclone config
+   # Name remote: restopass-drive
+   # Storage type: drive
+   # Restrict config permissions:
+   chmod 700 ~/.config/rclone
+   chmod 600 ~/.config/rclone/rclone.conf
+   ```
+3. Set `.env` values:
+   - `RESTOPASS_GOOGLE_DRIVE_REMOTE="restopass-drive:restopass-backups"`
+   - `RESTOPASS_BACKUP_ENCRYPTION_KEY="<64-character-random-hex-key>"`
+   - `RESTOPASS_BACKUP_RETENTION_DAYS="30"`
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "RestoPassBackupAppendOnly",
-      "Effect": "Allow",
-      "Action": [
-        "s3:PutObject",
-        "s3:GetObject",
-        "s3:ListBucket"
-      ],
-      "Resource": [
-        "arn:aws:s3:::restopass-backups-private",
-        "arn:aws:s3:::restopass-backups-private/restopass/*"
-      ]
-    }
-  ]
-}
-```
-
-### D. Immutability & Retention
-- **Enable Bucket Versioning**: Ensures overwriting an object preserves prior versions.
-- **Enable Object Lock (WORM)**: Configure Compliance or Governance mode with a 30-day retention period.
-- **Lifecycle Expiration**: Configure non-current versions to expire automatically after 30 days.
+### C. Access Control & Encryption Guarantees
+- Backups are encrypted with AES-256 before leaving the server.
+- The Google account is secured with multi-factor authentication (MFA).
+- The decryption key is stored independently off-host in a password manager and is never committed to Git or uploaded to Drive.
+- `rclone` operates in append-and-readback mode; retention pruning is age-bounded (30 days default) and strictly isolated to the configured `restopass-backups` subfolder.
 
 ---
 
 ## 3. Cryptographic Architecture
 
-Each backup package consists of two files:
-1. `restopass-YYYYMMDDTHHMMSSZ.tar.gz.enc`: AES-256-CBC encrypted archive containing:
-   - `database.dump`: Authoritative PostgreSQL 16 custom-format dump (`pg_dump -Fc`).
-   - `uploads.tar.gz`: Gzipped archive of patron photo uploads.
-2. `restopass-YYYYMMDDTHHMMSSZ.tar.gz.enc.hmac`: 64-hex-character HMAC-SHA256 sidecar.
+Each backup package consists of paired timestamped artifacts:
+1. `postgres/restopass_YYYYMMDDTHHMMSSZ.dump.enc`: AES-256 encrypted PostgreSQL 16 custom-format dump (`pg_dump -Fc`).
+2. `postgres/restopass_YYYYMMDDTHHMMSSZ.dump.enc.hmac`: 64-hex HMAC-SHA256 sidecar.
+3. `patron-photos/restopass_photos_YYYYMMDDTHHMMSSZ.tar.gz.enc`: AES-256 encrypted archive of all private patron photos.
+4. `patron-photos/restopass_photos_YYYYMMDDTHHMMSSZ.tar.gz.enc.hmac`: 64-hex HMAC-SHA256 sidecar.
+5. `restopass_YYYYMMDDTHHMMSSZ.manifest`: Format specification and artifact directory mapping.
 
 ### Secret Isolation
-- `RESTOPASS_BACKUP_ENCRYPTION_KEY`: Minimum 32-character passphrase used with PBKDF2 (200,000 iterations, random salt, SHA-256).
-- `RESTOPASS_BACKUP_HMAC_KEY`: Minimum 32-character key used for HMAC-SHA256 calculation.
-- **Rule**: Both keys must be completely distinct from each other and stored in an off-host secrets vault (e.g. 1Password, Bitwarden, AWS Secrets Manager).
+- `RESTOPASS_BACKUP_ENCRYPTION_KEY`: 64-hex random key (256-bit symmetric key).
+- HMAC derivation: Uses a cryptographically derived key (`RESTOPASS_BACKUP_HMAC:${KEY}`) to ensure ciphertext authenticity.
+- **Rule**: Decryption keys must remain outside the production server and off Google Drive.
 
 ---
 
 ## 4. Automated Verification & Health Monitoring
 
-The backup container (`deploy/backup.Dockerfile`) runs continuous background operations:
-1. Every 24 hours (`BACKUP_INTERVAL_SECONDS=86400`), it dumps PostgreSQL, archives uploads, encrypts, and signs.
-2. Uploads the encrypted archive and `.hmac` sidecar to S3.
-3. Immediately downloads the uploaded remote object and verifies:
-   - HMAC integrity signature matches.
-   - Byte-for-byte equality (`cmp -s`) between local and remote copies.
-4. Writes a timestamp to `/backups/.offsite-last-success`.
-5. Prunes local archives older than `BACKUP_RETENTION_DAYS=14`.
-
-### Healthcheck Gate
-The healthcheck script (`deploy/backup-healthcheck.sh`):
-- Verifies a local backup exists within the last 48 hours.
-- Verifies HMAC sidecar integrity.
-- Verifies off-site replication occurred within 48 hours.
-- **If the healthcheck fails**: Container status becomes `unhealthy`. Caddy reverse proxy fails closed, preventing unbacked production operations.
+The host cron schedule (`deploy/install-backup-schedule.sh`) executes:
+1. **Daily Paired Backups (00:00 & 18:00 Africa/Kigali)**:
+   - `deploy/backup-all.sh` dumps PostgreSQL and compresses patron photos.
+   - Computes SHA-256 and HMAC sidecars.
+   - Uploads archives to Google Drive (`rclone copyto`).
+   - Downloads each remote archive to a temporary directory and verifies byte-for-byte matching (`cmp -s`).
+   - Publishes the `.manifest` file locally and remotely.
+   - Prunes local and remote archives older than `RESTOPASS_BACKUP_RETENTION_DAYS`.
+2. **Weekly Off-Site Recovery Verification (Sunday 04:00 Africa/Kigali)**:
+   - `deploy/verify-latest-paired-backup.sh` downloads the latest paired backup from Google Drive.
+   - Validates the manifest and HMAC sidecars.
+   - Restores PostgreSQL into an isolated disposable test database and checks tables.
+   - Extracts patron photos into an isolated temporary directory and verifies file readability.
+   - Drops the temporary database and cleans up temporary extraction folders.
 
 ---
 
@@ -102,24 +92,28 @@ The healthcheck script (`deploy/backup-healthcheck.sh`):
 
 Perform this drill in an isolated staging environment prior to commercial launch, and repeat quarterly.
 
-### Step 1: Download Off-Site Backup
+### Step 1: Download Off-Site Backup from Google Drive
 On the staging or recovery host:
 
 ```bash
-export RESTOPASS_BACKUP_S3_BUCKET="restopass-backups-private"
-export RESTOPASS_BACKUP_S3_ACCESS_KEY_ID="YOUR_ACCESS_KEY"
-export RESTOPASS_BACKUP_S3_SECRET_ACCESS_KEY="YOUR_SECRET_KEY"
-export RESTOPASS_BACKUP_S3_REGION="us-east-1"
-export RESTOPASS_BACKUP_ENCRYPTION_KEY="YOUR_32_CHAR_ENCRYPTION_KEY"
-export RESTOPASS_BACKUP_HMAC_KEY="YOUR_32_CHAR_HMAC_KEY"
+# Verify rclone connectivity
+rclone lsf restopass-drive:restopass-backups/
 
-# Download the specific backup file and its HMAC sidecar into an empty directory
-mkdir -p /tmp/dr-recovery
-aws s3 cp s3://restopass-backups-private/restopass/restopass-YYYYMMDDTHHMMSSZ.tar.gz.enc /tmp/dr-recovery/backup.enc
-aws s3 cp s3://restopass-backups-private/restopass/restopass-YYYYMMDDTHHMMSSZ.tar.gz.enc.hmac /tmp/dr-recovery/backup.enc.hmac
+# Download the latest paired backup manifest and artifacts
+bash deploy/verify-latest-paired-backup.sh
+```
 
-# Use the exact same timestamped object name for both files. For an S3-compatible
-# provider, add --endpoint-url https://YOUR-S3-ENDPOINT to each aws command.
+Or download manually for targeted timestamp recovery:
+
+```bash
+export TIMESTAMP="20261113T180000Z"
+export REMOTE="restopass-drive:restopass-backups/2026/11/13/$TIMESTAMP"
+mkdir -p /tmp/dr-recovery/{postgres,patron-photos}
+
+rclone copyto "$REMOTE/postgres/restopass_$TIMESTAMP.dump.enc" /tmp/dr-recovery/postgres/backup.enc
+rclone copyto "$REMOTE/postgres/restopass_$TIMESTAMP.dump.enc.hmac" /tmp/dr-recovery/postgres/backup.enc.hmac
+rclone copyto "$REMOTE/patron-photos/restopass_photos_$TIMESTAMP.tar.gz.enc" /tmp/dr-recovery/patron-photos/photos.enc
+rclone copyto "$REMOTE/patron-photos/restopass_photos_$TIMESTAMP.tar.gz.enc.hmac" /tmp/dr-recovery/patron-photos/photos.enc.hmac
 ```
 
 ### Step 2: Execute Automated Restoration Drill

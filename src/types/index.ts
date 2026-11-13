@@ -269,12 +269,20 @@ export interface StationUser {
   restaurantCode: string;
   branchId: string;
   branchName: string;
-  stationId: string;
-  stationName: string;
+  stationId?: string;
+  stationName?: string;
+  authorizedStationIds?: string[];
   name: string;
   username: string;
   phone: string;
   role: 'stand_staff' | 'reception' | 'scanner' | 'cashier';
+  permissions?: {
+    canScanMeals?: boolean;
+    canTopUpPlates?: boolean;
+    canIssueCards?: boolean;
+    canAuthorizeOverrides?: boolean;
+    canViewReports?: boolean;
+  };
   status: 'active' | 'blocked';
   passwordHash: string;
   pin: string;
@@ -282,6 +290,7 @@ export interface StationUser {
   createdAt: string;
   lastLoginAt?: string;
   lastActiveAt?: string;
+  sessionVersion?: number;
 }
 
 export type ApprovalType = 'new_customer' | 'balance_topup';
@@ -344,6 +353,7 @@ export interface ScanPoint {
   name: string; // e.g. "Stand 1 - Main Buffet"
   deviceModel: string;
   deviceType?: 'phone' | 'tablet' | 'laptop_scanner' | 'pos_terminal';
+  stationType?: 'meal_scanner' | 'reception_pos' | 'turnstile';
   pairingCode: string;
   pairingKey?: string; // 6-character code e.g. "PAIR-9932" for laptop USB/BT scanners
   pairingToken?: string; // Signed cryptographic device token
@@ -355,6 +365,8 @@ export interface ScanPoint {
   isCurrentDevice?: boolean;
   assignedStaffUserId?: string;
   assignedStaffUserName?: string;
+  ipAddress?: string;
+  notes?: string;
 }
 
 export interface PlateTransfer {

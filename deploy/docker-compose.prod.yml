@@ -112,6 +112,11 @@ services:
       TRUST_PROXY: ${TRUST_PROXY:-1}
       PGMAX_CONNECTIONS: 10
       DATABASE_URL: postgres://${POSTGRES_USER:-restopass_app}:${POSTGRES_PASSWORD:?Set_POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-restopass}
+      # Database TLS Policy (Workstream B):
+      # In this co-located Docker Compose topology, PostgreSQL runs strictly on the private internal
+      # Docker bridge network without published host ports. PGSSLMODE=disable and ALLOW_INSECURE_DB_TLS=true
+      # are permitted only for this internal co-located topology. If connecting to an external or managed DB,
+      # set PGSSLMODE=verify-full (or require) and unset ALLOW_INSECURE_DB_TLS.
       PGSSLMODE: disable
       ALLOW_INSECURE_DB_TLS: "true"
       REDIS_URL: redis://:${REDIS_PASSWORD:?Set_REDIS_PASSWORD}@redis:6379
@@ -119,6 +124,9 @@ services:
       RESTOPASS_MASTER_SECRET: ${RESTOPASS_MASTER_SECRET:?Set_RESTOPASS_MASTER_SECRET_minimum_32_random_characters}
       RESTOPASS_SUPERADMIN_PASSWORD: ${RESTOPASS_SUPERADMIN_PASSWORD:?Set_RESTOPASS_SUPERADMIN_PASSWORD}
       RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS: ${RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS:?Set_RESTOPASS_RESTAURANT_ADMIN_ACCOUNTS}
+      # Storage & Backups (Workstream A):
+      # Primary off-site backups are managed at host level via Google Drive + rclone (deploy/backup-all.sh).
+      # S3 variables are optional legacy fallbacks:
       S3_BUCKET: ${S3_BUCKET:-}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_ENDPOINT: ${S3_ENDPOINT:-}
@@ -163,7 +171,11 @@ services:
       - egress
 
   # ----------------------------------------------------------------------------
-  # 4. Automated Encrypted Backup & Off-Site Sync Worker
+  # 4. Legacy S3 Backup Worker (Optional / Inactive Profile)
+  # NOTE (Workstream A): Production backups are managed at the host level via
+  # crontab and rclone (deploy/install-backup-schedule.sh & deploy/backup-all.sh).
+  # This container is gated behind the 'legacy-s3-backup' profile and does NOT run
+  # by default when executing 'docker compose up -d'.
   # ----------------------------------------------------------------------------
   backup:
     profiles: [legacy-s3-backup]

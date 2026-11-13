@@ -11,6 +11,10 @@ import {
   Clock,
   ShieldCheck,
   X,
+  Camera,
+  Edit3,
+  Sparkles,
+  UserCheck,
 } from 'lucide-react';
 
 interface ScannerProvisionalModalProps {
@@ -57,9 +61,39 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
   const [paymentReference, setPaymentReference] = useState('');
   const [staffName, setStaffName] = useState('Station Reception Desk');
 
-  // Top-Up Mode existing customer search
+  // Top-Up Mode existing customer search & reception profile/photo verification
   const [topupSearch, setTopupSearch] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+
+  // Profile & photo verification fields for selected customer at reception
+  const [verifiedName, setVerifiedName] = useState('');
+  const [verifiedPhone, setVerifiedPhone] = useState('');
+  const [verifiedPhotoUrl, setVerifiedPhotoUrl] = useState('/src/assets/images/avatar_student_male_1790979380050.jpg');
+  const [verifiedIsStudent, setVerifiedIsStudent] = useState(true);
+  const [verifiedRegNumber, setVerifiedRegNumber] = useState('');
+  const [verifiedInstitution, setVerifiedInstitution] = useState('');
+  const [verifiedProgramme, setVerifiedProgramme] = useState('');
+  const [verifiedYear, setVerifiedYear] = useState(1);
+  const [verifiedIdNumber, setVerifiedIdNumber] = useState('');
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+
+  const handleSelectCustomer = (c: Customer) => {
+    setSelectedCustomer(c);
+    setTopupSearch('');
+    setVerifiedName(c.name || '');
+    setVerifiedPhone(c.phone || '');
+    setVerifiedPhotoUrl(c.photoUrl || '/src/assets/images/avatar_student_male_1790979380050.jpg');
+    setVerifiedIsStudent(c.isStudent ?? true);
+    setVerifiedRegNumber(c.studentProfile?.registrationNumber || c.idNumberMasked?.replace(/\*/g, '') || '');
+    setVerifiedInstitution(c.studentProfile?.institution || 'University Campus');
+    setVerifiedProgramme(c.studentProfile?.programme || '');
+    setVerifiedYear(c.studentProfile?.year || 1);
+    setVerifiedIdNumber(c.idNumberMasked || '');
+    const isSelfReg = c.registrationStatus === 'pending_reception_payment';
+    const isDefaultAvatar = !c.photoUrl || c.photoUrl.includes('avatar_student_male');
+    setIsEditingProfile(isSelfReg || isDefaultAvatar);
+    setError(null);
+  };
 
   // Status & Feedback
   const [error, setError] = useState<string | null>(null);
@@ -201,7 +235,51 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
 
     try {
       const reference = paymentReference.trim().toUpperCase();
-      if (selectedCustomer.registrationStatus === 'pending_reception_payment') {
+      const isPendingPayment = selectedCustomer.registrationStatus === 'pending_reception_payment';
+      const capturedPhoto = verifiedPhotoUrl.startsWith('data:') ? verifiedPhotoUrl : undefined;
+
+      // 1. If photo was captured via camera or file upload, upload it to the photo service
+      let finalPhotoUrl = verifiedPhotoUrl;
+      if (capturedPhoto) {
+        const photoUploadRes = await restoStore.uploadCustomerPhoto(selectedCustomer.id, capturedPhoto);
+        if (photoUploadRes.success && photoUploadRes.photoUrl) {
+          finalPhotoUrl = photoUploadRes.photoUrl;
+        }
+      }
+
+      // 2. If profile details were edited at reception, update the customer profile
+      const nameChanged = verifiedName.trim() && verifiedName.trim() !== selectedCustomer.name;
+      const phoneChanged = verifiedPhone.trim() && verifiedPhone.trim() !== selectedCustomer.phone;
+      const studentDetailsChanged =
+        verifiedIsStudent !== selectedCustomer.isStudent ||
+        verifiedRegNumber.trim() !== (selectedCustomer.studentProfile?.registrationNumber || '') ||
+        verifiedInstitution.trim() !== (selectedCustomer.studentProfile?.institution || '') ||
+        verifiedProgramme.trim() !== (selectedCustomer.studentProfile?.programme || '') ||
+        verifiedYear !== (selectedCustomer.studentProfile?.year || 1);
+
+      if (nameChanged || phoneChanged || studentDetailsChanged || (finalPhotoUrl && finalPhotoUrl !== selectedCustomer.photoUrl)) {
+        restoStore.updateCustomerProfile(
+          selectedCustomer.id,
+          {
+            name: verifiedName.trim() || selectedCustomer.name,
+            phone: verifiedPhone.trim() || selectedCustomer.phone,
+            photoUrl: finalPhotoUrl.startsWith('data:') ? undefined : finalPhotoUrl,
+            isStudent: verifiedIsStudent,
+            studentProfile: verifiedIsStudent
+              ? {
+                institution: verifiedInstitution.trim() || 'University Campus',
+                programme: verifiedProgramme.trim() || 'General',
+                year: verifiedYear || 1,
+                registrationNumber: verifiedRegNumber.trim() || selectedCustomer.memberNo,
+              }
+              : undefined,
+          },
+          staffName.trim()
+        );
+      }
+
+      // 3. Confirm registration payment or submit top-up
+      if (isPendingPayment) {
         if (isCustomPlates) throw new Error('Choose a configured meal package to confirm a new registration payment.');
         const result = await restoStore.confirmRegistrationPayment({
           customerId: selectedCustomer.id,
@@ -214,6 +292,17 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
           registeredByStaffName: staffName.trim(),
           stationId: currentStation?.id || 'sp_1',
           stationName: currentStation?.name || 'Reception & Stand 1',
+          photoBase64: capturedPhoto,
+          photoUrl: finalPhotoUrl,
+          name: verifiedName.trim() || selectedCustomer.name,
+          phone: verifiedPhone.trim() || selectedCustomer.phone,
+          isStudent: verifiedIsStudent,
+          studentProfile: {
+            institution: verifiedInstitution.trim() || 'University Campus',
+            programme: verifiedProgramme.trim() || 'General',
+            year: verifiedYear || 1,
+            registrationNumber: verifiedRegNumber.trim() || selectedCustomer.memberNo,
+          },
         });
         if (!result.success) throw new Error(result.error || 'Payment confirmation failed.');
       } else {
@@ -376,11 +465,10 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                   setActiveMode('new_customer');
                   setError(null);
                 }}
-                className={`flex-1 py-2.5 px-3 rounded-xl font-bold transition-colors cursor-pointer flex items-center justify-center gap-2 ${
-                  activeMode === 'new_customer'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'text-slate-300 hover:text-white'
-                }`}
+                className={`flex-1 py-2.5 px-3 rounded-xl font-bold transition-colors cursor-pointer flex items-center justify-center gap-2 ${activeMode === 'new_customer'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-300 hover:text-white'
+                  }`}
               >
                 <UserPlus className="w-4 h-4" />
                 <span>New Customer Registration</span>
@@ -392,11 +480,10 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                   setActiveMode('topup');
                   setError(null);
                 }}
-                className={`flex-1 py-2.5 px-3 rounded-xl font-bold transition-colors cursor-pointer flex items-center justify-center gap-2 ${
-                  activeMode === 'topup'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'text-slate-300 hover:text-white'
-                }`}
+                className={`flex-1 py-2.5 px-3 rounded-xl font-bold transition-colors cursor-pointer flex items-center justify-center gap-2 ${activeMode === 'topup'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-300 hover:text-white'
+                  }`}
               >
                 <CreditCard className="w-4 h-4" />
                 <span>Find / Confirm Payment</span>
@@ -586,18 +673,16 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                       <button
                         type="button"
                         onClick={() => setIsCustomPlates(false)}
-                        className={`px-3 py-1 rounded-lg text-xs font-bold cursor-pointer ${
-                          !isCustomPlates ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:text-white'
-                        }`}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold cursor-pointer ${!isCustomPlates ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:text-white'
+                          }`}
                       >
                         Bundle Pack
                       </button>
                       <button
                         type="button"
                         onClick={() => setIsCustomPlates(true)}
-                        className={`px-3 py-1 rounded-lg text-xs font-bold cursor-pointer ${
-                          isCustomPlates ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:text-white'
-                        }`}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold cursor-pointer ${isCustomPlates ? 'bg-emerald-600 text-white' : 'text-slate-300 hover:text-white'
+                          }`}
                       >
                         Custom Plates
                       </button>
@@ -721,9 +806,49 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
               </form>
             )}
 
-            {/* FORM B: EXISTING CUSTOMER TOP-UP */}
+            {/* FORM B: EXISTING CUSTOMER TOP-UP / RECEPTION PAYMENT CONFIRMATION */}
             {activeMode === 'topup' && (
               <form onSubmit={handleTopupSubmit} className="space-y-4 text-sm" noValidate>
+                {/* Awaiting Payment Quick Queue (Customers who self-registered online) */}
+                {!selectedCustomer && !topupSearch.trim() && (() => {
+                  const pendingSelfRegCustomers = state.customers.filter(
+                    (c) => c.restaurantCode === restoCode && (c.registrationStatus === 'pending_reception_payment' || c.receptionPaymentStatus === 'unpaid')
+                  );
+                  if (pendingSelfRegCustomers.length === 0) return null;
+                  return (
+                    <div className="p-4 rounded-2xl bg-amber-950/40 border border-amber-500/50 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 font-bold text-amber-300 text-sm">
+                          <Sparkles className="w-4 h-4 text-amber-400" />
+                          <span>Self-Registered Online · Awaiting Reception Payment ({pendingSelfRegCustomers.length})</span>
+                        </div>
+                        <span className="text-[11px] font-mono text-amber-200/80">Pending Photo &amp; Payment</span>
+                      </div>
+                      <div className="divide-y divide-amber-900/30 rounded-xl bg-slate-950 border border-amber-500/30 overflow-hidden">
+                        {pendingSelfRegCustomers.map((c) => (
+                          <div key={c.id} className="p-3 flex items-center justify-between hover:bg-slate-900/90 transition-colors">
+                            <div className="flex items-center gap-3">
+                              <PrivatePhoto src={c.photoUrl} alt="" className="w-10 h-10 rounded-xl object-cover border border-amber-500/50" />
+                              <div>
+                                <div className="font-bold text-white text-sm">{c.name}</div>
+                                <div className="text-xs text-slate-300 font-mono">#{c.memberNo} · {c.phone}</div>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectCustomer(c)}
+                              className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                            >
+                              <Camera className="w-3.5 h-3.5" />
+                              <span>Take Photo &amp; Pay →</span>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Search existing member */}
                 <div>
                   <label htmlFor="topup-member-search" className="font-bold text-white block mb-1.5 text-sm">
@@ -744,23 +869,20 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                         <button
                           type="button"
                           key={c.id}
-                          onClick={() => {
-                            setSelectedCustomer(c);
-                            setTopupSearch('');
-                          }}
+                          onClick={() => handleSelectCustomer(c)}
                           className="w-full p-3 flex items-center justify-between hover:bg-slate-800 cursor-pointer text-left"
                         >
                           <div className="flex items-center gap-3">
-                            <img src={c.photoUrl} alt="" className="w-10 h-10 rounded-xl object-cover" />
+                            <PrivatePhoto src={c.photoUrl} alt="" className="w-10 h-10 rounded-xl object-cover" />
                             <div>
                               <div className="font-bold text-white text-sm">{c.name}</div>
                               <div className="text-xs text-slate-300 font-mono">
-                                #{c.memberNo} · {c.phone}
+                                #{c.memberNo} · {c.phone} {c.registrationStatus === 'pending_reception_payment' ? '· (Payment Needed)' : ''}
                               </div>
                             </div>
                           </div>
                           <span className="text-emerald-400 font-mono font-bold text-sm">
-                            {restoStore.getCustomerBalance(c.id)} plates
+                            {c.registrationStatus === 'pending_reception_payment' ? 'New Online Reg' : `${restoStore.getCustomerBalance(c.id)} plates`}
                           </span>
                         </button>
                       ))}
@@ -768,27 +890,176 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                   )}
 
                   {selectedCustomer && (
-                    <div className="mt-2 p-3.5 rounded-2xl bg-slate-950 border-2 border-emerald-500/50 flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <img
-                          src={selectedCustomer.photoUrl}
-                          alt=""
-                          className="w-11 h-11 rounded-xl object-cover border border-emerald-500"
-                        />
-                        <div>
-                          <div className="font-bold text-white text-base">{selectedCustomer.name}</div>
-                          <div className="text-slate-300 font-mono text-xs">
-                            Member #{selectedCustomer.memberNo} · {selectedCustomer.registrationStatus === 'pending_reception_payment' ? 'Payment confirmation required' : `Balance: ${restoStore.getCustomerBalance(selectedCustomer.id)} plates`}
+                    <div className="mt-3 space-y-4">
+                      {/* Customer Summary Bar */}
+                      <div className="p-3.5 rounded-2xl bg-slate-950 border-2 border-emerald-500/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <PrivatePhoto
+                            src={verifiedPhotoUrl || selectedCustomer.photoUrl}
+                            alt=""
+                            className="w-12 h-12 rounded-xl object-cover border-2 border-emerald-400 shrink-0"
+                          />
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-black text-white text-base">{verifiedName || selectedCustomer.name}</span>
+                              {selectedCustomer.registrationStatus === 'pending_reception_payment' ? (
+                                <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-bold uppercase font-mono">
+                                  Online Self-Reg
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold uppercase font-mono">
+                                  Active Member
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-slate-300 font-mono text-xs mt-0.5">
+                              Member #{selectedCustomer.memberNo} · {verifiedPhone || selectedCustomer.phone} · {selectedCustomer.registrationStatus === 'pending_reception_payment' ? 'Payment confirmation required' : `Balance: ${restoStore.getCustomerBalance(selectedCustomer.id)} plates`}
+                            </div>
                           </div>
                         </div>
+
+                        <div className="flex items-center gap-2 self-end sm:self-center">
+                          <button
+                            type="button"
+                            onClick={() => setIsEditingProfile(!isEditingProfile)}
+                            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-600 flex items-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <Edit3 className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>{isEditingProfile ? 'Hide Profile Editor' : 'Edit Profile & Photo'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedCustomer(null)}
+                            className="text-xs text-rose-400 hover:text-rose-300 font-bold underline cursor-pointer px-2"
+                          >
+                            Change
+                          </button>
+                        </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedCustomer(null)}
-                        className="text-sm text-emerald-400 hover:text-emerald-300 font-bold underline cursor-pointer"
-                      >
-                        Change
-                      </button>
+
+                      {/* Reception Photo Capture & Profile Verification Section */}
+                      {isEditingProfile && (
+                        <div className="p-4 rounded-2xl bg-slate-950/90 border border-slate-700 space-y-4 animate-in fade-in duration-200">
+                          <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                            <div className="flex items-center gap-2">
+                              <Camera className="w-4 h-4 text-emerald-400" />
+                              <span className="font-bold text-white text-sm">
+                                Reception Photo Capture &amp; Profile Verification
+                              </span>
+                            </div>
+                            <span className="text-[11px] text-amber-300 font-medium">
+                              {selectedCustomer.registrationStatus === 'pending_reception_payment'
+                                ? 'Upload/Take Photo Before Marking Paid'
+                                : 'Update Photo or Profile'}
+                            </span>
+                          </div>
+
+                          {selectedCustomer.registrationStatus === 'pending_reception_payment' && (
+                            <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-100 text-xs flex items-center gap-2.5">
+                              <UserCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                              <span>
+                                <strong>Self-Registration Workflow:</strong> This customer registered online. Capture their portrait photo below so it is printed on their smart card and displayed for Boss approval.
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Photo Capture Input */}
+                          <div>
+                            <PhotoCaptureInput
+                              photoUrl={verifiedPhotoUrl}
+                              onChange={setVerifiedPhotoUrl}
+                              label="Patron Portrait Photo (Webcam Snapshot or File Upload)"
+                              required={false}
+                            />
+                          </div>
+
+                          {/* Editable Customer Fields */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                            <div>
+                              <label className="text-slate-200 font-semibold block mb-1 text-xs">
+                                Official Full Name <span className="text-emerald-400">*</span>
+                              </label>
+                              <input
+                                type="text"
+                                value={verifiedName}
+                                onChange={(e) => setVerifiedName(e.target.value)}
+                                placeholder="Full patron name"
+                                className="w-full py-2.5 px-3 rounded-xl bg-slate-900 border-2 border-slate-700 text-white text-sm font-medium focus:border-emerald-400 outline-hidden"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="text-slate-200 font-semibold block mb-1 text-xs">
+                                Phone Number <span className="text-emerald-400">*</span>
+                              </label>
+                              <input
+                                type="tel"
+                                value={verifiedPhone}
+                                onChange={(e) => setVerifiedPhone(e.target.value)}
+                                placeholder="+250 788 123 456"
+                                className="w-full py-2.5 px-3 rounded-xl bg-slate-900 border-2 border-slate-700 text-white text-sm font-mono font-semibold focus:border-emerald-400 outline-hidden"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Student Specific Fields */}
+                          {verifiedIsStudent ? (
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                              <div>
+                                <label className="text-slate-200 font-semibold block mb-1 text-xs">
+                                  Student Reg # <span className="text-emerald-400">*</span>
+                                </label>
+                                <input
+                                  type="text"
+                                  value={verifiedRegNumber}
+                                  onChange={(e) => setVerifiedRegNumber(e.target.value)}
+                                  placeholder="e.g. 221004891"
+                                  className="w-full py-2.5 px-3 rounded-xl bg-slate-900 border-2 border-slate-700 text-white text-sm font-mono focus:border-emerald-400 outline-hidden"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="text-slate-200 font-semibold block mb-1 text-xs">
+                                  Institution <span className="text-emerald-400">*</span>
+                                </label>
+                                <input
+                                  type="text"
+                                  value={verifiedInstitution}
+                                  onChange={(e) => setVerifiedInstitution(e.target.value)}
+                                  placeholder="e.g. University of Rwanda"
+                                  className="w-full py-2.5 px-3 rounded-xl bg-slate-900 border-2 border-slate-700 text-white text-sm focus:border-emerald-400 outline-hidden"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="text-slate-200 font-semibold block mb-1 text-xs">
+                                  Programme / Faculty <span className="text-emerald-400">*</span>
+                                </label>
+                                <input
+                                  type="text"
+                                  value={verifiedProgramme}
+                                  onChange={(e) => setVerifiedProgramme(e.target.value)}
+                                  placeholder="e.g. Computer Science"
+                                  className="w-full py-2.5 px-3 rounded-xl bg-slate-900 border-2 border-slate-700 text-white text-sm focus:border-emerald-400 outline-hidden"
+                                />
+                              </div>
+                            </div>
+                          ) : (
+                            <div>
+                              <label className="text-slate-200 font-semibold block mb-1 text-xs">
+                                National ID / Passport #
+                              </label>
+                              <input
+                                type="text"
+                                value={verifiedIdNumber}
+                                onChange={(e) => setVerifiedIdNumber(e.target.value)}
+                                placeholder="e.g. 1 1999 8 0045678 1 23"
+                                className="w-full py-2.5 px-3 rounded-xl bg-slate-900 border-2 border-slate-700 text-white text-sm font-mono focus:border-emerald-400 outline-hidden"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -796,7 +1067,7 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                 {/* Package selection */}
                 <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-white text-sm">{selectedCustomer?.registrationStatus === 'pending_reception_payment' ? 'Registration Payment' : 'Top-Up Package'}</span>
+                    <span className="font-bold text-white text-sm">{selectedCustomer?.registrationStatus === 'pending_reception_payment' ? 'Registration Meal Package' : 'Top-Up Package'}</span>
                     <span className="text-emerald-400 font-mono font-bold text-sm">
                       +{effectivePlates} Plates ({effectiveAmount.toLocaleString()} RWF)
                     </span>
@@ -823,7 +1094,6 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                         className="w-full py-3 px-3.5 rounded-xl bg-slate-900 border-2 border-slate-700 text-white text-sm focus:border-emerald-400 outline-hidden"
                       >
                         <option value="mtn_momo">MTN Mobile Money (*182#)</option>
-                        
                         <option value="cash">Cash Received at Counter</option>
                         <option value="bank_transfer">Bank Transfer</option>
                       </select>
@@ -858,7 +1128,9 @@ export const ScannerProvisionalModal: React.FC<ScannerProvisionalModalProps> = (
                     disabled={!selectedCustomer}
                     className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-black text-sm shadow-lg cursor-pointer transition-colors"
                   >
-                    {selectedCustomer?.registrationStatus === 'pending_reception_payment' ? 'Confirm Registration Payment' : 'Submit Top-Up for Approval'}
+                    {selectedCustomer?.registrationStatus === 'pending_reception_payment'
+                      ? 'Save Photo, Profile & Confirm Payment'
+                      : 'Submit Top-Up for Approval'}
                   </button>
                 </div>
               </form>

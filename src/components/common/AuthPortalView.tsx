@@ -25,6 +25,7 @@ import {
   Sparkles,
   XCircle,
   UserPlus,
+  Radio,
 } from 'lucide-react';
 
 interface AuthPortalViewProps {
@@ -69,6 +70,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   });
   const [selectedBranchId, setSelectedBranchId] = useState('');
   const [selectedStationId, setSelectedStationId] = useState(state.currentStationId);
+  const [showStationSelector, setShowStationSelector] = useState(false);
 
   // Form input fields
   const [username, setUsername] = useState(isDemoMode ? 'boss@example.local' : '');
@@ -136,9 +138,19 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
       setUsername('');
       setPin('');
       setPassword('');
-      const branches = restoStore.getRestaurantBranches(selectedRestoCode);
-      if (branches.length > 0 && !selectedBranchId) {
-        setSelectedBranchId(branches[0].id);
+      const paired = restoStore.getPairedStation(selectedRestoCode);
+      if (paired) {
+        setSelectedStationId(paired.id);
+        setSelectedBranchId(paired.branchId || '');
+      } else {
+        const branches = restoStore.getRestaurantBranches(selectedRestoCode);
+        if (branches.length > 0 && !selectedBranchId) {
+          setSelectedBranchId(branches[0].id);
+        }
+        const stns = restoStore.getRestaurantScanPoints(selectedRestoCode);
+        if (stns.length > 0 && !selectedStationId) {
+          setSelectedStationId(stns[0].id);
+        }
       }
     } else if (activeRole === 'customer') {
       setPhoneOrMember(isDemoMode ? '+250 788 123 456' : '');
@@ -523,8 +535,8 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           </p>
         </div>
 
-        {/* Active Dining Facility Context Badge */}
-        {(() => {
+        {/* Active Dining Facility Context Badge (Hidden for platform Super Admin) */}
+        {activeRole !== 'super_admin' && (() => {
           const matchedFacility = state.restaurants.find((r) => r.code === selectedRestoCode);
           if (!matchedFacility) return null;
           return (
@@ -543,62 +555,86 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           );
         })()}
 
-        {/* Portal Role Switcher Tabs (Only visible in Demo Mode; in Production each portal is strictly isolated to its role) */}
-        {isDemoMode && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1 bg-slate-950 rounded-2xl border border-slate-800 text-xs font-semibold">
+        {/* Portal Entrance Selector: 4 Clearly Defined Doors */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+              Choose Portal Entrance
+            </span>
+            <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-800/60 font-semibold">
+              {activeRole === 'customer' && 'Direct link: /#/customer'}
+              {activeRole === 'stand_staff' && 'Direct link: /#/scanner'}
+              {activeRole === 'restaurant_admin' && 'Direct link: /#/boss'}
+              {activeRole === 'super_admin' && 'Direct link: /#/superadmin'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1.5 bg-slate-950 rounded-2xl border border-slate-800 text-xs font-semibold shadow-inner">
             <button
               type="button"
-              onClick={() => handleRoleTabClick('restaurant_admin')}
-              className={`p-2.5 rounded-xl flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
-                activeRole === 'restaurant_admin'
-                  ? 'bg-emerald-600 text-white shadow-md'
+              onClick={() => handleRoleTabClick('customer')}
+              className={`p-2.5 sm:p-3 rounded-xl flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
+                activeRole === 'customer'
+                  ? 'bg-emerald-600 text-white shadow-lg ring-1 ring-emerald-400/50 scale-[1.02]'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
               }`}
             >
-              <Server className="w-4 h-4" />
-              <span className="text-[11px] leading-tight text-center">Boss Admin</span>
+              <Smartphone className={`w-4 h-4 sm:w-5 sm:h-5 ${activeRole === 'customer' ? 'text-white' : 'text-emerald-400'}`} />
+              <div className="text-center">
+                <div className="text-[11px] sm:text-xs font-bold leading-tight">Customer</div>
+                <div className="text-[9px] opacity-75 leading-tight mt-0.5">Dining Pass</div>
+              </div>
             </button>
 
             <button
               type="button"
               onClick={() => handleRoleTabClick('stand_staff')}
-              className={`p-2.5 rounded-xl flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
+              className={`p-2.5 sm:p-3 rounded-xl flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
                 activeRole === 'stand_staff'
-                  ? 'bg-emerald-600 text-white shadow-md'
+                  ? 'bg-emerald-600 text-white shadow-lg ring-1 ring-emerald-400/50 scale-[1.02]'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
               }`}
             >
-              <QrCode className="w-4 h-4" />
-              <span className="text-[11px] leading-tight text-center">Stand POS</span>
+              <QrCode className={`w-4 h-4 sm:w-5 sm:h-5 ${activeRole === 'stand_staff' ? 'text-white' : 'text-emerald-400'}`} />
+              <div className="text-center">
+                <div className="text-[11px] sm:text-xs font-bold leading-tight">Scanner POS</div>
+                <div className="text-[9px] opacity-75 leading-tight mt-0.5">Buffet Station</div>
+              </div>
             </button>
 
             <button
               type="button"
-              onClick={() => handleRoleTabClick('customer')}
-              className={`p-2.5 rounded-xl flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
-                activeRole === 'customer'
-                  ? 'bg-emerald-600 text-white shadow-md'
+              onClick={() => handleRoleTabClick('restaurant_admin')}
+              className={`p-2.5 sm:p-3 rounded-xl flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
+                activeRole === 'restaurant_admin'
+                  ? 'bg-emerald-600 text-white shadow-lg ring-1 ring-emerald-400/50 scale-[1.02]'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
               }`}
             >
-              <Smartphone className="w-4 h-4" />
-              <span className="text-[11px] leading-tight text-center">Customer</span>
+              <Server className={`w-4 h-4 sm:w-5 sm:h-5 ${activeRole === 'restaurant_admin' ? 'text-white' : 'text-emerald-400'}`} />
+              <div className="text-center">
+                <div className="text-[11px] sm:text-xs font-bold leading-tight">Boss Admin</div>
+                <div className="text-[9px] opacity-75 leading-tight mt-0.5">Management</div>
+              </div>
             </button>
 
             <button
               type="button"
               onClick={() => handleRoleTabClick('super_admin')}
-              className={`p-2.5 rounded-xl flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
+              className={`p-2.5 sm:p-3 rounded-xl flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
                 activeRole === 'super_admin'
-                  ? 'bg-amber-600 text-white shadow-md'
+                  ? 'bg-amber-600 text-white shadow-lg ring-1 ring-amber-400/50 scale-[1.02]'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
               }`}
             >
-              <ShieldCheck className="w-4 h-4" />
-              <span className="text-[11px] leading-tight text-center">Super Admin</span>
+              <ShieldCheck className={`w-4 h-4 sm:w-5 sm:h-5 ${activeRole === 'super_admin' ? 'text-white' : 'text-amber-400'}`} />
+              <div className="text-center">
+                <div className="text-[11px] sm:text-xs font-bold leading-tight">Super Admin</div>
+                <div className="text-[9px] opacity-75 leading-tight mt-0.5">Platform Console</div>
+              </div>
             </button>
           </div>
-        )}
+        </div>
 
         {/* Portal Context Banner */}
         <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 text-xs flex items-start gap-3">
@@ -633,7 +669,7 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
         )}
 
         {/* Authentication Form */}
-        <form onSubmit={handleLoginSubmit} className="space-y-4 text-xs">
+        <form noValidate onSubmit={handleLoginSubmit} className="space-y-4 text-xs">
           {/* Active Restaurant Facility (Locked in Production Mode so Restaurant A cannot drop down to Restaurant B) */}
           {activeRole !== 'super_admin' && (
             <div className="space-y-1">
@@ -705,67 +741,102 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
           )}
 
           {/* Role-Specific Fields: 2. Stand Scanner / Reception POS */}
-          {activeRole === 'stand_staff' && (
-            <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {activeRole === 'stand_staff' && (() => {
+            const pairedStation = restoStore.getPairedStation(selectedRestoCode);
+            return (
+              <>
+                {pairedStation && !showStationSelector ? (
+                  <div className="p-3.5 rounded-xl bg-emerald-950/40 border border-emerald-800/80 flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2.5">
+                      <Radio className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <div>
+                        <div className="font-bold text-white flex items-center gap-1.5">
+                          <span>{pairedStation.name}</span>
+                          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-900/80 text-emerald-300 border border-emerald-700 font-bold">
+                            Paired Device ✓
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-400">{pairedStation.branchName}</div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowStationSelector(true)}
+                      className="text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold cursor-pointer underline"
+                    >
+                      Change Station
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="font-semibold text-slate-300">Station Branch</label>
+                      <select
+                        value={selectedBranchId}
+                        onChange={(e) => setSelectedBranchId(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3 py-2 text-white font-medium outline-hidden"
+                      >
+                        {branches.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {b.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <label className="font-semibold text-slate-300">Scanner Station</label>
+                        {pairedStation && (
+                          <button
+                            type="button"
+                            onClick={() => setShowStationSelector(false)}
+                            className="text-[10px] text-slate-400 hover:text-white cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        )}
+                      </div>
+                      <select
+                        value={selectedStationId}
+                        onChange={(e) => setSelectedStationId(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3 py-2 text-white font-medium outline-hidden"
+                      >
+                        {stations.map((sp) => (
+                          <option key={sp.id} value={sp.id}>
+                            {sp.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+
                 <div className="space-y-1">
-                  <label className="font-semibold text-slate-300">Station Branch</label>
-                  <select
-                    value={selectedBranchId}
-                    onChange={(e) => setSelectedBranchId(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3 py-2 text-white font-medium outline-hidden"
-                  >
-                    {branches.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
+                  <label className="font-semibold text-slate-300">Operator Username</label>
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="e.g. station1 or operator.jean"
+                    className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-white outline-hidden font-mono"
+                  />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="font-semibold text-slate-300">Scanner Station</label>
-                  <select
-                    value={selectedStationId}
-                    onChange={(e) => setSelectedStationId(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3 py-2 text-white font-medium outline-hidden"
-                  >
-                    {stations.map((sp) => (
-                      <option key={sp.id} value={sp.id}>
-                        {sp.name}
-                      </option>
-                    ))}
-                  </select>
+                  <label className="font-semibold text-slate-300">6+ Digit PIN or Staff Password</label>
+                  <input
+                    type="password"
+                    maxLength={64}
+                    value={pin}
+                    onChange={(e) => setPin(e.target.value)}
+                    placeholder="Enter 6-digit PIN (e.g. 123456) or staff password..."
+                    className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-white outline-hidden font-mono text-center tracking-widest text-base"
+                  />
                 </div>
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-300">Operator Username</label>
-                <input
-                  type="text"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="e.g. eric.n or EastHub"
-                  className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-white outline-hidden font-mono"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-300">{t.auth.pin}</label>
-                <input
-                  type="password"
-                  maxLength={12}
-                  minLength={8}
-                  pattern="[0-9]{8,12}"
-                  inputMode="numeric"
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
-                  placeholder="Enter 8–12 digit POS PIN..."
-                  className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-white outline-hidden font-mono text-center tracking-widest text-base"
-                />
-              </div>
-            </>
-          )}
+              </>
+            );
+          })()}
 
           {/* Role-Specific Fields: 3. Customer Meal Portal (Phone + 6+ digit PIN) */}
           {activeRole === 'customer' && (

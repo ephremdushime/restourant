@@ -31,7 +31,7 @@ class AudioService {
         if (savedEnabled !== null) {
           this.soundEnabled = savedEnabled !== 'false';
         }
-      } catch {}
+      } catch { }
     }
   }
 
@@ -54,7 +54,7 @@ class AudioService {
               this.audioUnlocked = true;
             }
           })
-          .catch(() => {});
+          .catch(() => { });
       }
     }
     return this.ctx;
@@ -88,7 +88,7 @@ class AudioService {
   public preloadScannerSounds(): void {
     try {
       this.getContext();
-    } catch {}
+    } catch { }
   }
 
   /**
@@ -128,7 +128,7 @@ class AudioService {
     if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
       try {
         localStorage.setItem('restopass_scanner_sound_enabled', String(enabled));
-      } catch {}
+      } catch { }
     }
   }
 
@@ -141,7 +141,7 @@ class AudioService {
     if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
       try {
         localStorage.setItem('restopass_scanner_volume', String(this.volume));
-      } catch {}
+      } catch { }
     }
   }
 
@@ -360,7 +360,7 @@ class AudioService {
         osc.start(start);
         osc.stop(start + 0.055);
       });
-    } catch {}
+    } catch { }
   }
 
   /**
@@ -396,7 +396,7 @@ class AudioService {
       gain2.connect(out);
       osc2.start(now + 0.075);
       osc2.stop(now + 0.165);
-    } catch {}
+    } catch { }
   }
 
   /**
@@ -433,7 +433,7 @@ class AudioService {
 
       osc.start(now);
       osc.stop(now + 0.28);
-    } catch {}
+    } catch { }
   }
 }
 

@@ -204,9 +204,7 @@ export default function App() {
       }
 
       const urlLower = fullUrl.toLowerCase();
-      if (urlLower.includes('scanner') || urlLower.includes('stand')) {
-        handleRoleChange('stand_staff', false);
-      } else if (urlLower.includes('super')) {
+      if (urlLower.includes('super') || urlLower.includes('platform')) {
         if (urlLower.includes('subtab=deployment')) {
           setSuperAdminSubTab('deployment');
           setActiveTab('deployment');
@@ -218,8 +216,19 @@ export default function App() {
           }
         }
         handleRoleChange('super_admin', false);
-      } else if (urlLower.includes('boss') || urlLower.includes('resto-admin') || (urlLower.includes('admin') && !urlLower.includes('super'))) {
+      } else if (
+        urlLower.includes('boss') ||
+        urlLower.includes('resto-admin') ||
+        urlLower.includes('management') ||
+        (urlLower.includes('admin') && !urlLower.includes('super'))
+      ) {
         handleRoleChange('restaurant_admin', false);
+      } else if (
+        urlLower.includes('scanner') ||
+        urlLower.includes('stand') ||
+        urlLower.includes('station')
+      ) {
+        handleRoleChange('stand_staff', false);
       } else if (
         targetSlug ||
         urlLower.includes('customer') ||
@@ -227,18 +236,23 @@ export default function App() {
         urlLower.includes('patron') ||
         urlLower.includes('card') ||
         urlLower.includes('portal') ||
-        urlLower.includes('cafeteria')
+        urlLower.includes('cafeteria') ||
+        urlLower.includes('student')
       ) {
         handleRoleChange('customer', false);
       }
     };
 
-    if (typeof window !== 'undefined' && window.location.hash) {
+    if (typeof window !== 'undefined') {
       handleHashChange();
     }
 
     window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
+    window.addEventListener('popstate', handleHashChange);
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange);
+      window.removeEventListener('popstate', handleHashChange);
+    };
   }, [handleRoleChange]);
 
   const handleLoginSuccess = (role: UserRole, userLabel: string) => {
