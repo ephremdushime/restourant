@@ -4,6 +4,7 @@ import { restoStore } from '../../store/restoStore';
 import { translations } from '../../services/i18n';
 import { sound } from '../../services/audioService';
 import { StudentSelfRegistrationView } from '../customer/StudentSelfRegistrationView';
+import { ScanningPersonBackground } from './ScanningPersonBackground';
 import {
   Shield,
   ShieldCheck,
@@ -520,8 +521,11 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   }
 
   return (
-    <div className="auth-portal-workspace min-h-[80vh] min-w-0 flex flex-col items-center justify-center p-3 sm:p-6">
-      <div className="w-full min-w-0 max-w-xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl p-4 sm:p-8 space-y-5 sm:space-y-6">
+    <div className="auth-portal-workspace relative min-h-[88vh] min-w-0 flex flex-col items-center justify-center p-3 sm:p-6 overflow-hidden">
+      {/* Animated Scanning Person & Terminal Background */}
+      <ScanningPersonBackground />
+
+      <div className="relative z-10 w-full min-w-0 max-w-xl bg-slate-900/90 backdrop-blur-2xl border border-slate-700/80 rounded-3xl shadow-[0_25px_60px_-15px_rgba(0,0,0,0.7)] p-4 sm:p-8 space-y-5 sm:space-y-6 ring-1 ring-white/10 transition-all duration-300">
         {/* Header Branding */}
         <div className="text-center space-y-2">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 mb-1 shadow-inner">

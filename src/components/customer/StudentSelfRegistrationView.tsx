@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { restoStore } from '../../store/restoStore';
+import { ScanningPersonBackground } from '../common/ScanningPersonBackground';
 import {
   UserCheck,
   CheckCircle2,
@@ -120,70 +121,74 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
   };
 
   return (
-    <div className="w-full max-w-2xl mx-auto py-4 px-3 sm:px-6">
-      {/* Back button */}
-      <div className="mb-4">
-        <button
-          type="button"
-          onClick={onBackToLogin}
-          className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-300 hover:text-white bg-slate-900/90 border border-slate-700 px-3.5 py-2 rounded-xl transition-colors cursor-pointer"
-        >
-          <ArrowLeft className="w-4 h-4 text-emerald-400" />
-          <span>Back to Sign In</span>
-        </button>
-      </div>
+    <div className="relative min-h-[88vh] flex flex-col items-center justify-center p-3 sm:p-6 overflow-hidden">
+      {/* Animated Scanning Person & Terminal Background */}
+      <ScanningPersonBackground />
 
-      {submittedResult ? (
-        /* SUCCESS CONFIRMATION VIEW */
-        <div className="bg-slate-900 border-2 border-emerald-500 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl text-center animate-in fade-in zoom-in-95">
-          <div className="w-18 h-18 rounded-full bg-emerald-500/20 border-2 border-emerald-400 text-emerald-400 flex items-center justify-center mx-auto shadow-lg">
-            <CheckCircle2 className="w-10 h-10" />
-          </div>
-
-          <div className="space-y-1.5">
-            <h2 className="text-2xl font-black text-white tracking-tight">
-              Registration Request Received!
-            </h2>
-            <div className="inline-flex items-center gap-2 rounded-xl bg-slate-950 border border-slate-700 px-4 py-2 mt-2">
-              <span className="text-xs text-slate-400">Member number</span>
-              <strong className="font-mono text-lg text-white">#{submittedResult.memberNo}</strong>
-            </div>
-            <p className="text-sm text-emerald-200">
-              Welcome, <strong>{submittedResult.name}</strong>! Your details have been saved. Please visit reception to complete payment confirmation.
-            </p>
-          </div>
-
-          {/* Next Steps Card */}
-          <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-left space-y-2 text-xs">
-            <div className="flex items-center gap-2 font-bold text-amber-300 text-sm">
-              <ShieldCheck className="w-4 h-4 shrink-0" />
-              <span>What Happens Next?</span>
-            </div>
-            <ol className="list-decimal list-inside space-y-1 text-slate-300 leading-relaxed">
-              <li>
-                <strong>Reception payment</strong>: Visit the reception desk, choose your meal package and pay. The receptionist records and confirms the payment.
-              </li>
-              <li>
-                <strong>PIN setup</strong>: After reception confirms payment, sign in with your registered phone number and set your private PIN. You will receive limited onboarding dashboard access while the boss reviews your registration.
-              </li>
-              <li>
-                <strong>Final approval and card</strong>: The Restaurant Boss approves your registration. Your full dashboard and physical card become available after approval.
-              </li>
-            </ol>
-          </div>
-
+      <div className="relative z-10 w-full max-w-2xl mx-auto py-4 px-1 sm:px-4">
+        {/* Back button */}
+        <div className="mb-4">
           <button
             type="button"
             onClick={onBackToLogin}
-            className="w-full py-3.5 px-6 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-sm transition-all shadow-lg cursor-pointer"
+            className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-300 hover:text-white bg-slate-900/90 backdrop-blur-md border border-slate-700/80 px-3.5 py-2 rounded-xl transition-all shadow-md hover:border-emerald-500 cursor-pointer"
           >
-            Go to Customer Sign In &rarr;
+            <ArrowLeft className="w-4 h-4 text-emerald-400" />
+            <span>Back to Sign In</span>
           </button>
         </div>
-      ) : (
-        /* REGISTRATION FORM */
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl">
-          {/* Header */}
+
+        {submittedResult ? (
+          /* SUCCESS CONFIRMATION VIEW */
+          <div className="bg-slate-900/90 backdrop-blur-2xl border-2 border-emerald-500 rounded-3xl p-6 sm:p-8 space-y-6 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.7)] text-center animate-in fade-in zoom-in-95 ring-1 ring-white/10">
+            <div className="w-18 h-18 rounded-full bg-emerald-500/20 border-2 border-emerald-400 text-emerald-400 flex items-center justify-center mx-auto shadow-lg">
+              <CheckCircle2 className="w-10 h-10" />
+            </div>
+
+            <div className="space-y-1.5">
+              <h2 className="text-2xl font-black text-white tracking-tight">
+                Registration Request Received!
+              </h2>
+              <div className="inline-flex items-center gap-2 rounded-xl bg-slate-950 border border-slate-700 px-4 py-2 mt-2">
+                <span className="text-xs text-slate-400">Member number</span>
+                <strong className="font-mono text-lg text-white">#{submittedResult.memberNo}</strong>
+              </div>
+              <p className="text-sm text-emerald-200">
+                Welcome, <strong>{submittedResult.name}</strong>! Your details have been saved. Please visit reception to complete payment confirmation.
+              </p>
+            </div>
+
+            {/* Next Steps Card */}
+            <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-left space-y-2 text-xs">
+              <div className="flex items-center gap-2 font-bold text-amber-300 text-sm">
+                <ShieldCheck className="w-4 h-4 shrink-0" />
+                <span>What Happens Next?</span>
+              </div>
+              <ol className="list-decimal list-inside space-y-1 text-slate-300 leading-relaxed">
+                <li>
+                  <strong>Reception payment</strong>: Visit the reception desk, choose your meal package and pay. The receptionist records and confirms the payment.
+                </li>
+                <li>
+                  <strong>PIN setup</strong>: After reception confirms payment, sign in with your registered phone number and set your private PIN. You will receive limited onboarding dashboard access while the boss reviews your registration.
+                </li>
+                <li>
+                  <strong>Final approval and card</strong>: The Restaurant Boss approves your registration. Your full dashboard and physical card become available after approval.
+                </li>
+              </ol>
+            </div>
+
+            <button
+              type="button"
+              onClick={onBackToLogin}
+              className="w-full py-3.5 px-6 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-sm transition-all shadow-lg cursor-pointer"
+            >
+              Go to Customer Sign In &rarr;
+            </button>
+          </div>
+        ) : (
+          /* REGISTRATION FORM */
+          <div className="bg-slate-900/90 backdrop-blur-2xl border border-slate-700/80 rounded-3xl p-6 sm:p-8 space-y-6 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.7)] ring-1 ring-white/10 transition-all duration-300">
+            {/* Header */}
           <div className="border-b border-slate-800 pb-4">
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0">
@@ -341,6 +346,7 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
           </form>
         </div>
       )}
+      </div>
     </div>
   );
 };
