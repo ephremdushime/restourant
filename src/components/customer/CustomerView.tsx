@@ -23,11 +23,9 @@ import {
 import { CustomerHomePage } from './CustomerHomePage';
 import { CustomerCardPage } from './CustomerCardPage';
 import { CustomerActivityPage, CustomerActivityFilter } from './CustomerActivityPage';
-import {
-  CustomerNotificationsPage,
-  CustomerNotificationFilter,
-} from './CustomerNotificationsPage';
+import { CustomerNotificationsPage, CustomerNotificationFilter } from './CustomerNotificationsPage';
 import { CustomerProfilePage } from './CustomerProfilePage';
+import { CustomerSubscriptionPage } from './CustomerSubscriptionPage';
 
 interface CustomerViewProps {
   language: Language;
@@ -136,6 +134,7 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
 
   // Security PIN & Instant Off-Screen Auto-Lock
   const [isDashboardLocked, setIsDashboardLocked] = useState(false);
+  const [showGatedPaymentFlow, setShowGatedPaymentFlow] = useState(false);
   const [showPinSetupModal, setShowPinSetupModal] = useState(
     Boolean(customer && !isDashboardGated && !customer.hasCustomPin)
   );
@@ -599,12 +598,23 @@ export const CustomerView: React.FC<CustomerViewProps> = ({
           <div className="space-y-3.5 pt-3 border-t border-slate-800">
             <button
               type="button"
-              disabled
-              className="w-full py-3.5 px-4 rounded-xl bg-amber-500 text-slate-950 font-black text-sm flex items-center justify-center gap-2 shadow-lg opacity-50 cursor-not-allowed"
+              onClick={() => setShowGatedPaymentFlow(!showGatedPaymentFlow)}
+              className="w-full py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg transition-colors cursor-pointer"
             >
               <Smartphone className="w-5 h-5" />
-              <span>Mobile Money Payments Coming Soon</span>
+              <span>{showGatedPaymentFlow ? 'Hide MTN MoMo Payment' : 'Pay with MTN MoMo'}</span>
             </button>
+            {showGatedPaymentFlow && (
+              <div className="pt-2">
+                <CustomerSubscriptionPage
+                  customer={customer}
+                  subscriptionSettings={subSettings}
+                  subscription={customerSub}
+                  monthlyPriceRwf={restoStore.getStudentSubscriptionPrice(customer.restaurantCode)}
+                  paymentHistory={state.studentSubscriptionPayments || []}
+                />
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -14,6 +14,8 @@ export const RestaurantSaasBillingPanel: React.FC<{ restaurantCode: string; rest
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [isPolling, setIsPolling] = useState(false);
+  const [pollSecondsRemaining, setPollSecondsRemaining] = useState(60);
 
   const authHeaders = useCallback(() => {
     const token = restoStore.getAuthToken();
@@ -29,6 +31,39 @@ export const RestaurantSaasBillingPanel: React.FC<{ restaurantCode: string; rest
 
   useEffect(() => { refresh().catch((e) => setError(e.message)); }, [refresh]);
 
+  const verify = useCallback(async (id: string, silent = false) => {
+    if (!silent) setBusy(true);
+    setError('');
+    try {
+      const response = await fetch('/api/restaurant-saas/payment/' + encodeURIComponent(id) + '/verify', {
+        method: 'POST', headers: authHeaders(), body: JSON.stringify({}),
+      });
+      const body = await response.json();
+      if (!response.ok || !body.success) throw new Error(body.error || 'Payment verification failed.');
+      if (body.status === 'successful') {
+        setIsPolling(false);
+        setMessage('Payment verified. Your calendar-month RestoPass subscription is active.');
+        setPaymentId('');
+        await restoStore.pullStateFromServer();
+      } else if (body.status === 'review_required') {
+        setIsPolling(false);
+        setMessage('MTN reports a successful transfer, but the payment details do not match. No access was activated; contact Bestie Companies Ltd for reconciliation.');
+      } else if (body.status === 'failed') {
+        setIsPolling(false);
+        setError('MTN reports this payment failed. Please try again.');
+      } else {
+        if (!silent) {
+          setMessage('MTN has not confirmed a successful payment yet. No access time has been granted.');
+        }
+      }
+      await refresh();
+    } catch (e: any) {
+      if (!silent) setError(e.message || 'Verification failed.');
+    } finally {
+      if (!silent) setBusy(false);
+    }
+  }, [authHeaders, refresh]);
+
   const initiate = async () => {
     setBusy(true); setError(''); setMessage('');
     try {
@@ -39,36 +74,44 @@ export const RestaurantSaasBillingPanel: React.FC<{ restaurantCode: string; rest
       });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || 'Could not initiate MTN payment.');
-      if (body.payment?.id) setPaymentId(body.payment.id);
-      if (body.paymentId) setPaymentId(body.paymentId);
+      const pid = body.payment?.id || body.paymentId;
+      if (pid) {
+        setPaymentId(pid);
+        setIsPolling(true);
+      }
       setMessage(body.message || 'Payment request sent. Approve the MTN MoMo prompt.');
       await refresh();
     } catch (e: any) {
       setError(e.message || 'Payment initiation failed.');
-      // A network timeout may happen after MTN accepted the request. Refresh
-      // history so the unresolved attempt can be checked instead of duplicated.
       await refresh().catch(() => undefined);
     }
     finally { setBusy(false); }
   };
 
-  const verify = async (id: string) => {
-    setBusy(true); setError(''); setMessage('');
-    try {
-      const response = await fetch('/api/restaurant-saas/payment/' + encodeURIComponent(id) + '/verify', {
-        method: 'POST', headers: authHeaders(), body: JSON.stringify({}),
+  useEffect(() => {
+    if (!isPolling || !paymentId) return;
+    setPollSecondsRemaining(60);
+
+    const countdown = setInterval(() => {
+      setPollSecondsRemaining((prev) => {
+        if (prev <= 1) {
+          setIsPolling(false);
+          setMessage('Auto-check window closed. You can tap "Verify payment status" whenever you approve the prompt on your phone.');
+          return 0;
+        }
+        return prev - 1;
       });
-      const body = await response.json();
-      if (!response.ok || !body.success) throw new Error(body.error || 'Payment verification failed.');
-      setMessage(body.status === 'successful' ? 'Payment verified. Your calendar-month RestoPass subscription is active.' : body.status === 'review_required' ? 'MTN reports a successful transfer, but the payment details do not match. No access was activated; contact Bestie Companies Ltd for reconciliation.' : 'MTN has not confirmed a successful payment yet. No access time has been granted.');
-      if (body.status === 'successful') {
-        setPaymentId('');
-        await restoStore.pullStateFromServer();
-      }
-      await refresh();
-    } catch (e: any) { setError(e.message || 'Verification failed.'); }
-    finally { setBusy(false); }
-  };
+    }, 1000);
+
+    const poller = setInterval(() => {
+      void verify(paymentId, true);
+    }, 3000);
+
+    return () => {
+      clearInterval(countdown);
+      clearInterval(poller);
+    };
+  }, [isPolling, paymentId, verify]);
 
   const sub = snapshot.subscription;
   return (
@@ -108,9 +151,45 @@ export const RestaurantSaasBillingPanel: React.FC<{ restaurantCode: string; rest
         <p className="text-xs text-slate-400">Total due: <strong>{((Number(sub?.price_rwf) || 0) * months).toLocaleString()} RWF</strong></p>
         <label className="block text-xs text-slate-400">MTN Rwanda phone number</label>
         <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+250 78X XXX XXX" className="w-full rounded-xl bg-slate-950 border border-slate-700 px-4 py-3 text-white outline-none focus:border-emerald-500" />
-        <button disabled={busy || !phone.trim() || sub?.status === 'complimentary'} onClick={initiate} className="w-full sm:w-auto rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-5 py-3 font-bold text-white">{busy ? 'Please wait…' : 'Request MTN MoMo payment'}</button>
+        <div className="flex flex-wrap items-center gap-3">
+          <button disabled={busy || isPolling || !phone.trim() || sub?.status === 'complimentary'} onClick={initiate} className="w-full sm:w-auto rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-5 py-3 font-bold text-white">
+            {busy ? 'Please wait…' : isPolling ? 'Prompt Sent' : 'Request MTN MoMo payment'}
+          </button>
+          {paymentId && !isPolling && (
+            <button disabled={busy} onClick={() => verify(paymentId)} className="w-full sm:w-auto rounded-xl border border-emerald-600 text-emerald-300 hover:bg-emerald-950 disabled:opacity-50 px-5 py-3 font-bold">
+              Verify payment status
+            </button>
+          )}
+        </div>
+
+        {isPolling && (
+          <div className="rounded-2xl bg-amber-500/10 border border-amber-500/30 p-4 space-y-3 animate-in fade-in">
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 rounded-full border-2 border-amber-400 border-t-transparent animate-spin shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <div className="text-sm font-bold text-white flex items-center gap-2">
+                  <span>MTN MoMo prompt sent to {phone}</span>
+                  <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-xs font-mono">
+                    {pollSecondsRemaining}s
+                  </span>
+                </div>
+                <p className="text-xs text-amber-200/90 leading-relaxed">
+                  Please approve the payment prompt on your phone for <strong>{((Number(sub?.price_rwf) || 0) * months).toLocaleString()} RWF</strong>. Access activates automatically once MTN confirms the transaction.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-800">
+              <button type="button" onClick={() => void verify(paymentId)} className="text-emerald-400 hover:text-emerald-300 font-semibold">
+                Check status now
+              </button>
+              <button type="button" onClick={() => setIsPolling(false)} className="text-slate-400 hover:text-slate-200">
+                Stop auto-checking
+              </button>
+            </div>
+          </div>
+        )}
+
         <p className="text-xs text-slate-500">You must approve the payment prompt on your phone. An accepted request is not a successful payment. Subscription access changes only after server verification.</p>
-        {paymentId && <button disabled={busy} onClick={() => verify(paymentId)} className="w-full sm:w-auto rounded-xl border border-emerald-600 text-emerald-300 hover:bg-emerald-950 disabled:opacity-50 px-5 py-3 font-bold">Verify payment status</button>}
         {message && <p className="text-sm text-emerald-300">{message}</p>}
         {error && <p role="alert" className="text-sm text-rose-300">{error}</p>}
       </div>}

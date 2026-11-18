@@ -1,4 +1,4 @@
-﻿import React, { useMemo, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Customer,
   CustomerSubscription,
@@ -6,7 +6,7 @@ import {
   StudentSubscriptionSettings,
 } from '../../types';
 import { restoStore } from '../../store/restoStore';
-import { Smartphone, CheckCircle2, Clock, Receipt, ShieldCheck, Gift } from 'lucide-react';
+import { Smartphone, CheckCircle2, Clock, Receipt, ShieldCheck, Gift, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 
 interface CustomerSubscriptionPageProps {
   customer: Customer;
@@ -29,6 +29,8 @@ export const CustomerSubscriptionPage: React.FC<CustomerSubscriptionPageProps> =
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [pendingReference, setPendingReference] = useState('');
+  const [isPolling, setIsPolling] = useState(false);
+  const [pollSecondsRemaining, setPollSecondsRemaining] = useState(60);
 
   const scopedPayments = paymentHistory.filter(
     (p) => p.customerId === customer.id && p.restaurantCode === customer.restaurantCode
@@ -52,7 +54,46 @@ export const CustomerSubscriptionPage: React.FC<CustomerSubscriptionPageProps> =
     : subscription?.currentPeriodEnd || customer.freeAccessExpiresAt || subscription?.gracePeriodEnd || null;
   const totalAmount = monthlyPriceRwf * months;
   const token = restoStore.getAuthToken();
-  const authHeaders = { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) };
+  const authHeaders = useMemo(() => ({
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: 'Bearer ' + token } : {}),
+  }), [token]);
+
+  const verifyPayment = useCallback(async (reference = pendingReference, silent = false) => {
+    if (!reference) return;
+    if (!silent) setBusy(true);
+    setError('');
+    try {
+      const response = await fetch('/api/customer/subscription/payments/' + encodeURIComponent(reference) + '/status', {
+        headers: authHeaders,
+        cache: 'no-store',
+      });
+      const body = await response.json();
+      if (!response.ok || !body.success) throw new Error(body.error || 'Could not verify payment status.');
+      if (body.status === 'SUCCESSFUL') {
+        setIsPolling(false);
+        setPendingReference('');
+        setMessage('Payment verified. Your dashboard subscription has been activated.');
+        await restoStore.pullStateFromServer();
+      } else if (body.status === 'REVIEW_REQUIRED') {
+        setIsPolling(false);
+        setMessage('MTN reports a payment, but details need reconciliation. No access has been activated yet.');
+      } else if (body.status === 'FAILED') {
+        setIsPolling(false);
+        setPendingReference('');
+        setError('MTN reports that this payment failed. You can start a new payment.');
+      } else {
+        if (!silent) {
+          setMessage('MTN has not confirmed payment yet. Please wait and check again.');
+        }
+      }
+      await restoStore.pullStateFromServer();
+    } catch (e: any) {
+      if (!silent) setError(e?.message || 'Payment verification failed.');
+    } finally {
+      if (!silent) setBusy(false);
+    }
+  }, [pendingReference, authHeaders]);
 
   const startPayment = async () => {
     setBusy(true); setError(''); setMessage('');
@@ -66,40 +107,40 @@ export const CustomerSubscriptionPage: React.FC<CustomerSubscriptionPageProps> =
       const body = await response.json();
       if (!response.ok || !body.success) throw new Error(body.error || 'Could not initiate MTN MoMo payment.');
       const ref = body.internalReference || body.payment?.internalReference || body.paymentAttempt?.internalReference;
-      if (ref) setPendingReference(ref);
+      if (ref) {
+        setPendingReference(ref);
+        setIsPolling(true);
+      }
       setMessage(body.message || 'Approve the MTN MoMo prompt. Access activates after provider verification.');
     } catch (e: any) {
       setError(e?.message || 'Payment request failed.');
     } finally { setBusy(false); }
   };
 
-  const verifyPayment = async (reference = pendingReference) => {
-    if (!reference) return;
-    setBusy(true); setError(''); setMessage('');
-    try {
-      const response = await fetch('/api/customer/subscription/payments/' + encodeURIComponent(reference) + '/status', {
-        headers: authHeaders,
-        cache: 'no-store',
+  useEffect(() => {
+    if (!isPolling || !pendingReference) return;
+    setPollSecondsRemaining(60);
+
+    const countdownTimer = setInterval(() => {
+      setPollSecondsRemaining((prev) => {
+        if (prev <= 1) {
+          setIsPolling(false);
+          setMessage('Auto-check window closed. You can tap "Verify payment status" whenever you approve the prompt on your phone.');
+          return 0;
+        }
+        return prev - 1;
       });
-      const body = await response.json();
-      if (!response.ok || !body.success) throw new Error(body.error || 'Could not verify payment status.');
-      if (body.status === 'SUCCESSFUL') {
-        setMessage('Payment verified. Your dashboard subscription has been activated.');
-        setPendingReference('');
-        await restoStore.pullStateFromServer();
-      } else if (body.status === 'REVIEW_REQUIRED') {
-        setMessage('MTN reports a payment, but details need reconciliation. No access has been activated yet.');
-      } else if (body.status === 'FAILED') {
-        setError('MTN reports that this payment failed. You can start a new payment.');
-        setPendingReference('');
-      } else {
-        setMessage('MTN has not confirmed payment yet. Please wait and check again.');
-      }
-      await restoStore.pullStateFromServer();
-    } catch (e: any) {
-      setError(e?.message || 'Payment verification failed.');
-    } finally { setBusy(false); }
-  };
+    }, 1000);
+
+    const statusPoller = setInterval(() => {
+      void verifyPayment(pendingReference, true);
+    }, 3000);
+
+    return () => {
+      clearInterval(countdownTimer);
+      clearInterval(statusPoller);
+    };
+  }, [isPolling, pendingReference, verifyPayment]);
 
   return (
     <div className="space-y-4 animate-in fade-in duration-150">
@@ -184,16 +225,58 @@ export const CustomerSubscriptionPage: React.FC<CustomerSubscriptionPageProps> =
           <label className="block text-xs text-slate-400">MTN Rwanda phone number</label>
           <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+250 78X XXX XXX" className="w-full rounded-xl bg-slate-950 border border-slate-700 px-4 py-3 text-white outline-none focus:border-emerald-500" />
           <div className="text-sm text-slate-200">Total due: <strong className="text-white">{totalAmount.toLocaleString()} RWF</strong></div>
-          <button disabled={busy || !phone.trim()} onClick={startPayment} className="w-full sm:w-auto rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-5 py-3 font-bold text-white">
-            {busy ? 'Please wait…' : 'Request MTN MoMo payment'}
-          </button>
-          {pendingReference && (
-            <button disabled={busy} onClick={() => verifyPayment()} className="w-full sm:w-auto rounded-xl border border-emerald-600 text-emerald-300 hover:bg-emerald-950 disabled:opacity-50 px-5 py-3 font-bold">
-              Verify payment status
+          <div className="flex flex-wrap items-center gap-3">
+            <button disabled={busy || isPolling || !phone.trim()} onClick={startPayment} className="w-full sm:w-auto rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-5 py-3 font-bold text-white flex items-center justify-center gap-2">
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Smartphone className="w-4 h-4" />}
+              <span>{busy ? 'Dispatching prompt…' : isPolling ? 'Prompt Sent' : 'Request MTN MoMo payment'}</span>
             </button>
+            {pendingReference && !isPolling && (
+              <button disabled={busy} onClick={() => void verifyPayment(pendingReference)} className="w-full sm:w-auto rounded-xl border border-emerald-600 text-emerald-300 hover:bg-emerald-950 disabled:opacity-50 px-5 py-3 font-bold flex items-center justify-center gap-2">
+                <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} />
+                <span>Verify payment status</span>
+              </button>
+            )}
+          </div>
+
+          {isPolling && (
+            <div className="rounded-2xl bg-amber-500/10 border border-amber-500/30 p-4 space-y-3 animate-in fade-in">
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-full border-2 border-amber-400 border-t-transparent animate-spin shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <div className="text-sm font-bold text-white flex items-center gap-2">
+                    <span>MTN MoMo prompt sent to {phone}</span>
+                    <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-xs font-mono">
+                      {pollSecondsRemaining}s
+                    </span>
+                  </div>
+                  <p className="text-xs text-amber-200/90 leading-relaxed">
+                    Please check your phone screen, review the prompt for <strong>{totalAmount.toLocaleString()} RWF</strong>, enter your PIN and confirm. This screen updates automatically upon approval.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-800">
+                <button type="button" onClick={() => void verifyPayment(pendingReference)} className="text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1">
+                  <RefreshCw className="w-3.5 h-3.5" /> Check status now
+                </button>
+                <button type="button" onClick={() => setIsPolling(false)} className="text-slate-400 hover:text-slate-200">
+                  Stop auto-checking
+                </button>
+              </div>
+            </div>
           )}
-          {message && <p className="text-sm text-emerald-300">{message}</p>}
-          {error && <p role="alert" className="text-sm text-rose-300">{error}</p>}
+
+          {message && (
+            <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-sm flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+              <span>{message}</span>
+            </div>
+          )}
+          {error && (
+            <div role="alert" className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/40 text-rose-300 text-sm flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+              <span>{error}</span>
+            </div>
+          )}
           <p className="text-xs text-slate-500">A payment request is not proof of payment. Your subscription activates only after RestoPass verifies the transaction directly with MTN.</p>
         </div>
       )}

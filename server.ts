@@ -4888,27 +4888,40 @@ app.post(
 );
 
 
+const serverMtnTokenCache = new Map<string, { token: string; expiresAt: number }>();
+
+function clearServerMtnTokenCache(): void {
+  serverMtnTokenCache.clear();
+}
+
 function getSaasMtnConfig() {
   if (process.env.MTN_COLLECTIONS_ENABLED === 'false') return null;
-  const configuredEnvironment = process.env.MTN_MOMO_TARGET_ENVIRONMENT;
+  const configuredEnvironment = process.env.MTN_MOMO_TARGET_ENVIRONMENT || process.env.MOMO_TARGET_ENV || process.env.MTN_MOMO_TARGET_ENV;
   if (configuredEnvironment !== 'sandbox' && configuredEnvironment !== 'production') return null;
   const environment = configuredEnvironment;
   if (process.env.RESTOPASS_SAAS_MTN_ENABLED !== 'true' ||
     (environment === 'sandbox' && process.env.NODE_ENV === 'production' && process.env.RESTOPASS_SAAS_MTN_SANDBOX_APPROVED !== 'true') ||
     (environment === 'production' && (process.env.NODE_ENV !== 'production' || process.env.RESTOPASS_SAAS_MTN_PRODUCTION_APPROVED !== 'true'))) return null;
-  const apiUser = process.env.MTN_MOMO_COLLECTION_API_USER || '';
-  const apiKey = process.env.MTN_MOMO_COLLECTION_API_KEY || '';
-  const subscriptionKey = process.env.MTN_MOMO_COLLECTION_SUBSCRIPTION_KEY || '';
-  const targetEnvironment = environment === 'production' ? (process.env.MTN_MOMO_PRODUCTION_TARGET || '') : 'sandbox';
+  const apiUser = process.env.MTN_MOMO_COLLECTION_API_USER || process.env.MOMO_COLLECTION_API_USER || process.env.MOMO_API_USER || '';
+  const apiKey = process.env.MTN_MOMO_COLLECTION_API_KEY || process.env.MOMO_COLLECTION_API_KEY || process.env.MOMO_API_KEY || '';
+  const subscriptionKey = process.env.MTN_MOMO_COLLECTION_SUBSCRIPTION_KEY || process.env.MOMO_COLLECTION_SUBSCRIPTION_KEY || process.env.MTN_MOMO_PRIMARY_KEY || process.env.MOMO_SUBSCRIPTION_KEY || '';
+  const targetEnvironment = environment === 'production' ? (process.env.MTN_MOMO_PRODUCTION_TARGET || process.env.MOMO_PRODUCTION_TARGET || 'mtnrwanda') : 'sandbox';
   if (!apiUser || !apiKey || !subscriptionKey || !targetEnvironment) return null;
+  const customBaseUrl = process.env.MTN_MOMO_BASE_URL || process.env.MOMO_BASE_URL;
   return {
     environment, targetEnvironment,
-    baseUrl: environment === 'production' ? 'https://momodeveloper.mtn.com' : 'https://sandbox.momodeveloper.mtn.com',
+    baseUrl: customBaseUrl || (environment === 'production' ? (process.env.MTN_MOMO_PRODUCTION_URL || 'https://momodeveloper.mtn.com') : 'https://sandbox.momodeveloper.mtn.com'),
     apiUser, apiKey, subscriptionKey
   };
 }
 
 async function getSaasMtnAccessToken(config: NonNullable<ReturnType<typeof getSaasMtnConfig>>): Promise<string> {
+  const cacheKey = `${config.environment}:${config.apiUser}:${config.subscriptionKey}`;
+  const cached = serverMtnTokenCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now() + 60_000) {
+    return cached.token;
+  }
+
   const credentials = Buffer.from(config.apiUser + ':' + config.apiKey).toString('base64');
   const response = await fetch(config.baseUrl + '/collection/token/', {
     method: 'POST', headers: {
@@ -4916,9 +4929,20 @@ async function getSaasMtnAccessToken(config: NonNullable<ReturnType<typeof getSa
       'X-Target-Environment': config.targetEnvironment,
     }, signal: AbortSignal.timeout(10000)
   });
-  if (!response.ok) throw new Error('MTN token request failed: HTTP ' + response.status);
+  if (!response.ok) {
+    serverMtnTokenCache.delete(cacheKey);
+    throw new Error('MTN token request failed: HTTP ' + response.status);
+  }
   const body: any = await response.json();
-  if (typeof body.access_token !== 'string' || !body.access_token) throw new Error('MTN access token missing');
+  if (typeof body.access_token !== 'string' || !body.access_token) {
+    serverMtnTokenCache.delete(cacheKey);
+    throw new Error('MTN access token missing');
+  }
+  const expiresIn = Number.isFinite(Number(body.expires_in)) && Number(body.expires_in) > 0 ? Number(body.expires_in) : 3600;
+  serverMtnTokenCache.set(cacheKey, {
+    token: body.access_token,
+    expiresAt: Date.now() + expiresIn * 1000,
+  });
   return body.access_token;
 }
 function normalizeSaasPayer(value: unknown): string {
@@ -5260,7 +5284,15 @@ app.post('/api/restaurant-saas/payment/:paymentId/verify', apiRateLimiter, requi
         Authorization: 'Bearer ' + token, 'X-Target-Environment': config.targetEnvironment, 'Ocp-Apim-Subscription-Key': config.subscriptionKey
       }, signal: AbortSignal.timeout(10000)
     });
-    if (!response.ok) return res.status(502).json({ success: false, error: 'MTN status unavailable; no entitlement changed.' });
+    if (!response.ok) {
+      if (response.status === 401) {
+        clearServerMtnTokenCache();
+      }
+      if (response.status === 404) {
+        return res.json({ success: true, status: 'provider_pending', message: 'Payment request dispatched. Awaiting confirmation from MTN.' });
+      }
+      return res.status(502).json({ success: false, error: 'MTN status unavailable; no entitlement changed.' });
+    }
     provider = await response.json();
     const verified = validateSaasPaymentMatch({
       providerStatus: provider?.status,
@@ -6034,7 +6066,15 @@ app.get('/api/customer/subscription/payments/:internalReference/status', apiRate
         signal: AbortSignal.timeout(10000),
       }
     );
-    if (!response.ok) return res.status(502).json({ success: false, error: 'MTN status unavailable. No subscription changed.' });
+    if (!response.ok) {
+      if (response.status === 401) {
+        clearServerMtnTokenCache();
+      }
+      if (response.status === 404) {
+        return res.json({ success: true, status: 'PENDING', payment, message: 'MTN request dispatched; awaiting network confirmation.' });
+      }
+      return res.status(502).json({ success: false, error: 'MTN status unavailable. No subscription changed.' });
+    }
     const provider: any = await response.json();
     const providerStatus = String(provider?.status || 'PENDING').toUpperCase();
     if (providerStatus === 'FAILED' || providerStatus === 'REJECTED' || providerStatus === 'TIMEOUT' || providerStatus === 'EXPIRED') {
@@ -7679,4 +7719,7 @@ export {
   getRestaurantAdminAuthVersion,
   isCurrentRestaurantAdminSession,
   canAccessCustomerPhoto,
+  getSaasMtnConfig,
+  getSaasMtnAccessToken,
+  clearServerMtnTokenCache,
 };

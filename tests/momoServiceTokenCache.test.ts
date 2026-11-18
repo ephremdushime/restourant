@@ -70,3 +70,62 @@ test('MTN token cache refreshes expired tokens and clears tokens after credentia
     Date.now = originalNow;
   }
 });
+
+test('server getSaasMtnAccessToken caches tokens and re-authenticates when expired or invalidated', async () => {
+  const { getSaasMtnAccessToken, clearServerMtnTokenCache } = await import('../server');
+  const originalFetch = globalThis.fetch;
+  const originalNow = Date.now;
+  let now = 1_800_000_000_000;
+  let tokenCalls = 0;
+
+  Date.now = () => now;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith('/collection/token/')) {
+      tokenCalls += 1;
+      return new Response(JSON.stringify({
+        access_token: `server-token-${tokenCalls}`,
+        token_type: 'Bearer',
+        expires_in: 3600,
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`Unexpected test URL: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    clearServerMtnTokenCache();
+    const config = {
+      environment: 'sandbox' as const,
+      targetEnvironment: 'sandbox',
+      baseUrl: 'https://sandbox.momodeveloper.mtn.com',
+      apiUser: 'test-user-srv',
+      apiKey: 'test-key-srv',
+      subscriptionKey: 'test-sub-srv',
+    };
+
+    // First call fetches from MTN
+    const t1 = await getSaasMtnAccessToken(config);
+    assert.equal(t1, 'server-token-1');
+    assert.equal(tokenCalls, 1);
+
+    // Second call within lifetime reuses cached token (no network call)
+    const t2 = await getSaasMtnAccessToken(config);
+    assert.equal(t2, 'server-token-1');
+    assert.equal(tokenCalls, 1);
+
+    // Expire token (after 3600 seconds)
+    now += 3600 * 1000;
+    const t3 = await getSaasMtnAccessToken(config);
+    assert.equal(t3, 'server-token-2');
+    assert.equal(tokenCalls, 2);
+
+    // Manual invalidation triggers immediate re-fetch
+    clearServerMtnTokenCache();
+    const t4 = await getSaasMtnAccessToken(config);
+    assert.equal(t4, 'server-token-3');
+    assert.equal(tokenCalls, 3);
+  } finally {
+    globalThis.fetch = originalFetch;
+    Date.now = originalNow;
+  }
+});
