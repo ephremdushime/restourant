@@ -1,15 +1,20 @@
 import React, { useState } from 'react';
 import { restoStore } from '../../store/restoStore';
-import { ScanningPersonBackground } from '../common/ScanningPersonBackground';
+import { ScannerHeroStage } from '../common/ScannerHeroStage';
 import {
-  UserCheck,
-  CheckCircle2,
-  AlertTriangle,
+  User,
+  Phone,
+  CreditCard,
   Building2,
   GraduationCap,
   ArrowRight,
   ShieldCheck,
   ArrowLeft,
+  CheckCircle2,
+  AlertTriangle,
+  Sparkles,
+  School,
+  Calendar,
 } from 'lucide-react';
 
 interface StudentSelfRegistrationViewProps {
@@ -49,12 +54,13 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
   });
 
   const branches = restoStore.getRestaurantBranches(selectedRestoCode);
+  const matchedFacility = state.restaurants.find((r) => r.code === selectedRestoCode) || state.restaurants[0];
 
   // Student Identity Fields
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [regNumber, setRegNumber] = useState('');
-  const [institution, setInstitution] = useState('University / College');
+  const [institution, setInstitution] = useState('University Campus');
   const [programme, setProgramme] = useState('');
   const [year, setYear] = useState(1);
   const [branchId, setBranchId] = useState(branches[0]?.id || 'br_rw01_main');
@@ -83,10 +89,22 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
     const trimmedInstitution = institution.trim();
     const trimmedProgramme = programme.trim();
 
-    if (trimmedName.length < 2) return setError('Please enter your full official name (at least 2 characters).');
-    if (!trimmedPhone || !isValidPhoneNumber(trimmedPhone)) return setError('Please enter a valid phone number (e.g. 0788 123 456 or +250 788 123 456).');
-    if (!trimmedRegNo) return setError('Please enter your Student ID / Registration Number.');
-    if (!trimmedProgramme) return setError('Please enter your Class, Faculty, or Programme.');
+    if (trimmedName.length < 2) {
+      setError('Please enter your full official name (minimum 2 characters).');
+      return;
+    }
+    if (!trimmedPhone || !isValidPhoneNumber(trimmedPhone)) {
+      setError('Please enter a valid phone number (e.g. 0788 123 456 or +250 788 123 456).');
+      return;
+    }
+    if (!trimmedRegNo) {
+      setError('Please enter your Student ID or Registration Number.');
+      return;
+    }
+    if (!trimmedProgramme) {
+      setError('Please enter your Class, Faculty, or Department.');
+      return;
+    }
     const curBranch = branches.find((b) => b.id === branchId) || branches[0];
 
     setIsSubmitting(true);
@@ -121,233 +139,276 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
   };
 
   return (
-    <div className="relative min-h-[88vh] flex flex-col items-center justify-center p-3 sm:p-6 overflow-hidden">
-      {/* Animated Scanning Person & Terminal Background */}
-      <ScanningPersonBackground />
-
-      <div className="relative z-10 w-full max-w-2xl mx-auto py-4 px-1 sm:px-4">
-        {/* Back button */}
-        <div className="mb-4">
-          <button
-            type="button"
-            onClick={onBackToLogin}
-            className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-300 hover:text-white bg-slate-900/90 backdrop-blur-md border border-slate-700/80 px-3.5 py-2 rounded-xl transition-all shadow-md hover:border-emerald-500 cursor-pointer"
-          >
-            <ArrowLeft className="w-4 h-4 text-emerald-400" />
-            <span>Back to Sign In</span>
-          </button>
+    <div className="relative min-h-[90vh] w-full flex items-center justify-center p-3 sm:p-6 lg:p-8">
+      {/* Container with Modern Dual-Column Showcase */}
+      <div className="relative z-10 w-full max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-stretch">
+        {/* Left Side: Prominent Scanner Hero Stage */}
+        <div className="lg:col-span-5 flex flex-col">
+          <ScannerHeroStage
+            title="Fast Student Meal Pass"
+            subtitle="Register online, choose your meal pack at reception, and tap your phone or physical PVC card to dine in under 0.3s."
+            facilityName={matchedFacility?.name || 'Kigali Campus Resto'}
+            facilityCode={selectedRestoCode}
+          />
         </div>
 
-        {submittedResult ? (
-          /* SUCCESS CONFIRMATION VIEW */
-          <div className="bg-slate-900/90 backdrop-blur-2xl border-2 border-emerald-500 rounded-3xl p-6 sm:p-8 space-y-6 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.7)] text-center animate-in fade-in zoom-in-95 ring-1 ring-white/10">
-            <div className="w-18 h-18 rounded-full bg-emerald-500/20 border-2 border-emerald-400 text-emerald-400 flex items-center justify-center mx-auto shadow-lg">
-              <CheckCircle2 className="w-10 h-10" />
-            </div>
-
-            <div className="space-y-1.5">
-              <h2 className="text-2xl font-black text-white tracking-tight">
-                Registration Request Received!
-              </h2>
-              <div className="inline-flex items-center gap-2 rounded-xl bg-slate-950 border border-slate-700 px-4 py-2 mt-2">
-                <span className="text-xs text-slate-400">Member number</span>
-                <strong className="font-mono text-lg text-white">#{submittedResult.memberNo}</strong>
+        {/* Right Side: Form or Success Confirmation Card */}
+        <div className="lg:col-span-7 flex flex-col justify-center">
+          {submittedResult ? (
+            /* SUCCESS CONFIRMATION VIEW */
+            <div className="bg-slate-900/95 backdrop-blur-2xl border-2 border-emerald-500/80 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl text-center ring-1 ring-white/10 animate-in fade-in zoom-in-95">
+              <div className="w-16 h-16 rounded-2xl bg-emerald-500/20 border border-emerald-400 text-emerald-400 flex items-center justify-center mx-auto shadow-inner">
+                <CheckCircle2 className="w-9 h-9" />
               </div>
-              <p className="text-sm text-emerald-200">
-                Welcome, <strong>{submittedResult.name}</strong>! Your details have been saved. Please visit reception to complete payment confirmation.
-              </p>
-            </div>
 
-            {/* Next Steps Card */}
-            <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-left space-y-2 text-xs">
-              <div className="flex items-center gap-2 font-bold text-amber-300 text-sm">
-                <ShieldCheck className="w-4 h-4 shrink-0" />
-                <span>What Happens Next?</span>
-              </div>
-              <ol className="list-decimal list-inside space-y-1 text-slate-300 leading-relaxed">
-                <li>
-                  <strong>Reception payment</strong>: Visit the reception desk, choose your meal package and pay. The receptionist records and confirms the payment.
-                </li>
-                <li>
-                  <strong>PIN setup</strong>: After reception confirms payment, sign in with your registered phone number and set your private PIN. You will receive limited onboarding dashboard access while the boss reviews your registration.
-                </li>
-                <li>
-                  <strong>Final approval and card</strong>: The Restaurant Boss approves your registration. Your full dashboard and physical card become available after approval.
-                </li>
-              </ol>
-            </div>
-
-            <button
-              type="button"
-              onClick={onBackToLogin}
-              className="w-full py-3.5 px-6 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-sm transition-all shadow-lg cursor-pointer"
-            >
-              Go to Customer Sign In &rarr;
-            </button>
-          </div>
-        ) : (
-          /* REGISTRATION FORM */
-          <div className="bg-slate-900/90 backdrop-blur-2xl border border-slate-700/80 rounded-3xl p-6 sm:p-8 space-y-6 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.7)] ring-1 ring-white/10 transition-all duration-300">
-            {/* Header */}
-          <div className="border-b border-slate-800 pb-4">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0">
-                <GraduationCap className="w-6 h-6" />
-              </div>
-              <div>
-                <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-                  Student Meal Pass Registration
-                </h1>
-                <p className="text-xs sm:text-sm text-slate-300 mt-0.5">
-                  Register now, then visit reception to choose and pay for your meal package.
+              <div className="space-y-2">
+                <h2 className="text-2xl font-black text-white tracking-tight">
+                  Registration Received!
+                </h2>
+                <div className="inline-flex items-center gap-2 rounded-xl bg-slate-950 border border-emerald-500/40 px-4 py-2 shadow-inner">
+                  <span className="text-xs text-slate-400 uppercase font-semibold">Your Member ID</span>
+                  <strong className="font-mono text-xl text-emerald-300">#{submittedResult.memberNo}</strong>
+                </div>
+                <p className="text-sm text-slate-300 max-w-md mx-auto pt-1 leading-relaxed">
+                  Welcome, <strong className="text-white">{submittedResult.name}</strong>! Your registration profile has been queued at <strong className="text-emerald-400">{matchedFacility?.name}</strong>.
                 </p>
               </div>
+
+              {/* What Happens Next Stepper Card */}
+              <div className="p-4 sm:p-5 rounded-2xl bg-slate-950/80 border border-slate-800 text-left space-y-3 text-xs">
+                <div className="flex items-center gap-2 font-bold text-emerald-300 text-sm">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>Next Steps at the Cafeteria</span>
+                </div>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                  <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
+                    <span className="text-[10px] font-mono text-emerald-400 font-bold">STEP 1</span>
+                    <div className="font-bold text-white text-xs">Visit Reception</div>
+                    <div className="text-[11px] text-slate-400 leading-tight">Pay for your desired meal pack (cash, card or MoMo).</div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
+                    <span className="text-[10px] font-mono text-emerald-400 font-bold">STEP 2</span>
+                    <div className="font-bold text-white text-xs">Snap Photo</div>
+                    <div className="text-[11px] text-slate-400 leading-tight">Receptionist verifies ID and captures your pass photo.</div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
+                    <span className="text-[10px] font-mono text-emerald-400 font-bold">STEP 3</span>
+                    <div className="font-bold text-white text-xs">Set PIN & Dine</div>
+                    <div className="text-[11px] text-slate-400 leading-tight">Log in with your phone to set PIN and use your pass.</div>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={onBackToLogin}
+                className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-slate-950 font-black text-sm transition-all shadow-lg shadow-emerald-950/40 cursor-pointer"
+              >
+                Go to Customer Sign In &rarr;
+              </button>
             </div>
-          </div>
+          ) : (
+            /* THE REGISTRATION FORM */
+            <div className="bg-slate-900/95 backdrop-blur-2xl border border-slate-800 rounded-3xl p-5 sm:p-8 space-y-5 shadow-2xl ring-1 ring-white/10 transition-all">
+              {/* Form Header with Integrated Back Link */}
+              <div className="flex items-center justify-between border-b border-slate-800/80 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0 shadow-inner">
+                    <GraduationCap className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+                      Student Registration
+                    </h1>
+                    <p className="text-xs text-slate-400">
+                      Join campus dining · Instant optical QR pass
+                    </p>
+                  </div>
+                </div>
 
-          {/* Restaurant Facility Selection */}
-          <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
-            <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-              <Building2 className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Dining Facility / Restaurant</span>
-            </label>
-            <select
-              value={selectedRestoCode}
-              onChange={(e) => {
-                const nextCode = e.target.value;
-                const nextBranches = restoStore.getRestaurantBranches(nextCode);
-                setSelectedRestoCode(nextCode);
-                setBranchId(nextBranches[0]?.id || '');
-              }}
-              className="w-full bg-slate-900 border border-slate-700 focus:border-emerald-500 rounded-xl px-3 py-2 text-white font-medium text-xs sm:text-sm outline-hidden"
-            >
-              {state.restaurants.map((r) => (
-                <option key={r.code} value={r.code}>
-                  {r.name} ({r.code})
-                </option>
-              ))}
-            </select>
-          </div>
+                <button
+                  type="button"
+                  onClick={onBackToLogin}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-300 hover:text-white bg-slate-800/70 hover:bg-slate-800 border border-slate-700/80 px-3 py-1.5 rounded-xl transition-all cursor-pointer"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Sign In</span>
+                </button>
+              </div>
 
-          {/* Error Message */}
-          {error && (
-            <div className="p-3.5 rounded-xl bg-rose-950/80 border border-rose-700 text-rose-300 text-xs flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              <span>{error}</span>
+              {/* Dining Facility Selector Pill */}
+              <div className="p-3 rounded-2xl bg-slate-950/90 border border-slate-800 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-mono text-xs font-black flex items-center justify-center shrink-0">
+                    {selectedRestoCode}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">Target Dining Facility</div>
+                    <div className="text-xs font-bold text-white truncate">{matchedFacility?.name}</div>
+                  </div>
+                </div>
+
+                <select
+                  value={selectedRestoCode}
+                  onChange={(e) => {
+                    const nextCode = e.target.value;
+                    const nextBranches = restoStore.getRestaurantBranches(nextCode);
+                    setSelectedRestoCode(nextCode);
+                    setBranchId(nextBranches[0]?.id || '');
+                    setError(null);
+                  }}
+                  className="bg-slate-900 border border-slate-700 focus:border-emerald-500 rounded-xl px-2.5 py-1.5 text-white font-medium text-xs outline-hidden shrink-0 cursor-pointer"
+                >
+                  {state.restaurants.map((r) => (
+                    <option key={r.code} value={r.code}>
+                      {r.code} · {r.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Custom Error Banner (no raw browser popups) */}
+              {error && (
+                <div className="p-3.5 rounded-xl bg-rose-950/80 border border-rose-600/80 text-rose-200 text-xs flex items-center gap-2.5 animate-shake">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span className="font-medium">{error}</span>
+                </div>
+              )}
+
+              {/* Form Elements */}
+              <form noValidate onSubmit={handleSubmit} className="space-y-4 text-xs sm:text-sm">
+                {/* 1. Full Official Name & Phone Number */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-300 text-xs flex items-center justify-between">
+                      <span>Full Official Name <span className="text-emerald-400">*</span></span>
+                    </label>
+                    <div className="relative">
+                      <User className="w-4 h-4 text-slate-500 absolute left-3.5 top-3 pointer-events-none" />
+                      <input
+                        type="text"
+                        placeholder="e.g. Mugisha Jean Paul"
+                        value={name}
+                        onChange={(e) => {
+                          setName(e.target.value);
+                          setError(null);
+                        }}
+                        className="w-full bg-slate-950 border border-slate-700/80 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 rounded-xl pl-10 pr-3.5 py-2.5 text-white text-xs sm:text-sm outline-hidden transition-all"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-300 text-xs flex items-center justify-between">
+                      <span>Phone Number <span className="text-emerald-400">*</span></span>
+                    </label>
+                    <div className="relative">
+                      <Phone className="w-4 h-4 text-slate-500 absolute left-3.5 top-3 pointer-events-none" />
+                      <input
+                        type="tel"
+                        placeholder="e.g. 0788 123 456"
+                        value={phone}
+                        onChange={(e) => {
+                          setPhone(e.target.value);
+                          setError(null);
+                        }}
+                        className="w-full bg-slate-950 border border-slate-700/80 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 rounded-xl pl-10 pr-3.5 py-2.5 text-white font-mono text-xs sm:text-sm outline-hidden transition-all"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. Student ID & Class / Department */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-300 text-xs flex items-center justify-between">
+                      <span>Student ID / Reg # <span className="text-emerald-400">*</span></span>
+                    </label>
+                    <div className="relative">
+                      <CreditCard className="w-4 h-4 text-slate-500 absolute left-3.5 top-3 pointer-events-none" />
+                      <input
+                        type="text"
+                        placeholder="e.g. 21RP04921"
+                        value={regNumber}
+                        onChange={(e) => {
+                          setRegNumber(e.target.value);
+                          setError(null);
+                        }}
+                        className="w-full bg-slate-950 border border-slate-700/80 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 rounded-xl pl-10 pr-3.5 py-2.5 text-white font-mono text-xs sm:text-sm outline-hidden transition-all"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-semibold text-slate-300 text-xs flex items-center justify-between">
+                      <span>Faculty / Department <span className="text-emerald-400">*</span></span>
+                    </label>
+                    <div className="relative">
+                      <GraduationCap className="w-4 h-4 text-slate-500 absolute left-3.5 top-3 pointer-events-none" />
+                      <input
+                        type="text"
+                        placeholder="e.g. Computer Science (Yr 2)"
+                        value={programme}
+                        onChange={(e) => {
+                          setProgramme(e.target.value);
+                          setError(null);
+                        }}
+                        className="w-full bg-slate-950 border border-slate-700/80 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 rounded-xl pl-10 pr-3.5 py-2.5 text-white text-xs sm:text-sm outline-hidden transition-all"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. Institution / University */}
+                <div className="space-y-1">
+                  <label className="font-semibold text-slate-300 text-xs">Campus / Institution</label>
+                  <div className="relative">
+                    <School className="w-4 h-4 text-slate-500 absolute left-3.5 top-3 pointer-events-none" />
+                    <input
+                      type="text"
+                      placeholder="e.g. Kigali Independent University (ULK)"
+                      value={institution}
+                      onChange={(e) => setInstitution(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700/80 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 rounded-xl pl-10 pr-3.5 py-2.5 text-white text-xs sm:text-sm outline-hidden transition-all"
+                    />
+                  </div>
+                </div>
+
+                {/* Helpful Guidance Notice */}
+                <div className="p-3.5 rounded-2xl bg-emerald-950/40 border border-emerald-800/60 flex items-start gap-3">
+                  <Sparkles className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  <div className="text-xs text-emerald-200 leading-relaxed">
+                    <span className="font-bold text-white block">No Online Payment Required</span>
+                    Submit your profile now. Pay for your meal pack directly at the cafeteria reception desk, where your pass will be activated.
+                  </div>
+                </div>
+
+                {/* Submit Action */}
+                <div className="pt-2">
+                  <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-slate-950 font-black text-sm tracking-wide transition-all shadow-lg shadow-emerald-950/40 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 active:scale-[0.99]"
+                  >
+                    {isSubmitting ? (
+                      <div className="flex items-center gap-2">
+                        <div className="w-4 h-4 rounded-full border-2 border-slate-950/30 border-t-slate-950 animate-spin" />
+                        <span>Submitting Profile...</span>
+                      </div>
+                    ) : (
+                      <>
+                        <span>Submit Registration Profile</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
             </div>
           )}
-
-          <form onSubmit={handleSubmit} className="space-y-6 text-xs sm:text-sm">
-            {/* STEP 1: PERSONAL IDENTITY */}
-            <div className="space-y-3.5 pt-1">
-              <div className="text-xs font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
-                <UserCheck className="w-3.5 h-3.5" />
-                <span>1. Personal &amp; Academic Identity</span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="font-semibold text-slate-200 block mb-1">
-                    Full Official Name <span className="text-emerald-400">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Mugisha Jean Paul"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="w-full py-2.5 px-3 rounded-xl bg-slate-950 border border-slate-700 text-white focus:border-emerald-400 outline-hidden"
-                  />
-                </div>
-
-                <div>
-                  <label className="font-semibold text-slate-200 block mb-1">
-                    Phone Number <span className="text-emerald-400">*</span>
-                  </label>
-                  <input
-                    type="tel"
-                    required
-                    placeholder="e.g. 0788 123 456"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    className="w-full py-2.5 px-3 rounded-xl bg-slate-950 border border-slate-700 text-white focus:border-emerald-400 outline-hidden font-mono"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="font-semibold text-slate-200 block mb-1">
-                    Student ID / Reg # <span className="text-emerald-400">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. 21RP04921"
-                    value={regNumber}
-                    onChange={(e) => setRegNumber(e.target.value)}
-                    className="w-full py-2.5 px-3 rounded-xl bg-slate-950 border border-slate-700 text-white focus:border-emerald-400 outline-hidden font-mono"
-                  />
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="font-semibold text-slate-200 block mb-1">
-                    Class / Programme / Department <span className="text-emerald-400">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Computer Science (Yr 2) or Class 3B"
-                    value={programme}
-                    onChange={(e) => setProgramme(e.target.value)}
-                    className="w-full py-2.5 px-3 rounded-xl bg-slate-950 border border-slate-700 text-white focus:border-emerald-400 outline-hidden"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="font-semibold text-slate-200 block mb-1">Institution / Campus</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Kigali Independent University (ULK)"
-                  value={institution}
-                  onChange={(e) => setInstitution(e.target.value)}
-                  className="w-full py-2.5 px-3 rounded-xl bg-slate-950 border border-slate-700 text-white focus:border-emerald-400 outline-hidden"
-                />
-              </div>
-            </div>
-
-            {/* Payment is completed in person at reception after registration. */}
-            <div className="p-4 rounded-2xl bg-emerald-950/50 border border-emerald-500/30 text-sm text-emerald-100">
-              <strong>Next step: visit reception.</strong>
-              <p className="mt-1 text-xs text-emerald-200">Your registration does not collect payment. Reception will select your meal package, receive payment and confirm it in RestoPass. You can then set your PIN using this phone number.</p>
-            </div>
-
-            {/* SUBMIT BUTTON */}
-            <div className="pt-2">
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full py-3.5 px-6 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-black text-sm transition-all shadow-xl flex items-center justify-center gap-2 cursor-pointer"
-              >
-                {isSubmitting ? (
-                  <span>Submitting to Restaurant Boss...</span>
-                ) : (
-                  <>
-                    <span>Submit Registration</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
-                )}
-              </button>
-              <p className="text-[11px] text-slate-400 text-center mt-2">
-                No payment is collected online. Your registration is sent to the selected dining facility.
-              </p>
-            </div>
-          </form>
         </div>
-      )}
       </div>
     </div>
   );
 };
-

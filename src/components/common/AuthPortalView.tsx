@@ -5,6 +5,7 @@ import { translations } from '../../services/i18n';
 import { sound } from '../../services/audioService';
 import { StudentSelfRegistrationView } from '../customer/StudentSelfRegistrationView';
 import { ScanningPersonBackground } from './ScanningPersonBackground';
+import { ScannerHeroStage } from './ScannerHeroStage';
 import {
   Shield,
   ShieldCheck,
@@ -521,12 +522,41 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
   }
 
   return (
-    <div className="auth-portal-workspace relative min-h-[88vh] min-w-0 flex flex-col items-center justify-center p-3 sm:p-6 overflow-hidden">
+    <div className="auth-portal-workspace relative min-h-[90vh] min-w-0 flex items-center justify-center p-3 sm:p-6 lg:p-8 overflow-hidden">
       {/* Animated Scanning Person & Terminal Background */}
       <ScanningPersonBackground />
 
-      <div className="relative z-10 w-full min-w-0 max-w-xl bg-slate-900/90 backdrop-blur-2xl border border-slate-700/80 rounded-3xl shadow-[0_25px_60px_-15px_rgba(0,0,0,0.7)] p-4 sm:p-8 space-y-5 sm:space-y-6 ring-1 ring-white/10 transition-all duration-300">
-        {/* Header Branding */}
+      <div className="relative z-10 w-full max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-stretch">
+        {/* Left Side: Dedicated Scanner Hero Stage (Visible on Desktop) */}
+        <div className="lg:col-span-5 hidden lg:flex flex-col">
+          <ScannerHeroStage
+            title={
+              activeRole === 'customer'
+                ? 'Dining Pass & Meal Portal'
+                : activeRole === 'stand_staff'
+                ? 'Buffet Stand Scanner POS'
+                : activeRole === 'restaurant_admin'
+                ? 'Restaurant Boss Admin'
+                : 'Platform Administration'
+            }
+            subtitle={
+              activeRole === 'customer'
+                ? 'Check prepaid meal plates, show your dynamic optical QR pass, and dine without waiting in queues.'
+                : activeRole === 'stand_staff'
+                ? 'Instant 0.3s QR code redemption, offline queue caching, and reception customer payment verification.'
+                : activeRole === 'restaurant_admin'
+                ? 'Real-time plate turnover metrics, staff station device pairing, and customer ledger audits.'
+                : 'Global cafeteria tenant onboarding, security encryption controls, and translation management.'
+            }
+            facilityName={currentResto?.name}
+            facilityCode={selectedRestoCode}
+          />
+        </div>
+
+        {/* Right Side: The 4-Door Portal Auth Card */}
+        <div className="lg:col-span-7 flex flex-col justify-center">
+          <div className="w-full bg-slate-900/95 backdrop-blur-2xl border border-slate-700/80 rounded-3xl shadow-[0_25px_60px_-15px_rgba(0,0,0,0.7)] p-4 sm:p-8 space-y-5 sm:space-y-6 ring-1 ring-white/10 transition-all duration-300">
+            {/* Header Branding */}
         <div className="text-center space-y-2">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 mb-1 shadow-inner">
             <Lock className="w-7 h-7" />
@@ -1101,6 +1131,8 @@ export const AuthPortalView: React.FC<AuthPortalViewProps> = ({
             </div>
           </div>
         )}
+          </div>
+        </div>
       </div>
 
       {/* FIRST-TIME PIN SETUP & ACCOUNT ACTIVATION MODAL */}
