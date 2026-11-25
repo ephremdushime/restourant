@@ -485,6 +485,27 @@ export const CustomerAuthView: React.FC<CustomerAuthViewProps> = ({
                 <span>Have a 6-digit Reception Code?</span>
               </button>
             </div>
+
+            {/* Demo Helper */}
+            {isDemoMode && (
+              <div className="pt-2.5 border-t border-slate-800/60 flex items-center justify-between text-[11px] text-slate-400">
+                <span className="flex items-center gap-1.5 text-slate-400">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Demo Diner: J.P. Habimana (#28491)</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPhoneOrMember('28491');
+                    setPin('1234');
+                  }}
+                  className="text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  <span>Fill Demo</span>
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
