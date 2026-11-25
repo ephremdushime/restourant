@@ -469,16 +469,18 @@ export default function App() {
             }, 60);
           }}
           onSelectRolePortal={(role, restoCode) => {
-            if (restoCode) restoStore.setRestaurantCode(restoCode);
+            const rememberedResto = typeof window !== 'undefined' ? localStorage.getItem('restopass_remembered_resto') : null;
+            const targetCode = restoCode || (rememberedResto && state.restaurants.some(r => r.code === rememberedResto) ? rememberedResto : state.currentRestaurantCode);
+            if (targetCode) restoStore.setRestaurantCode(targetCode);
             handleRoleChange(role);
             if (role === 'customer') {
-              if (typeof window !== 'undefined') window.location.hash = `#/customer?resto=${restoCode || state.currentRestaurantCode}`;
+              if (typeof window !== 'undefined') window.location.hash = `#/customer?resto=${targetCode || state.currentRestaurantCode}`;
               setViewMode(sessions.customer ? 'portal' : 'auth_customer');
             } else if (role === 'restaurant_admin') {
-              if (typeof window !== 'undefined') window.location.hash = `#/boss?resto=${restoCode || state.currentRestaurantCode}`;
+              if (typeof window !== 'undefined') window.location.hash = `#/boss?resto=${targetCode || state.currentRestaurantCode}`;
               setViewMode(sessions.restaurant_admin ? 'portal' : 'auth_boss');
             } else if (role === 'stand_staff') {
-              if (typeof window !== 'undefined') window.location.hash = `#/scanner?resto=${restoCode || state.currentRestaurantCode}`;
+              if (typeof window !== 'undefined') window.location.hash = `#/scanner?resto=${targetCode || state.currentRestaurantCode}`;
               setViewMode(sessions.stand_staff ? 'portal' : 'auth_scanner');
             } else if (role === 'super_admin') {
               if (typeof window !== 'undefined') window.location.hash = '#/superadmin';
@@ -486,9 +488,11 @@ export default function App() {
             }
           }}
           onSelectRegister={(restoCode) => {
-            if (restoCode) restoStore.setRestaurantCode(restoCode);
+            const rememberedResto = typeof window !== 'undefined' ? localStorage.getItem('restopass_remembered_resto') : null;
+            const targetCode = restoCode || (rememberedResto && state.restaurants.some(r => r.code === rememberedResto) ? rememberedResto : state.currentRestaurantCode);
+            if (targetCode) restoStore.setRestaurantCode(targetCode);
             if (typeof window !== 'undefined') {
-              window.location.hash = `#/register?resto=${restoCode || state.currentRestaurantCode}`;
+              window.location.hash = `#/register?resto=${targetCode || state.currentRestaurantCode}`;
             }
             setViewMode('register');
           }}
@@ -502,16 +506,18 @@ export default function App() {
         {viewMode === 'landing' && (
           <LandingPageView
             onSelectRolePortal={(role, restoCode) => {
-              if (restoCode) restoStore.setRestaurantCode(restoCode);
+              const rememberedResto = typeof window !== 'undefined' ? localStorage.getItem('restopass_remembered_resto') : null;
+              const targetCode = restoCode || (rememberedResto && state.restaurants.some(r => r.code === rememberedResto) ? rememberedResto : state.currentRestaurantCode);
+              if (targetCode) restoStore.setRestaurantCode(targetCode);
               handleRoleChange(role);
               if (role === 'customer') {
-                if (typeof window !== 'undefined') window.location.hash = `#/customer?resto=${restoCode || state.currentRestaurantCode}`;
+                if (typeof window !== 'undefined') window.location.hash = `#/customer?resto=${targetCode || state.currentRestaurantCode}`;
                 setViewMode(sessions.customer ? 'portal' : 'auth_customer');
               } else if (role === 'restaurant_admin') {
-                if (typeof window !== 'undefined') window.location.hash = `#/boss?resto=${restoCode || state.currentRestaurantCode}`;
+                if (typeof window !== 'undefined') window.location.hash = `#/boss?resto=${targetCode || state.currentRestaurantCode}`;
                 setViewMode(sessions.restaurant_admin ? 'portal' : 'auth_boss');
               } else if (role === 'stand_staff') {
-                if (typeof window !== 'undefined') window.location.hash = `#/scanner?resto=${restoCode || state.currentRestaurantCode}`;
+                if (typeof window !== 'undefined') window.location.hash = `#/scanner?resto=${targetCode || state.currentRestaurantCode}`;
                 setViewMode(sessions.stand_staff ? 'portal' : 'auth_scanner');
               } else if (role === 'super_admin') {
                 if (typeof window !== 'undefined') window.location.hash = '#/superadmin';
@@ -519,9 +525,11 @@ export default function App() {
               }
             }}
             onSelectRegister={(restoCode) => {
-              if (restoCode) restoStore.setRestaurantCode(restoCode);
+              const rememberedResto = typeof window !== 'undefined' ? localStorage.getItem('restopass_remembered_resto') : null;
+              const targetCode = restoCode || (rememberedResto && state.restaurants.some(r => r.code === rememberedResto) ? rememberedResto : state.currentRestaurantCode);
+              if (targetCode) restoStore.setRestaurantCode(targetCode);
               if (typeof window !== 'undefined') {
-                window.location.hash = `#/register?resto=${restoCode || state.currentRestaurantCode}`;
+                window.location.hash = `#/register?resto=${targetCode || state.currentRestaurantCode}`;
               }
               setViewMode('register');
             }}

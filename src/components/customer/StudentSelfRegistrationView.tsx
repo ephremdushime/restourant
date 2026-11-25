@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { restoStore } from '../../store/restoStore';
 import { ScannerHeroStage } from '../common/ScannerHeroStage';
+import { CafeteriaSelectorModal } from '../auth/CafeteriaSelectorModal';
 import {
   User,
   Phone,
@@ -15,6 +16,7 @@ import {
   Sparkles,
   School,
   Calendar,
+  ChevronDown,
 } from 'lucide-react';
 
 interface StudentSelfRegistrationViewProps {
@@ -48,6 +50,12 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
       if (urlCode && state.restaurants.some((r) => r.code === urlCode)) {
         return urlCode;
       }
+      try {
+        const remembered = localStorage.getItem('restopass_remembered_resto');
+        if (remembered && state.restaurants.some((r) => r.code === remembered)) {
+          return remembered;
+        }
+      } catch {}
     }
     if (defaultRestoCode && state.restaurants.some((r) => r.code === defaultRestoCode)) {
       return defaultRestoCode;
@@ -55,6 +63,7 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
     return state.currentRestaurantCode || state.restaurants[0]?.code || 'RW01';
   });
 
+  const [isSelectorModalOpen, setIsSelectorModalOpen] = useState(false);
   const branches = restoStore.getRestaurantBranches(selectedRestoCode);
   const matchedFacility = state.restaurants.find((r) => r.code === selectedRestoCode) || state.restaurants[0];
 
@@ -242,7 +251,7 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
               {/* Directive Selected Dining Facility Context */}
               <div className="p-3.5 rounded-2xl bg-slate-950/90 border border-slate-800 flex items-center justify-between gap-3 shadow-inner">
                 <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-mono text-xs font-black flex items-center justify-center shrink-0">
+                  <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-mono text-xs font-black flex items-center justify-center shrink-0">
                     {selectedRestoCode}
                   </div>
                   <div className="min-w-0">
@@ -255,15 +264,15 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
                   </div>
                 </div>
 
-                {onNavigateToDirectory && (
-                  <button
-                    type="button"
-                    onClick={onNavigateToDirectory}
-                    className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 underline underline-offset-4 decoration-emerald-500/40 hover:decoration-emerald-400 transition-colors shrink-0 cursor-pointer"
-                  >
-                    Change Cafeteria
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => setIsSelectorModalOpen(true)}
+                  className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-xs font-bold text-emerald-400 hover:text-emerald-300 transition-all shrink-0 cursor-pointer shadow-xs flex items-center gap-1"
+                  title="Switch between 15+ partnered university cafeterias"
+                >
+                  <span>Switch ({state.restaurants.length})</span>
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
               </div>
 
               {/* Custom Error Banner (no raw browser popups) */}
@@ -407,6 +416,31 @@ export const StudentSelfRegistrationView: React.FC<StudentSelfRegistrationViewPr
           )}
         </div>
       </div>
+
+      {/* 15+ Campus Cafeteria Selector Modal */}
+      <CafeteriaSelectorModal
+        isOpen={isSelectorModalOpen}
+        onClose={() => setIsSelectorModalOpen(false)}
+        currentSelectedCode={selectedRestoCode}
+        onSelectCafeteria={(code, mode) => {
+          setSelectedRestoCode(code);
+          restoStore.setRestaurantCode(code);
+          const nextBranches = restoStore.getRestaurantBranches(code);
+          setBranchId(nextBranches[0]?.id || '');
+          if (typeof window !== 'undefined') {
+            try {
+              localStorage.setItem('restopass_remembered_resto', code);
+            } catch {}
+          }
+          if (mode === 'login') {
+            onBackToLogin();
+          } else {
+            if (typeof window !== 'undefined') {
+              window.location.hash = `#/register?resto=${code}`;
+            }
+          }
+        }}
+      />
     </div>
   );
 };

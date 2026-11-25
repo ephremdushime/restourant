@@ -4,6 +4,7 @@ import { restoStore } from '../../store/restoStore';
 import { sound } from '../../services/audioService';
 import { ScannerHeroStage } from '../common/ScannerHeroStage';
 import { ScanningPersonBackground } from '../common/ScanningPersonBackground';
+import { CafeteriaSelectorModal } from './CafeteriaSelectorModal';
 import {
   Smartphone,
   Lock,
@@ -21,6 +22,7 @@ import {
   X,
   CreditCard,
   User,
+  ChevronDown,
 } from 'lucide-react';
 
 interface CustomerAuthViewProps {
@@ -63,12 +65,19 @@ export const CustomerAuthView: React.FC<CustomerAuthViewProps> = ({
       if (urlCode && state.restaurants.some((r) => r.code === urlCode)) {
         return urlCode;
       }
+      try {
+        const remembered = localStorage.getItem('restopass_remembered_resto');
+        if (remembered && state.restaurants.some((r) => r.code === remembered)) {
+          return remembered;
+        }
+      } catch {}
     }
     return state.currentRestaurantCode || state.restaurants[0]?.code || 'RW01';
   });
 
   const matchedFacility = state.restaurants.find((r) => r.code === selectedRestoCode) || state.restaurants[0];
 
+  const [isSelectorModalOpen, setIsSelectorModalOpen] = useState(false);
   const [phoneOrMember, setPhoneOrMember] = useState(isDemoMode ? '28491' : '');
   const [pin, setPin] = useState('');
   const [pinConfirm, setPinConfirm] = useState('');
@@ -290,7 +299,7 @@ export const CustomerAuthView: React.FC<CustomerAuthViewProps> = ({
             {/* Target Facility Locked-In Context Card */}
             <div className="p-3.5 rounded-2xl bg-slate-950/90 border border-slate-800 flex items-center justify-between gap-3 shadow-inner">
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-mono text-xs font-black flex items-center justify-center shrink-0">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-mono text-xs font-black flex items-center justify-center shrink-0">
                   {selectedRestoCode}
                 </div>
                 <div className="min-w-0">
@@ -303,15 +312,15 @@ export const CustomerAuthView: React.FC<CustomerAuthViewProps> = ({
                 </div>
               </div>
 
-              {onNavigateToDirectory && (
-                <button
-                  type="button"
-                  onClick={onNavigateToDirectory}
-                  className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 underline underline-offset-4 decoration-emerald-500/40 hover:decoration-emerald-400 transition-colors shrink-0 cursor-pointer"
-                >
-                  Change Cafeteria
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => setIsSelectorModalOpen(true)}
+                className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-xs font-bold text-emerald-400 hover:text-emerald-300 transition-all shrink-0 cursor-pointer shadow-xs flex items-center gap-1"
+                title="Switch between 15+ partnered university cafeterias"
+              >
+                <span>Switch ({state.restaurants.length})</span>
+                <ChevronDown className="w-3.5 h-3.5" />
+              </button>
             </div>
 
             {/* Error Message Banner */}
@@ -616,6 +625,29 @@ export const CustomerAuthView: React.FC<CustomerAuthViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* 15+ Campus Cafeteria Selector Modal */}
+      <CafeteriaSelectorModal
+        isOpen={isSelectorModalOpen}
+        onClose={() => setIsSelectorModalOpen(false)}
+        currentSelectedCode={selectedRestoCode}
+        onSelectCafeteria={(code, mode) => {
+          setSelectedRestoCode(code);
+          restoStore.setRestaurantCode(code);
+          if (typeof window !== 'undefined') {
+            try {
+              localStorage.setItem('restopass_remembered_resto', code);
+            } catch {}
+          }
+          if (mode === 'register') {
+            onOpenRegister(code);
+          } else {
+            if (typeof window !== 'undefined') {
+              window.location.hash = `#/customer?resto=${code}`;
+            }
+          }
+        }}
+      />
     </div>
   );
 };
