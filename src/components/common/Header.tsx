@@ -444,11 +444,13 @@ export const Header: React.FC<HeaderProps> = ({
                       </div>
                     )}
 
-                    {/* Workspace / Role Switcher Section */}
-                    <div>
-                      <div className="px-3 pt-2.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                        Switch Portal
-                      </div>
+                    {/* Super Admin & Demo Role Switcher Section (Hidden for students and cashier staff) */}
+                    {(currentRole === 'super_admin' || isDemoMode) && (
+                      <div className="border-t border-slate-800 pt-2 mt-1">
+                        <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
+                          <span>Switch Portal Scope</span>
+                          {isDemoMode && <span className="text-[9px] font-mono text-amber-400">DEMO</span>}
+                        </div>
                         <div className="space-y-0.5">
                           {[
                             { role: 'restaurant_admin' as UserRole, label: 'Restaurant Boss Admin', icon: Server, desc: 'Full cafeteria management' },
@@ -485,6 +487,7 @@ export const Header: React.FC<HeaderProps> = ({
                           })}
                         </div>
                       </div>
+                    )}
 
                     {/* Customer Profile & Settings Access (Customer portal owns primary navigation) */}
                     {currentRole === 'customer' && onTabChange && (

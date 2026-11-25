@@ -26,6 +26,7 @@ import {
 interface CustomerAuthViewProps {
   onLoginSuccess: (role: UserRole, userLabel: string) => void;
   onBackToLanding?: () => void;
+  onNavigateToDirectory?: () => void;
   onOpenRegister: (restoCode?: string) => void;
   initialRestoCode?: string;
   isDemoMode?: boolean;
@@ -35,6 +36,7 @@ interface CustomerAuthViewProps {
 export const CustomerAuthView: React.FC<CustomerAuthViewProps> = ({
   onLoginSuccess,
   onBackToLanding,
+  onNavigateToDirectory,
   onOpenRegister,
   initialRestoCode,
   isDemoMode = false,
@@ -285,32 +287,31 @@ export const CustomerAuthView: React.FC<CustomerAuthViewProps> = ({
               )}
             </div>
 
-            {/* Target Facility Selector Pill */}
-            <div className="p-3 rounded-2xl bg-slate-950/90 border border-slate-800 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-8 h-8 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-mono text-xs font-black flex items-center justify-center shrink-0">
+            {/* Target Facility Locked-In Context Card */}
+            <div className="p-3.5 rounded-2xl bg-slate-950/90 border border-slate-800 flex items-center justify-between gap-3 shadow-inner">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-mono text-xs font-black flex items-center justify-center shrink-0">
                   {selectedRestoCode}
                 </div>
                 <div className="min-w-0">
-                  <div className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">Campus Cafeteria</div>
-                  <div className="text-xs font-bold text-white truncate">{matchedFacility?.name}</div>
+                  <div className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider flex items-center gap-1.5">
+                    <Building2 className="w-3 h-3" />
+                    <span>Campus Cafeteria</span>
+                  </div>
+                  <div className="text-xs sm:text-sm font-bold text-white truncate">{matchedFacility?.name}</div>
+                  <div className="text-[11px] text-slate-400 truncate">{matchedFacility?.address || 'Campus Dining Facility'}</div>
                 </div>
               </div>
 
-              <select
-                value={selectedRestoCode}
-                onChange={(e) => {
-                  setSelectedRestoCode(e.target.value);
-                  setErrorMessage(null);
-                }}
-                className="bg-slate-900 border border-slate-700 focus:border-emerald-500 rounded-xl px-2.5 py-1.5 text-white font-medium text-xs outline-hidden shrink-0 cursor-pointer"
-              >
-                {state.restaurants.map((r) => (
-                  <option key={r.code} value={r.code}>
-                    {r.code} · {r.name}
-                  </option>
-                ))}
-              </select>
+              {onNavigateToDirectory && (
+                <button
+                  type="button"
+                  onClick={onNavigateToDirectory}
+                  className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 underline underline-offset-4 decoration-emerald-500/40 hover:decoration-emerald-400 transition-colors shrink-0 cursor-pointer"
+                >
+                  Change Cafeteria
+                </button>
+              )}
             </div>
 
             {/* Error Message Banner */}

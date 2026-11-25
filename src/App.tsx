@@ -10,6 +10,7 @@ import { NotificationDrawer } from './components/common/NotificationDrawer';
 import { sound } from './services/audioService';
 
 // Dedicated Commercial Landing & Separated Role Authentication Portals
+import { PublicNavbar } from './components/common/PublicNavbar';
 import { LandingPageView } from './components/landing/LandingPageView';
 import { StudentSelfRegistrationView } from './components/customer/StudentSelfRegistrationView';
 import { CustomerAuthView } from './components/auth/CustomerAuthView';
@@ -68,7 +69,7 @@ export default function App() {
     const rawPath = (window.location.pathname || '').toLowerCase();
     const full = rawPath + rawHash;
     if (full.includes('register') || full.includes('signup')) return 'register';
-    if (full.includes('boss') || full.includes('resto-admin') || (full.includes('admin') && !full.includes('super'))) {
+    if (full.includes('boss') || full.includes('resto-admin') || full.includes('management')) {
       return 'auth_boss';
     }
     if (full.includes('scanner') || full.includes('stand') || full.includes('station') || full.includes('reception')) {
@@ -204,7 +205,10 @@ export default function App() {
         (pathSegmentMatch && !['api', 'assets', 'uploads', 'dist', 'src'].includes(pathSegmentMatch[1].toLowerCase()) ? pathSegmentMatch[1] : null) ||
         hashSegmentMatch?.[1];
 
-      if (targetSlug && targetSlug !== 'landing' && targetSlug !== 'home') {
+      const reservedKeywords = ['landing', 'home', 'directory', 'facilities', 'how-it-works', 'howitworks', 'business', 'restaurants', 'features', 'faq', 'contact', 'about'];
+      const isReservedSlug = targetSlug ? reservedKeywords.includes(targetSlug.toLowerCase()) : false;
+
+      if (targetSlug && !isReservedSlug) {
         const targetClean = targetSlug.toLowerCase();
         const curState = restoStore.getState();
         const authCustomer = curState.currentRole === 'customer' ? restoStore.getCurrentCustomer() : null;
@@ -259,8 +263,7 @@ export default function App() {
       } else if (
         urlLower.includes('boss') ||
         urlLower.includes('resto-admin') ||
-        urlLower.includes('management') ||
-        (urlLower.includes('admin') && !urlLower.includes('super'))
+        urlLower.includes('management')
       ) {
         handleRoleChange('restaurant_admin', false);
         setSessions((prev) => {
@@ -284,7 +287,6 @@ export default function App() {
         urlLower.includes('diner') ||
         urlLower.includes('student') ||
         urlLower.includes('card') ||
-        urlLower.includes('portal') ||
         urlLower.includes('login')
       ) {
         handleRoleChange('customer', false);
@@ -292,15 +294,16 @@ export default function App() {
           setViewMode(prev.customer ? 'portal' : 'auth_customer');
           return prev;
         });
-      } else if (targetSlug && targetSlug !== 'home' && targetSlug !== 'landing') {
-        handleRoleChange('customer', false);
-        setSessions((prev) => {
-          setViewMode(prev.customer ? 'portal' : 'auth_customer');
-          return prev;
-        });
       } else {
-        // Root / Landing Page (#/, #/landing, #home, or empty)
+        // Root / Landing Page (#/, #/landing, #home, #directory, #how-it-works, #business, or empty)
         setViewMode('landing');
+        if (hash.includes('directory') || hash.includes('how-it-works') || hash.includes('business')) {
+          const targetId = hash.includes('directory') ? 'directory' : hash.includes('how-it-works') ? 'how-it-works' : 'business';
+          setTimeout(() => {
+            const el = document.getElementById(targetId);
+            if (el) el.scrollIntoView({ behavior: 'smooth' });
+          }, 80);
+        }
       }
     };
 
@@ -385,44 +388,113 @@ export default function App() {
 
   return (
     <div className={`min-h-screen ${state.theme === 'light' ? 'theme-light bg-slate-50 text-slate-900' : 'theme-dark bg-slate-950 text-slate-100'} flex flex-col font-sans selection:bg-emerald-500 selection:text-white transition-colors duration-200`}>
-      {/* Top Bar Header */}
-      <Header
-        currentRole={state.currentRole}
-        onRoleChange={(role) => {
-          handleRoleChange(role);
-          if (role === 'customer') {
-            setViewMode(sessions.customer ? 'portal' : 'auth_customer');
-          } else if (role === 'restaurant_admin') {
-            setViewMode(sessions.restaurant_admin ? 'portal' : 'auth_boss');
-          } else if (role === 'stand_staff') {
-            setViewMode(sessions.stand_staff ? 'portal' : 'auth_scanner');
-          } else if (role === 'super_admin') {
-            setViewMode(sessions.super_admin ? 'portal' : 'auth_superadmin');
-          }
-        }}
-        language={state.currentLanguage}
-        onLanguageChange={(lang: Language) => restoStore.setLanguage(lang)}
-        theme={state.theme}
-        onToggleTheme={() => restoStore.toggleTheme()}
-        networkStatus={state.networkStatus}
-        onNetworkChange={(status) => restoStore.setNetworkStatus(status)}
-        soundEnabled={soundEnabled}
-        onToggleSound={handleToggleSound}
-        restaurantName={currentRestaurant?.name || 'Kigali Campus Resto'}
-        restaurantCode={currentCustomer ? currentCustomer.restaurantCode : state.currentRestaurantCode}
-        onOpenNotifications={() => setIsNotificationDrawerOpen(true)}
-        activeTab={activeTab}
-        onTabChange={handleTabChange}
-        isSessionActive={Boolean(sessions[state.currentRole])}
-        onLockSession={() => handleLockSession(state.currentRole)}
-        sessionUserLabel={sessionLabels[state.currentRole]}
-        isDemoMode={isDemoMode}
-        onToggleDemoMode={handleToggleDemoMode}
-        onNavigateHome={() => {
-          if (typeof window !== 'undefined') window.location.hash = '#/';
-          setViewMode('landing');
-        }}
-      />
+      {/* Top Bar Header: Public Navigation for Guests/Landing/Registration vs Authenticated Header for Active Portals */}
+      {viewMode === 'portal' ? (
+        <Header
+          currentRole={state.currentRole}
+          onRoleChange={(role) => {
+            handleRoleChange(role);
+            if (role === 'customer') {
+              setViewMode(sessions.customer ? 'portal' : 'auth_customer');
+            } else if (role === 'restaurant_admin') {
+              setViewMode(sessions.restaurant_admin ? 'portal' : 'auth_boss');
+            } else if (role === 'stand_staff') {
+              setViewMode(sessions.stand_staff ? 'portal' : 'auth_scanner');
+            } else if (role === 'super_admin') {
+              setViewMode(sessions.super_admin ? 'portal' : 'auth_superadmin');
+            }
+          }}
+          language={state.currentLanguage}
+          onLanguageChange={(lang: Language) => restoStore.setLanguage(lang)}
+          theme={state.theme}
+          onToggleTheme={() => restoStore.toggleTheme()}
+          networkStatus={state.networkStatus}
+          onNetworkChange={(status) => restoStore.setNetworkStatus(status)}
+          soundEnabled={soundEnabled}
+          onToggleSound={handleToggleSound}
+          restaurantName={currentRestaurant?.name || 'Kigali Campus Resto'}
+          restaurantCode={currentCustomer ? currentCustomer.restaurantCode : state.currentRestaurantCode}
+          onOpenNotifications={() => setIsNotificationDrawerOpen(true)}
+          activeTab={activeTab}
+          onTabChange={handleTabChange}
+          isSessionActive={Boolean(sessions[state.currentRole])}
+          onLockSession={() => handleLockSession(state.currentRole)}
+          sessionUserLabel={sessionLabels[state.currentRole]}
+          isDemoMode={isDemoMode}
+          onToggleDemoMode={handleToggleDemoMode}
+          onNavigateHome={() => {
+            if (typeof window !== 'undefined') window.location.hash = '#/';
+            setViewMode('landing');
+          }}
+        />
+      ) : (
+        <PublicNavbar
+          language={state.currentLanguage}
+          onLanguageChange={(lang: Language) => restoStore.setLanguage(lang)}
+          theme={state.theme}
+          onToggleTheme={() => restoStore.toggleTheme()}
+          onNavigateHome={() => {
+            if (typeof window !== 'undefined') window.location.hash = '#/';
+            setViewMode('landing');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onNavigateDirectory={() => {
+            if (viewMode !== 'landing') {
+              if (typeof window !== 'undefined') window.location.hash = '#directory';
+              setViewMode('landing');
+            }
+            setTimeout(() => {
+              const el = document.getElementById('directory');
+              if (el) el.scrollIntoView({ behavior: 'smooth' });
+            }, 60);
+          }}
+          onNavigateHowItWorks={() => {
+            if (viewMode !== 'landing') {
+              if (typeof window !== 'undefined') window.location.hash = '#how-it-works';
+              setViewMode('landing');
+            }
+            setTimeout(() => {
+              const el = document.getElementById('how-it-works');
+              if (el) el.scrollIntoView({ behavior: 'smooth' });
+            }, 60);
+          }}
+          onNavigateBusiness={() => {
+            if (viewMode !== 'landing') {
+              if (typeof window !== 'undefined') window.location.hash = '#business';
+              setViewMode('landing');
+            }
+            setTimeout(() => {
+              const el = document.getElementById('business');
+              if (el) el.scrollIntoView({ behavior: 'smooth' });
+            }, 60);
+          }}
+          onSelectRolePortal={(role, restoCode) => {
+            if (restoCode) restoStore.setRestaurantCode(restoCode);
+            handleRoleChange(role);
+            if (role === 'customer') {
+              if (typeof window !== 'undefined') window.location.hash = `#/customer?resto=${restoCode || state.currentRestaurantCode}`;
+              setViewMode(sessions.customer ? 'portal' : 'auth_customer');
+            } else if (role === 'restaurant_admin') {
+              if (typeof window !== 'undefined') window.location.hash = `#/boss?resto=${restoCode || state.currentRestaurantCode}`;
+              setViewMode(sessions.restaurant_admin ? 'portal' : 'auth_boss');
+            } else if (role === 'stand_staff') {
+              if (typeof window !== 'undefined') window.location.hash = `#/scanner?resto=${restoCode || state.currentRestaurantCode}`;
+              setViewMode(sessions.stand_staff ? 'portal' : 'auth_scanner');
+            } else if (role === 'super_admin') {
+              if (typeof window !== 'undefined') window.location.hash = '#/superadmin';
+              setViewMode(sessions.super_admin ? 'portal' : 'auth_superadmin');
+            }
+          }}
+          onSelectRegister={(restoCode) => {
+            if (restoCode) restoStore.setRestaurantCode(restoCode);
+            if (typeof window !== 'undefined') {
+              window.location.hash = `#/register?resto=${restoCode || state.currentRestaurantCode}`;
+            }
+            setViewMode('register');
+          }}
+          activePath={viewMode}
+        />
+      )}
 
       {/* Main Viewport Container */}
       <main className="flex-1 w-full min-w-0 max-w-7xl mx-auto pb-16">
@@ -464,8 +536,16 @@ export default function App() {
         {viewMode === 'register' && (
           <StudentSelfRegistrationView
             onBackToLogin={() => {
-              if (typeof window !== 'undefined') window.location.hash = '#/customer';
+              if (typeof window !== 'undefined') window.location.hash = `#/customer?resto=${state.currentRestaurantCode}`;
               setViewMode('auth_customer');
+            }}
+            onNavigateToDirectory={() => {
+              if (typeof window !== 'undefined') window.location.hash = '#directory';
+              setViewMode('landing');
+              setTimeout(() => {
+                const el = document.getElementById('directory');
+                if (el) el.scrollIntoView({ behavior: 'smooth' });
+              }, 60);
             }}
             defaultRestoCode={state.currentRestaurantCode}
           />
@@ -478,6 +558,14 @@ export default function App() {
             onBackToLanding={() => {
               if (typeof window !== 'undefined') window.location.hash = '#/';
               setViewMode('landing');
+            }}
+            onNavigateToDirectory={() => {
+              if (typeof window !== 'undefined') window.location.hash = '#directory';
+              setViewMode('landing');
+              setTimeout(() => {
+                const el = document.getElementById('directory');
+                if (el) el.scrollIntoView({ behavior: 'smooth' });
+              }, 60);
             }}
             onOpenRegister={(restoCode) => {
               if (restoCode) restoStore.setRestaurantCode(restoCode);
