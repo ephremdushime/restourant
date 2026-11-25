@@ -4455,9 +4455,9 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
                           type="button"
                           onClick={() => handleResetPin(manageCustomer)}
                           className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white font-semibold text-xs transition-colors cursor-pointer"
-                          title="Reset to fallback demo PIN 1234"
+                          title="Emergency reset to factory default PIN (1234) with supervisor audit log"
                         >
-                          Reset to 1234
+                          Reset Default PIN (1234)
                         </button>
                       </div>
                     </div>

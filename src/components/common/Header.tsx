@@ -196,29 +196,22 @@ export const Header: React.FC<HeaderProps> = ({
             <>
               <div className="h-6 w-px bg-slate-800 hidden sm:block" />
 
-              {/* Authenticated Facility Badge / Switcher */}
-              <div className="relative" ref={restoRef}>
-                {canSwitchFacility ? (
-                  <button
-                    type="button"
-                    onClick={() => setIsRestoDropdownOpen((prev) => !prev)}
-                    aria-expanded={isRestoDropdownOpen}
-                    aria-haspopup="true"
-                    className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-xs font-semibold text-slate-200 transition-all cursor-pointer shadow-inner"
-                    title="Switch active dining facility scope"
+              {/* Authenticated Facility / Network Scope Badge */}
+              <div className="relative">
+                {currentRole === 'super_admin' ? (
+                  <div
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs font-semibold text-amber-300 select-none shadow-inner"
+                    title="Platform Super Admin Scope · Governing all 16 connected campus dining facilities"
                   >
-                    <Building2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    <span className="truncate max-w-[140px] sm:max-w-[220px]">
-                      {restaurantName}
+                    <ShieldCheck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span className="font-bold hidden sm:inline">Global Platform Network</span>
+                    <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-[10px] font-mono font-bold text-amber-300 shrink-0">
+                      {state.restaurants.length} Campuses
                     </span>
-                    <span className="px-1.5 py-0.2 rounded bg-slate-800 text-[10px] font-mono font-bold text-emerald-400 shrink-0">
-                      {restaurantCode}
-                    </span>
-                    <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isRestoDropdownOpen ? 'rotate-180' : ''}`} />
-                  </button>
+                  </div>
                 ) : (
                   <div
-                    className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/70 border border-slate-800/90 text-xs font-semibold text-slate-200"
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/70 border border-slate-800/90 text-xs font-semibold text-slate-200 select-none shadow-inner"
                     title={`Authenticated Facility: ${restaurantName} (${restaurantCode})`}
                   >
                     <Building2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -230,47 +223,6 @@ export const Header: React.FC<HeaderProps> = ({
                     </span>
                   </div>
                 )}
-
-                {canSwitchFacility && isRestoDropdownOpen && (
-                  <div className="header-dropdown absolute left-0 mt-2 w-72 rounded-2xl bg-slate-900/95 backdrop-blur-xl border border-slate-800 shadow-2xl p-2 z-50 animate-in fade-in zoom-in-95 duration-100">
-                    <div className="px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800/80 mb-1 flex items-center justify-between">
-                      <span>{currentRole === 'super_admin' ? 'Target Tenant Scope' : 'Active Dining Facility'}</span>
-                      {isDemoMode && (
-                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">
-                          DEMO
-                        </span>
-                      )}
-                    </div>
-                    <div className="space-y-1">
-                      {state.restaurants.map((r) => {
-                        const isSelected = r.code === restaurantCode;
-                        return (
-                          <button
-                            key={r.code}
-                            type="button"
-                            onClick={() => {
-                              restoStore.setRestaurantCode(r.code);
-                              setIsRestoDropdownOpen(false);
-                            }}
-                            className={`w-full text-left px-3 py-2 rounded-xl text-xs font-medium flex items-center justify-between transition-colors cursor-pointer ${
-                              isSelected
-                                ? 'bg-emerald-600 text-white font-bold'
-                                : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
-                            }`}
-                          >
-                            <div className="flex flex-col">
-                              <span>{r.name}</span>
-                              <span className={`text-[10px] font-mono ${isSelected ? 'text-emerald-100' : 'text-slate-500'}`}>
-                                Facility Code: {r.code}
-                              </span>
-                            </div>
-                            {isSelected && <Check className="w-4 h-4 text-white" />}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
               </div>
             </>
           )}
@@ -280,18 +232,6 @@ export const Header: React.FC<HeaderProps> = ({
             ZONE 2: Executive Controls & Authenticated Profile Menu
            ======================================================== */}
         <div className="app-header-actions flex items-center gap-2 sm:gap-3 shrink-0">
-          {import.meta.env.DEV && isSessionActive && isDemoMode && onToggleDemoMode && (
-            <button
-              type="button"
-              onClick={onToggleDemoMode}
-              title="Demo Mode is active (click to disable demo switchers)"
-              className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 hover:bg-amber-500/25 text-[11px] font-mono font-bold transition-colors cursor-pointer"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              <span>Demo Tools: ON</span>
-            </button>
-          )}
-
           {/* Clean Online / Offline Indicator (No Topology Drawer) */}
           {isSessionActive && (
             <div
@@ -406,7 +346,7 @@ export const Header: React.FC<HeaderProps> = ({
                         {resolvedUserLabel}
                       </div>
                       <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-                        {restaurantName} · {restaurantCode}
+                        {currentRole === 'super_admin' ? 'Platform Multi-Tenant Authority' : `${restaurantName} · ${restaurantCode}`}
                       </div>
                       <div className="mt-1.5 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-bold text-emerald-400">
                         <ShieldCheck className="w-3 h-3" />
@@ -414,80 +354,16 @@ export const Header: React.FC<HeaderProps> = ({
                       </div>
                     </div>
 
-                    {/* Demo Mode Toggle */}
-                    {import.meta.env.DEV && onToggleDemoMode && (
-                      <div className="px-2 py-2 border-b border-slate-800">
-                        <button
-                          type="button"
-                          onClick={onToggleDemoMode}
-                          className={`w-full px-3 py-2 rounded-xl text-xs flex items-center justify-between transition-colors cursor-pointer ${
-                            isDemoMode
-                              ? 'bg-amber-500/15 border border-amber-500/40 text-amber-300 font-bold'
-                              : 'bg-slate-950/60 hover:bg-slate-800 text-slate-300 border border-slate-800'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <Sparkles className={`w-3.5 h-3.5 ${isDemoMode ? 'text-amber-400' : 'text-slate-400'}`} />
-                            <div className="text-left">
-                              <div>Demo &amp; Testing Tools</div>
-                              <div className="text-[10px] text-slate-400 font-normal">
-                                {isDemoMode ? 'Quick taps & switchers visible' : 'Production clean view active'}
-                              </div>
-                            </div>
-                          </div>
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
-                            isDemoMode ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-slate-400'
-                          }`}>
-                            {isDemoMode ? 'ON' : 'OFF'}
-                          </span>
-                        </button>
+                    {/* Cryptographic Session Integrity Badge */}
+                    <div className="px-3 py-2 border-b border-slate-800/80 bg-slate-950/40 rounded-xl mx-1 my-1.5">
+                      <div className="flex items-center gap-1.5 text-[10px] text-emerald-400 font-semibold">
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>Signed Session Active</span>
                       </div>
-                    )}
-
-                    {/* Super Admin & Demo Role Switcher Section (Hidden for students and cashier staff) */}
-                    {(currentRole === 'super_admin' || isDemoMode) && (
-                      <div className="border-t border-slate-800 pt-2 mt-1">
-                        <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
-                          <span>Switch Portal Scope</span>
-                          {isDemoMode && <span className="text-[9px] font-mono text-amber-400">DEMO</span>}
-                        </div>
-                        <div className="space-y-0.5">
-                          {[
-                            { role: 'restaurant_admin' as UserRole, label: 'Restaurant Boss Admin', icon: Server, desc: 'Full cafeteria management' },
-                            { role: 'stand_staff' as UserRole, label: 'Scanner Operator POS', icon: QrCode, desc: 'High-speed meal pass reader' },
-                            { role: 'customer' as UserRole, label: 'Customer Dining Pass', icon: Smartphone, desc: 'Mobile pass & plate balance' },
-                            { role: 'super_admin' as UserRole, label: 'Super Admin Console', icon: ShieldCheck, desc: 'Platform authority & licenses' },
-                          ].map((item) => {
-                            const isSelected = currentRole === item.role;
-                            const ItemIcon = item.icon;
-                            return (
-                              <button
-                                key={item.role}
-                                type="button"
-                                onClick={() => {
-                                  onRoleChange(item.role);
-                                  setIsProfileDropdownOpen(false);
-                                }}
-                                className={`w-full text-left px-3 py-2 rounded-xl text-xs flex items-center justify-between transition-colors cursor-pointer ${
-                                  isSelected
-                                    ? 'bg-emerald-600/20 border border-emerald-500/40 text-emerald-300 font-bold'
-                                    : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
-                                }`}
-                              >
-                                <div className="flex items-center gap-2.5">
-                                  <ItemIcon className={`w-4 h-4 ${isSelected ? 'text-emerald-400' : 'text-slate-400'}`} />
-                                  <div className="flex flex-col">
-                                    <span>{item.label}</span>
-                                    <span className="text-[10px] text-slate-400 font-normal">{item.desc}</span>
-                                  </div>
-                                </div>
-                                {isSelected && <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
-                              </button>
-                            );
-                          })}
-                        </div>
+                      <div className="text-[10px] text-slate-400 font-mono mt-0.5 truncate">
+                        {currentRole === 'super_admin' ? 'Audit Logging & Tenancy Active' : `Tenant Scope: ${restaurantCode}`}
                       </div>
-                    )}
+                    </div>
 
                     {/* Customer Profile & Settings Access (Customer portal owns primary navigation) */}
                     {currentRole === 'customer' && onTabChange && (
