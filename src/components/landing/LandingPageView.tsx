@@ -287,7 +287,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
                 Reception gives you a single-use 6-digit code. Enter it at sign in to establish your confidential 6-digit PIN. No SMS fees or SIM-swap risks.
               </p>
               <div className="text-[10px] font-mono text-cyan-300 font-semibold bg-slate-950 p-2 rounded-xl border border-slate-800">
-                Scrypt N=16384 Encryption
+                Bank-Grade PIN Protection
               </div>
             </div>
 
@@ -301,7 +301,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
                 Show your optical QR pass on your phone screen or tap your physical printed PVC badge at the buffet scanner. Eat without waiting in lines.
               </p>
               <div className="text-[10px] font-mono text-emerald-300 font-semibold bg-slate-950 p-2 rounded-xl border border-slate-800">
-                HMAC-SHA256 Token Verifier
+                Sub-0.3s Optical Verification
               </div>
             </div>
           </div>
@@ -448,27 +448,51 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
           <div className="space-y-2">
             <div className="font-bold text-white text-xs uppercase tracking-wider">Dining Facilities</div>
             <ul className="space-y-1.5 text-[11px]">
-              {restaurants.map((r) => (
+              {restaurants.slice(0, 4).map((r) => (
                 <li key={r.code}>
                   <button
                     type="button"
                     onClick={() => onSelectRegister(r.code)}
-                    className="hover:text-emerald-300 transition-colors cursor-pointer text-left"
+                    className="hover:text-emerald-300 transition-colors cursor-pointer text-left truncate max-w-[200px]"
                   >
-                    {r.name} ({r.code})
+                    {r.name}
                   </button>
                 </li>
               ))}
+              <li>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = document.getElementById('directory');
+                    if (el) el.scrollIntoView({ behavior: 'smooth' });
+                  }}
+                  className="text-emerald-400 hover:text-emerald-300 font-bold cursor-pointer"
+                >
+                  View All {restaurants.length} Campuses &rarr;
+                </button>
+              </li>
             </ul>
           </div>
 
           <div className="space-y-2">
-            <div className="font-bold text-white text-xs uppercase tracking-wider">Security &amp; Standards</div>
-            <ul className="space-y-1.5 text-[11px]">
-              <li>HMAC-SHA256 Token Signing</li>
-              <li>Scrypt N=16384 PIN Storage</li>
-              <li>Encrypted Google Drive Backups</li>
-              <li>Offline Replay Guard Protected</li>
+            <div className="font-bold text-white text-xs uppercase tracking-wider">Platform &amp; Reliability</div>
+            <ul className="space-y-1.5 text-[11px] text-slate-400">
+              <li className="flex items-center gap-1.5">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>Bank-Grade Encryption</span>
+              </li>
+              <li className="flex items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>100% Offline Reliable Buffets</span>
+              </li>
+              <li className="flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>Instant MoMo &amp; Cash Reconciliation</span>
+              </li>
+              <li className="flex items-center gap-1.5">
+                <Lock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>Zero-Fraud Meal Pass Protection</span>
+              </li>
             </ul>
           </div>
 

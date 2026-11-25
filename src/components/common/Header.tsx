@@ -27,7 +27,7 @@ import {
   LogOut,
   User,
   Sparkles,
-  LayoutGrid,
+  ArrowLeft,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -534,62 +534,17 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
             </>
           ) : (
-            <>
-              <div className="h-6 w-px bg-slate-800 hidden sm:block" />
-              <div className="relative" ref={profileRef}>
-                <button
-                  type="button"
-                  onClick={() => setIsProfileDropdownOpen((prev) => !prev)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-xs text-slate-300 font-semibold cursor-pointer transition-colors shadow-inner"
-                  title="Choose RestoPass Portal"
-                >
-                  <LayoutGrid className="w-3.5 h-3.5 text-emerald-400" />
-                  <span className="hidden sm:inline">Portals</span>
-                  <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isProfileDropdownOpen ? 'rotate-180' : ''}`} />
-                </button>
-
-                {isProfileDropdownOpen && (
-                  <div className="absolute right-0 mt-2 w-64 rounded-2xl bg-slate-900/95 backdrop-blur-xl border border-slate-800 shadow-2xl p-2 z-50 animate-in fade-in zoom-in-95 duration-100">
-                    <div className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800/80 mb-1">
-                      Choose RestoPass Portal
-                    </div>
-                    {[
-                      { role: 'customer' as UserRole, label: 'Customer Dining Pass', icon: Smartphone, desc: 'Balance & QR Pass', url: '/#/customer' },
-                      { role: 'stand_staff' as UserRole, label: 'Scanner Station POS', icon: QrCode, desc: 'Buffet & Reception', url: '/#/scanner' },
-                      { role: 'restaurant_admin' as UserRole, label: 'Restaurant Boss Admin', icon: Server, desc: 'Management & Staff', url: '/#/boss' },
-                      { role: 'super_admin' as UserRole, label: 'Super Admin Console', icon: ShieldCheck, desc: 'Platform Licenses', url: '/#/superadmin' },
-                    ].map((item) => {
-                      const isSelected = currentRole === item.role;
-                      const ItemIcon = item.icon;
-                      return (
-                        <button
-                          key={item.role}
-                          type="button"
-                          onClick={() => {
-                            onRoleChange(item.role);
-                            setIsProfileDropdownOpen(false);
-                          }}
-                          className={`w-full text-left p-2 rounded-xl text-xs flex items-center justify-between transition-colors cursor-pointer ${
-                            isSelected
-                              ? 'bg-emerald-600/20 text-emerald-300 font-bold border border-emerald-500/30'
-                              : 'text-slate-300 hover:text-white hover:bg-slate-800'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2.5">
-                            <ItemIcon className="w-4 h-4 text-emerald-400 shrink-0" />
-                            <div>
-                              <div>{item.label}</div>
-                              <div className="text-[10px] text-slate-400 font-normal">{item.desc}</div>
-                            </div>
-                          </div>
-                          <span className="text-[9px] font-mono text-slate-500">{item.url}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </>
+            onNavigateHome && (
+              <button
+                type="button"
+                onClick={onNavigateHome}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-xs text-slate-300 font-semibold cursor-pointer transition-colors shadow-inner"
+                title="Return to Public Home"
+              >
+                <ArrowLeft className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="hidden sm:inline">Landing Page</span>
+              </button>
+            )
           )}
         </div>
       </div>

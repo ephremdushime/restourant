@@ -281,7 +281,7 @@ export const RestaurantBossAuthView: React.FC<RestaurantBossAuthViewProps> = ({
             <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
               <span className="flex items-center gap-1.5">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Scrypt N=16384 Salted Verification</span>
+                <span>Hardware-Secured Credential Storage</span>
               </span>
 
               {isDemoMode && (

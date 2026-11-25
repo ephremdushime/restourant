@@ -177,7 +177,7 @@ export const SuperAdminAuthView: React.FC<SuperAdminAuthViewProps> = ({
           <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
             <span className="flex items-center gap-1.5">
               <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Versioned HMAC Session Binding</span>
+              <span>Cryptographically Signed Session Security</span>
             </span>
 
             {isDemoMode && (
