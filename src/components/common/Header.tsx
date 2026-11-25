@@ -52,6 +52,7 @@ interface HeaderProps {
   sessionUserLabel?: string;
   isDemoMode?: boolean;
   onToggleDemoMode?: () => void;
+  onNavigateHome?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -75,6 +76,7 @@ export const Header: React.FC<HeaderProps> = ({
   sessionUserLabel,
   isDemoMode = false,
   onToggleDemoMode,
+  onNavigateHome,
 }) => {
   const t = translations[language] || translations.en;
   const state = restoStore.getState();
@@ -166,9 +168,14 @@ export const Header: React.FC<HeaderProps> = ({
            ======================================================== */}
         <div className="app-header-brand flex items-center gap-4 shrink-0">
           <a
-            href="#home"
-            onClick={(e) => { e.preventDefault(); }}
+            href="#/"
+            onClick={(e) => {
+              e.preventDefault();
+              if (onNavigateHome) onNavigateHome();
+              else if (typeof window !== 'undefined') window.location.hash = '#/';
+            }}
             className="flex items-center gap-2.5 group cursor-pointer"
+            title="RestoPass - Return to Commercial Home & Directory"
           >
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-slate-950 font-black shadow-lg shadow-emerald-500/20 group-hover:scale-105 transition-transform">
               <QrCode className="w-5 h-5 text-white" />
