@@ -975,6 +975,85 @@ export const RestaurantAdminView: React.FC<RestaurantAdminViewProps> = ({
 
   return (
     <div className="restaurant-admin-workspace max-w-7xl mx-auto min-w-0 px-4 sm:px-6 py-6 space-y-6">
+      {/* Executive Restaurant Console Header */}
+      <div className="boss-console-header flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-5 rounded-2xl bg-gradient-to-r from-emerald-950/60 via-slate-900 to-slate-900 border border-emerald-900/60 shadow-xl">
+        <div className="flex items-start sm:items-center gap-3.5">
+          <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0 shadow-inner">
+            <Building2 className="w-6 h-6" />
+          </div>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-xl font-extrabold text-white tracking-tight">
+                {restaurant?.name || 'Campus Dining Facility'}
+              </h1>
+              <span className="text-[11px] font-mono px-2 py-0.5 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-bold">
+                {state.currentRestaurantCode}
+              </span>
+              <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 border border-slate-700">
+                Boss Management
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 mt-1">
+              Live buffet throughput, student meal reconciliation, cashier terminals, and accounting oversight.
+            </p>
+            <div className="flex flex-wrap items-center gap-2 mt-2 text-[11px]">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-950/80 border border-slate-800 text-slate-300 font-medium">
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                <span>{activeCustomersCount} Registered Diners</span>
+              </span>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-950/80 border border-slate-800 text-slate-300 font-medium">
+                <Server className="w-3 h-3 text-emerald-400" />
+                <span>{restoBranches.length} Branch · {restoStationUsers.length} Staff</span>
+              </span>
+              {licStatus.validUntil && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-950/80 border border-slate-800 text-slate-400 font-mono text-[10px]">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                  <span>Licensed to {new Date(licStatus.validUntil).toLocaleDateString()}</span>
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Quick Executive Actions */}
+        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              onSubTabChange('registration');
+            }}
+            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl transition-all flex items-center gap-1.5 shadow-md shadow-emerald-950/40 cursor-pointer"
+            title="Register a new student or campus diner"
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>+ Register Patron</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setTopUpCustomer(state.customers.find((c) => c.restaurantCode === state.currentRestaurantCode) || null);
+              setTopUpModalOpen(true);
+            }}
+            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 font-bold text-xs rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+            title="Record cash or mobile money meal pack payment"
+          >
+            <Coins className="w-4 h-4 text-emerald-400" />
+            <span>+ Record Top-Up</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsRecordExpenseModalOpen(true)}
+            className="px-3.5 py-2 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 font-semibold text-xs rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
+            title="Record cafeteria food supply or operational expense"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden sm:inline">Expense</span>
+          </button>
+        </div>
+      </div>
+
       {(licStatus.status === 'grace' || licStatus.status === 'expired') && (
         <div className="p-4 rounded-2xl bg-amber-950/90 border-2 border-amber-500/80 text-amber-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
