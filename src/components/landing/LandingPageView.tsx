@@ -417,11 +417,11 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
 
             <button
               type="button"
-              onClick={() => onSelectRolePortal('restaurant_admin')}
-              className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs transition-all border border-slate-700 cursor-pointer flex items-center justify-center gap-2"
+              onClick={() => setIsPartnerModalOpen(true)}
+              className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-slate-950 font-black text-xs transition-all shadow-md cursor-pointer flex items-center justify-center gap-2"
             >
-              <Server className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Open Restaurant Boss Management Portal</span>
+              <Sparkles className="w-4 h-4 text-slate-950" />
+              <span>Express Interest &amp; Schedule Demo &rarr;</span>
             </button>
           </div>
         </div>
@@ -473,36 +473,32 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
           </div>
 
           <div className="space-y-2">
-            <div className="font-bold text-white text-xs uppercase tracking-wider">Authorized Portals</div>
+            <div className="font-bold text-white text-xs uppercase tracking-wider">For Restaurant Partners</div>
             <div className="flex flex-col gap-1.5 text-[11px]">
               <button
                 type="button"
-                onClick={() => onSelectRolePortal('customer')}
-                className="hover:text-emerald-300 text-left transition-colors cursor-pointer"
+                onClick={() => setIsPartnerModalOpen(true)}
+                className="hover:text-emerald-300 text-left transition-colors cursor-pointer text-emerald-400 font-bold flex items-center gap-1"
               >
-                &bull; Student / Diner Portal
+                <span>Express Interest &amp; Demo</span>
+                <span>&rarr;</span>
               </button>
               <button
                 type="button"
-                onClick={() => onSelectRolePortal('restaurant_admin')}
+                onClick={() => {
+                  const el = document.getElementById('business');
+                  if (el) el.scrollIntoView({ behavior: 'smooth' });
+                }}
                 className="hover:text-emerald-300 text-left transition-colors cursor-pointer"
               >
-                &bull; Restaurant Boss Admin
+                &bull; Canteen Automation ROI
               </button>
-              <button
-                type="button"
-                onClick={() => onSelectRolePortal('stand_staff')}
-                className="hover:text-emerald-300 text-left transition-colors cursor-pointer"
+              <a
+                href="mailto:contact@restopass.rw?subject=Canteen%20Partnership%20Inquiry"
+                className="hover:text-emerald-300 text-left transition-colors"
               >
-                &bull; Scanner POS Station
-              </button>
-              <button
-                type="button"
-                onClick={() => onSelectRolePortal('super_admin')}
-                className="hover:text-emerald-300 text-left transition-colors cursor-pointer"
-              >
-                &bull; Super Admin Console
-              </button>
+                &bull; Commercial Inquiries
+              </a>
             </div>
           </div>
         </div>

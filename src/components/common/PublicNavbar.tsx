@@ -113,13 +113,13 @@ export const PublicNavbar: React.FC<PublicNavbarProps> = ({
               onClick={onNavigateBusiness}
               className="px-3 py-1.5 rounded-xl hover:text-white hover:bg-slate-900 transition-colors cursor-pointer"
             >
-              For Restaurants
+              Partner With Us
             </button>
           </nav>
         </div>
 
         {/* ========================================================
-            3. ACTIONS ZONE (Language, Theme, Sign In, Register)
+            3. ACTIONS ZONE (Language, Theme, Diner Sign In, Register)
            ======================================================== */}
         <div className="flex items-center gap-2.5">
           {/* Language Switcher */}
@@ -150,91 +150,15 @@ export const PublicNavbar: React.FC<PublicNavbarProps> = ({
             {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4 text-amber-400" />}
           </button>
 
-          {/* Professional "Sign In" Popover Dropdown */}
-          <div className="relative hidden sm:block" ref={dropdownRef}>
-            <button
-              type="button"
-              onClick={() => setIsSignInDropdownOpen(!isSignInDropdownOpen)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-850 border border-slate-700/80 text-xs font-bold text-slate-200 hover:text-white transition-all cursor-pointer shadow-sm"
-            >
-              <LogIn className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Sign In</span>
-              <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isSignInDropdownOpen ? 'rotate-180' : ''}`} />
-            </button>
-
-            {isSignInDropdownOpen && (
-              <div className="absolute right-0 mt-2 w-72 rounded-2xl bg-slate-900/95 backdrop-blur-2xl border border-slate-800 shadow-2xl p-2 z-50 animate-in fade-in zoom-in-95 duration-100">
-                <div className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800/80 mb-1">
-                  Select Your Account Type
-                </div>
-
-                <div className="space-y-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsSignInDropdownOpen(false);
-                      onSelectRolePortal('customer');
-                    }}
-                    className="w-full text-left p-2.5 rounded-xl hover:bg-slate-800/90 transition-colors flex items-start gap-3 cursor-pointer group"
-                  >
-                    <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-emerald-500 group-hover:text-slate-950 transition-colors">
-                      <Smartphone className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-bold text-white group-hover:text-emerald-300">
-                        Student / Diner Pass
-                      </div>
-                      <div className="text-[11px] text-slate-400">
-                        Check meal balance &amp; show your QR pass
-                      </div>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsSignInDropdownOpen(false);
-                      onSelectRolePortal('restaurant_admin');
-                    }}
-                    className="w-full text-left p-2.5 rounded-xl hover:bg-slate-800/90 transition-colors flex items-start gap-3 cursor-pointer group"
-                  >
-                    <div className="w-8 h-8 rounded-lg bg-teal-500/10 border border-teal-500/20 text-teal-400 flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-teal-500 group-hover:text-slate-950 transition-colors">
-                      <Server className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-bold text-white group-hover:text-teal-300">
-                        Restaurant Partner Boss
-                      </div>
-                      <div className="text-[11px] text-slate-400">
-                        Sales, meal pricing &amp; Mobile Money
-                      </div>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsSignInDropdownOpen(false);
-                      onSelectRolePortal('stand_staff');
-                    }}
-                    className="w-full text-left p-2.5 rounded-xl hover:bg-slate-800/90 transition-colors flex items-start gap-3 cursor-pointer group"
-                  >
-                    <div className="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-cyan-500 group-hover:text-slate-950 transition-colors">
-                      <QrCode className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-bold text-white group-hover:text-cyan-300">
-                        Buffet Scanner POS
-                      </div>
-                      <div className="text-[11px] text-slate-400">
-                        Cashier reception &amp; line verification
-                      </div>
-                    </div>
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
+          {/* Direct Student / Diner Pass Sign In (No admin or scanner exposure) */}
+          <button
+            type="button"
+            onClick={() => onSelectRolePortal('customer')}
+            className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-850 border border-slate-700/80 text-xs font-bold text-slate-200 hover:text-white transition-all cursor-pointer shadow-xs"
+          >
+            <LogIn className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Diner Sign In</span>
+          </button>
 
           {/* Primary CTA Button: Register for Pass */}
           <button
@@ -289,44 +213,32 @@ export const PublicNavbar: React.FC<PublicNavbarProps> = ({
               }}
               className="w-full text-left px-3 py-2 rounded-xl text-slate-300 hover:text-white hover:bg-slate-900"
             >
-              For Canteens &amp; Restaurants
+              Partner With Us
             </button>
           </div>
 
-          <div className="pt-2 border-t border-slate-800 space-y-1.5">
-            <div className="text-[10px] uppercase font-bold text-slate-400 px-3">Sign In To Portal</div>
+          <div className="pt-2 border-t border-slate-800 space-y-2">
             <button
               type="button"
               onClick={() => {
                 setIsMobileMenuOpen(false);
                 onSelectRolePortal('customer');
               }}
-              className="w-full text-left px-3 py-2 rounded-xl bg-slate-900 text-xs font-bold text-emerald-400 flex items-center gap-2"
+              className="w-full text-center px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700/80 text-xs font-bold text-white flex items-center justify-center gap-2 cursor-pointer"
             >
-              <Smartphone className="w-3.5 h-3.5" />
-              <span>Student Dining Pass Login</span>
+              <LogIn className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Diner Sign In</span>
             </button>
             <button
               type="button"
               onClick={() => {
                 setIsMobileMenuOpen(false);
-                onSelectRolePortal('restaurant_admin');
+                onSelectRegister();
               }}
-              className="w-full text-left px-3 py-2 rounded-xl bg-slate-900 text-xs font-bold text-teal-300 flex items-center gap-2"
+              className="w-full text-center px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 text-xs font-black text-slate-950 flex items-center justify-center gap-2 cursor-pointer shadow-md"
             >
-              <Server className="w-3.5 h-3.5" />
-              <span>Restaurant Boss Management</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setIsMobileMenuOpen(false);
-                onSelectRolePortal('stand_staff');
-              }}
-              className="w-full text-left px-3 py-2 rounded-xl bg-slate-900 text-xs font-bold text-cyan-300 flex items-center gap-2"
-            >
-              <QrCode className="w-3.5 h-3.5" />
-              <span>Buffet Scanner POS</span>
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>Register for Pass</span>
             </button>
           </div>
         </div>
