@@ -92,6 +92,23 @@ export default function App() {
     return false;
   });
 
+  const handleDemoLogin = (role: UserRole) => {
+    restoStore.setRole(role);
+    if (role === 'restaurant_admin') {
+      handleLoginSuccess('restaurant_admin', 'Kigali Resto Boss (boss@example.local)');
+      if (typeof window !== 'undefined') window.location.hash = `#/boss?resto=${state.currentRestaurantCode}`;
+    } else if (role === 'stand_staff') {
+      handleLoginSuccess('stand_staff', 'Buffet Stand 1 (stand1_staff)');
+      if (typeof window !== 'undefined') window.location.hash = `#/scanner?resto=${state.currentRestaurantCode}`;
+    } else if (role === 'customer') {
+      handleLoginSuccess('customer', 'Jean-Paul Habimana (#28491)');
+      if (typeof window !== 'undefined') window.location.hash = `#/customer?resto=${state.currentRestaurantCode}`;
+    } else if (role === 'super_admin') {
+      handleLoginSuccess('super_admin', 'Ephrem (Founder & Super Admin)');
+      if (typeof window !== 'undefined') window.location.hash = '#/superadmin';
+    }
+  };
+
   const handleToggleDemoMode = () => {
     if (!import.meta.env.DEV) return;
     setIsDemoMode((prev) => {
@@ -502,6 +519,53 @@ export default function App() {
 
       {/* Main Viewport Container */}
       <main className="flex-1 w-full min-w-0 max-w-7xl mx-auto pb-16">
+        {/* Rapid Testing & Verification Bar (Demo Mode Only) */}
+        {isDemoMode && viewMode === 'landing' && (
+          <aside
+            aria-label="Demo Testing Suite"
+            className="mb-4 mx-3 sm:mx-0 p-3 bg-slate-900/95 border border-amber-500/30 rounded-2xl flex flex-wrap items-center justify-between gap-3 shadow-xl backdrop-blur-md"
+          >
+            <div className="flex items-center gap-2">
+              <span className="px-2 py-0.5 rounded bg-amber-500 text-slate-950 text-[10px] font-mono font-bold">
+                DEMO HARNESS
+              </span>
+              <span className="text-xs text-slate-300 font-medium">
+                Automated Verification &amp; Rapid Portal Switchers
+              </span>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => handleDemoLogin('restaurant_admin')}
+                className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-emerald-950/70 border border-slate-800 hover:border-emerald-500/60 text-slate-200 hover:text-emerald-400 text-xs font-semibold transition-all cursor-pointer shadow-xs"
+              >
+                Demo Boss
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDemoLogin('stand_staff')}
+                className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-emerald-950/70 border border-slate-800 hover:border-emerald-500/60 text-slate-200 hover:text-emerald-400 text-xs font-semibold transition-all cursor-pointer shadow-xs"
+              >
+                Demo Stand
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDemoLogin('customer')}
+                className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-emerald-950/70 border border-slate-800 hover:border-emerald-500/60 text-slate-200 hover:text-emerald-400 text-xs font-semibold transition-all cursor-pointer shadow-xs"
+              >
+                Demo Patron
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDemoLogin('super_admin')}
+                className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-amber-950/70 border border-slate-800 hover:border-amber-500/60 text-slate-200 hover:text-amber-400 text-xs font-semibold transition-all cursor-pointer shadow-xs"
+              >
+                Demo Super
+              </button>
+            </div>
+          </aside>
+        )}
+
         {/* 1. COMMERCIAL LANDING & RESTAURANT DIRECTORY */}
         {viewMode === 'landing' && (
           <LandingPageView

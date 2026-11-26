@@ -113,13 +113,13 @@ export const RestaurantAdminNavigation: React.FC<RestaurantAdminNavigationProps>
   ];
 
   return (
-    <div className="space-y-3">
+    <div className="w-full max-w-full min-w-0 overflow-x-hidden space-y-3">
       {/* Primary Boss Navigation Bar */}
-      <div className="relative">
+      <div className="relative w-full max-w-full min-w-0">
         <div
           role="navigation"
           aria-label="Restaurant administration sections"
-          className="restaurant-admin-nav flex items-center gap-1.5 overflow-x-auto pb-2 pt-1 no-scrollbar border-b border-slate-800 text-xs font-semibold select-none"
+          className="restaurant-admin-nav w-full max-w-full min-w-0 flex items-center gap-1.5 overflow-x-auto pb-2 pt-1 no-scrollbar border-b border-slate-800 text-xs font-semibold select-none"
         >
           {navTabs.map((tab, idx) => {
             const Icon = tab.icon;
@@ -187,7 +187,7 @@ export const RestaurantAdminNavigation: React.FC<RestaurantAdminNavigationProps>
         <div
           role="navigation"
           aria-label="Patron and card management sections"
-          className="restaurant-admin-subnav flex items-center justify-between gap-2 p-2 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-sm text-xs"
+          className="restaurant-admin-subnav w-full max-w-full min-w-0 overflow-hidden flex items-center justify-between gap-2 p-2 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-sm text-xs"
         >
           <div className="flex items-center gap-1.5 flex-wrap">
             <button
@@ -238,7 +238,7 @@ export const RestaurantAdminNavigation: React.FC<RestaurantAdminNavigationProps>
         <div
           role="navigation"
           aria-label="Pricing and policy sections"
-          className="restaurant-admin-subnav flex items-center justify-between gap-2 p-2 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-sm text-xs"
+          className="restaurant-admin-subnav w-full max-w-full min-w-0 overflow-hidden flex items-center justify-between gap-2 p-2 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-sm text-xs"
         >
           <div className="flex items-center gap-1.5 flex-wrap">
             <button

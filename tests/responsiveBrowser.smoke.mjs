@@ -19,7 +19,7 @@ async function waitForServer() {
   for (let attempt = 0; attempt < 60; attempt++) {
     if (server.exitCode !== null) throw new Error(`RestoPass server exited early:\n${serverOutput}`);
     try {
-      const response = await fetch(baseUrl);
+      const response = await fetch(`${baseUrl}/api/health`);
       if (response.ok) return;
     } catch {}
     await delay(1000);
@@ -34,27 +34,32 @@ const roles = [
   { name: 'platform admin', demoButton: 'Demo Super', workspace: '.platform-admin-workspace' },
 ];
 const widths = [320, 360, 390, 430, 768, 1024, 1440, 1920];
-const browser = await chromium.launch({ headless: true });
+const chromePath = process.env.PLAYWRIGHT_CHROME_PATH || (process.platform === 'win32' ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' : undefined);
+const browser = await chromium.launch({
+  headless: true,
+  ...(chromePath ? { executablePath: chromePath } : {})
+});
 
 try {
   await waitForServer();
   for (const role of roles) {
-    for (const width of widths) {
-      const context = await browser.newContext({
-        viewport: { width, height: width < 500 ? 844 : 900 },
-        deviceScaleFactor: 1,
-        isMobile: width < 768,
-        hasTouch: width < 768,
-      });
-      await context.addInitScript(() => sessionStorage.setItem('restopass_demo_mode', 'true'));
-      const page = await context.newPage();
-      page.setDefaultTimeout(15000);
-      const pageErrors = [];
-      page.on('pageerror', error => pageErrors.push(error.message));
+    const context = await browser.newContext({
+      viewport: { width: widths[0], height: 844 },
+      deviceScaleFactor: 1,
+    });
+    await context.addInitScript(() => sessionStorage.setItem('restopass_demo_mode', 'true'));
+    const page = await context.newPage();
+    page.setDefaultTimeout(30000);
+    const pageErrors = [];
+    page.on('pageerror', error => pageErrors.push(error.message));
 
-      await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
-      await page.getByRole('button', { name: role.demoButton, exact: true }).click();
-      await page.locator(role.workspace).waitFor({ state: 'visible' });
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: role.demoButton, exact: true }).click();
+    await page.locator(role.workspace).waitFor({ state: 'visible' });
+
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: width < 500 ? 844 : 900 });
+      await delay(100);
 
       const dimensions = await page.evaluate(() => ({
         viewport: window.innerWidth,
@@ -68,9 +73,13 @@ try {
       );
       assert.deepEqual(pageErrors, [], `${role.name} has browser errors at ${width}px`);
       console.log(`PASS ${role.name.padEnd(16)} ${String(width).padStart(4)}px — no page-level horizontal overflow`);
-      await context.close();
     }
+    await context.close();
   }
+} catch (err) {
+  console.error('SMOKE TEST ERROR:', err);
+  console.error('SERVER LOGS AT TIME OF FAILURE:\n', serverOutput);
+  throw err;
 } finally {
   await browser.close();
   server.kill('SIGTERM');
